@@ -252,6 +252,14 @@ sigPotIn   = input.float(30.0, "Min PoT %", minval = 0.0, maxval = 95.0, step = 
 sigWinIn   = input.int(12, "Sweep Window (bars)", minval = 1, maxval = 100, group = G_SIG)
 sigCoolIn  = input.int(15, "Cooldown (bars)", minval = 0, maxval = 500, group = G_SIG)
 
+// ── WIN-RATE TRACKER (virtual trades on the execution signals — shown in the table, no strategy needed)
+G_TRD      = "◆ WIN-RATE TRACKER"
+showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = DOL). Works even when signal markers are hidden.")
+stopLbIn   = input.int(20, "Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD)
+stopBufIn  = input.float(0.2, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD)
+minRRIn    = input.float(1.5, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD)
+maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
+
 // ── CALIBRATION / ACCURACY
 calOnIn   = input.bool(true, "Self-Calibrating PoT", group = G_CAL, tooltip = "Corrects the model PoT with this chart's own resolved predictions (non-repainting: only closed, resolved outcomes are used).")
 calKIn    = input.int(30, "Calibration Prior (samples)", minval = 1, maxval = 500, group = G_CAL, tooltip = "How many observed samples a PoT bin needs before its measured hit rate outweighs the model.")
@@ -796,6 +804,7 @@ var int   primSide = 0
 var int   primKind = -1
 var float primScr = na
 var float primPot = na
+var float primTrig = na
 var int   secId   = -1
 
 var float lastSH   = na
@@ -1258,11 +1267,13 @@ if barstate.isconfirmed and masterIn and inWin
         primKind := p.kind
         primScr  := p.score
         primPot  := p.pot
+        primTrig := f_trigLvl(p)
     else
         primSide := 0
         primKind := -1
         primScr  := na
         primPot  := na
+        primTrig := na
     int secIdx = primSide == 1 ? bestD : primSide == -1 ? bestU : -1
     secId := -1
     if secIdx >= 0
@@ -1312,7 +1323,7 @@ bool evAlign   = barstate.isconfirmed and masterIn and aligned and not aligned[1
 // =====================================================================================================
 // EXECUTION SIGNALS (optional, confirmed bars only)
 // =====================================================================================================
-if barstate.isconfirmed and masterIn and inWin and sigOnIn
+if barstate.isconfirmed and masterIn and inWin
     bool coolOk = bar_index - lastSigB > sigCoolIn
     bool bullOk = evBullBrk and h1Sign == 1 and primSide == 1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastSslSwB <= sigWinIn)
     bool bearOk = evBearBrk and h1Sign == -1 and primSide == -1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastBslSwB <= sigWinIn)
@@ -1320,6 +1331,58 @@ if barstate.isconfirmed and masterIn and inWin and sigOnIn
     sigBear := coolOk and bearOk and not sigBull
     if sigBull or sigBear
         lastSigB := bar_index
+
+// =====================================================================================================
+// WIN-RATE TRACKER — virtual trades, resolved on later bars only (stop checked first = conservative)
+// =====================================================================================================
+float swLo = ta.lowest(low, stopLbIn)
+float swHi = ta.highest(high, stopLbIn)
+var int   vtDir  = 0
+var float vtEn   = na
+var float vtSL   = na
+var float vtTP   = na
+var int   vtBar  = na
+var float wrN    = 0.0
+var float wrW    = 0.0
+var float wrPosR = 0.0
+var float wrNegR = 0.0
+if barstate.isconfirmed and masterIn and inWin
+    if vtDir != 0 and bar_index > vtBar
+        float risk  = math.abs(vtEn - vtSL)
+        bool  hitSL = vtDir == 1 ? low <= vtSL : high >= vtSL
+        bool  hitTP = vtDir == 1 ? high >= vtTP : low <= vtTP
+        float rr    = na
+        if hitSL
+            rr := -1.0
+        else if hitTP
+            rr := (vtTP - vtEn) * vtDir / risk
+        else if maxHoldIn > 0 and bar_index - vtBar >= maxHoldIn
+            rr := (close - vtEn) * vtDir / risk
+        if not na(rr)
+            wrN += 1
+            wrW += rr > 0 ? 1 : 0
+            wrPosR += math.max(rr, 0.0)
+            wrNegR += math.max(-rr, 0.0)
+            vtDir := 0
+    if vtDir == 0 and not na(primTrig)
+        if sigBull and primSide == 1
+            float sl = swLo - stopBufIn * atrS
+            float rk = close - sl
+            if rk > 0 and primTrig > close and (primTrig - close) / rk >= minRRIn
+                vtDir := 1
+                vtEn  := close
+                vtSL  := sl
+                vtTP  := primTrig
+                vtBar := bar_index
+        else if sigBear and primSide == -1
+            float sl2 = swHi + stopBufIn * atrS
+            float rk2 = sl2 - close
+            if rk2 > 0 and primTrig < close and (close - primTrig) / rk2 >= minRRIn
+                vtDir := -1
+                vtEn  := close
+                vtSL  := sl2
+                vtTP  := primTrig
+                vtBar := bar_index
 
 // =====================================================================================================
 // VISUAL ENGINE — rebuilt from state on the last bar only (bounded, no historical clutter)
@@ -1404,12 +1467,12 @@ f_liveDist(Zn z, float px) =>
         d := z.side == 1 ? math.max(z.bot - px, 0.0) : math.max(px - z.top, 0.0)
     d
 
-var table tbl = table.new(f_pos(tblPosIn), 3, 8, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
+var table tbl = table.new(f_pos(tblPosIn), 3, 9, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
 var table dbg = table.new(position.bottom_left, 2, 19, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
     f_clearAll(rB, rL, rT)
-    table.clear(tbl, 0, 0, 2, 7)
+    table.clear(tbl, 0, 0, 2, 8)
     table.clear(dbg, 0, 0, 1, 18)
 
 if barstate.islast and masterIn
@@ -1585,6 +1648,13 @@ if barstate.islast and masterIn
             table.cell(tbl, 0, 7, "HIT", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(potHorIn) + " bars of being selected (this chart, resolved outcomes only).")
             table.cell(tbl, 1, 7, "", text_size = tsz)
             table.cell(tbl, 2, 7, accTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        if showWrIn
+            string pfTxt = wrNegR > 0 ? str.tostring(wrPosR / wrNegR, "0.00") : wrPosR > 0 ? "∞" : "—"
+            string wrTxt = wrN >= 1 ? str.tostring(100.0 * wrW / wrN, "0") + "% · PF " + pfTxt + " · " + str.tostring(wrN, "0") : "no trades yet"
+            color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colBullIn : colBearIn) : colNeuIn
+            table.cell(tbl, 0, 8, "WIN", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on execution signals: win rate · profit factor (in R) · number of trades. Stop beyond swept liquidity, target = DOL, min R:R " + str.tostring(minRRIn, "0.0") + ". Past results only — not a guarantee.")
+            table.cell(tbl, 1, 8, "", text_size = tsz)
+            table.cell(tbl, 2, 8, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
     // ── Debug panel
     if debugIn
