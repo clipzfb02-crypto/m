@@ -127,6 +127,7 @@ type Pred
     int   side
     int   exp
     int   bin
+    float pm
 
 type SEvt
     int   dir
@@ -326,19 +327,17 @@ f_potModel(float d, float sig, int horizon, float mu, float sc) =>
     float q = 0.75 + 0.25 * math.min(math.max(nz(sc), 0.0), 100.0) / 100.0
     math.max(0.1, math.min(99.9, 100.0 * f_touch(d, sig, horizon, mu) * q))
 
-// Self-calibration: shift the model by the observed residual (hit rate − bin centre) of the two
-// nearest PoT bins, each shrunk toward zero by a prior of k samples. No data → output = model.
-f_calib(float modelPot, array<float> cN, array<float> cH, float k, bool on) =>
+// Self-calibration: shift the model by the observed residual (hits − predicted) / (n + k) of the two
+// nearest PoT bins (Bayesian shrinkage toward the model with a prior of k samples). No data → model.
+f_calib(float modelPot, array<float> cN, array<float> cH, array<float> cS, float k, bool on) =>
     float res = modelPot
     if on
         float x  = math.max(0.0, math.min(9.0, modelPot / 10.0 - 0.5))
         int   b0 = math.min(9, math.max(0, int(math.floor(x))))
         int   b1 = math.min(9, b0 + 1)
         float w  = x - b0
-        float n0 = array.get(cN, b0)
-        float n1 = array.get(cN, b1)
-        float r0 = n0 > 0 ? (array.get(cH, b0) / n0 - (b0 + 0.5) / 10.0) * n0 / (n0 + k) : 0.0
-        float r1 = n1 > 0 ? (array.get(cH, b1) / n1 - (b1 + 0.5) / 10.0) * n1 / (n1 + k) : 0.0
+        float r0 = (array.get(cH, b0) - array.get(cS, b0)) / (array.get(cN, b0) + k)
+        float r1 = (array.get(cH, b1) - array.get(cS, b1)) / (array.get(cN, b1) + k)
         res := modelPot + 100.0 * ((1.0 - w) * r0 + w * r1)
     math.round(math.max(0.1, math.min(95.0, res)), 1)
 
@@ -521,7 +520,7 @@ f_ghost(array<Ghost> gs, Zn z, int t1, string why, int maxG) =>
     true
 
 // Resolve pending predictions against the current bar: hit if price reached the level, else expire.
-f_resolve(array<Pred> ps, array<float> cN, array<float> cH, bool useBins) =>
+f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, bool useBins) =>
     int hits = 0
     int done = 0
     int n    = array.size(ps)
@@ -534,6 +533,7 @@ f_resolve(array<Pred> ps, array<float> cN, array<float> cH, bool useBins) =>
                 hits += h ? 1 : 0
                 if useBins
                     array.set(cN, q.bin, array.get(cN, q.bin) + 1.0)
+                    array.set(cS, q.bin, array.get(cS, q.bin) + q.pm)
                     if h
                         array.set(cH, q.bin, array.get(cH, q.bin) + 1.0)
                 array.remove(ps, i)
@@ -786,6 +786,7 @@ var array<Pred>  preds  = array.new<Pred>()
 var array<Pred>  accs   = array.new<Pred>()
 var array<float> calN   = array.new<float>(10, 0.0)
 var array<float> calH   = array.new<float>(10, 0.0)
+var array<float> calS   = array.new<float>(10, 0.0)
 var float        accHit = 0.0
 var float        accN   = 0.0
 
@@ -839,8 +840,8 @@ if barstate.isconfirmed and masterIn and inWin
     int   oldPrim = primId
 
     // ── 0. RESOLVE past predictions against this bar (feeds self-calibration + measured hit rate)
-    [rH, rD] = f_resolve(preds, calN, calH, true)
-    [aH, aD] = f_resolve(accs, calN, calH, false)
+    [rH, rD] = f_resolve(preds, calN, calH, calS, true)
+    [aH, aD] = f_resolve(accs, calN, calH, calS, false)
     accHit += aH
     accN   += aD
 
@@ -1199,7 +1200,7 @@ if barstate.isconfirmed and masterIn and inWin
             z.score := sc
             float pm = f_potModel(dPx, sigma, potHorIn, mu * side, sc)
             z.potM  := pm
-            z.pot   := f_calib(pm, calN, calH, calKIn, calOnIn)
+            z.pot   := f_calib(pm, calN, calH, calS, calKIn, calOnIn)
             z.prio  := (1.0 - potRankIn) * sc + potRankIn * z.pot
             z.fP := fP
             z.fF := fF
@@ -1273,9 +1274,9 @@ if barstate.isconfirmed and masterIn and inWin
         float tl  = f_trigLvl(pz)
         int   smp = math.max(1, int(potHorIn / 5))
         if bar_index % smp == 0 and array.size(preds) < 400
-            array.push(preds, Pred.new(tl, pz.side, bar_index + potHorIn, math.min(9, math.max(0, int(math.floor(pz.potM / 10.0))))))
+            array.push(preds, Pred.new(tl, pz.side, bar_index + potHorIn, math.min(9, math.max(0, int(math.floor(pz.potM / 10.0)))), pz.potM / 100.0))
         if evNewDol and array.size(accs) < 400
-            array.push(accs, Pred.new(tl, pz.side, bar_index + potHorIn, 0))
+            array.push(accs, Pred.new(tl, pz.side, bar_index + potHorIn, 0, 0.0))
 
     float curScore = nz(primScr, 0.0)
     float curPot   = nz(primPot, 0.0)
@@ -1527,7 +1528,7 @@ if barstate.islast and masterIn
         Zn    s  = array.get(zs, sIdx)
         color sc = s.side == 1 ? colBullIn : colBearIn
         float y  = f_isPool(s) ? s.lvl : s.side == 1 ? s.bot : s.top
-        float sp = f_calib(f_potModel(f_liveDist(s, close), sigma, potHorIn, mu * s.side, s.score), calN, calH, calKIn, calOnIn)
+        float sp = f_calib(f_potModel(f_liveDist(s, close), sigma, potHorIn, mu * s.side, s.score), calN, calH, calS, calKIn, calOnIn)
         f_mkBox(rB, s.t0, s.top, rightT, s.bot, color.new(sc, 93), color.new(sc, 100), line.style_solid, "", sc)
         f_mkLine(rL, s.t0, y, rightT, y, color.new(sc, 45), line.style_dashed, 1)
         f_mkLbl(rT, rightT, y, f_kindTxt(s) + " " + str.tostring(math.round(s.score)) + " · " + str.tostring(sp, "0.0") + "%", noCol, color.new(sc, 30), label.style_label_left, size.tiny, f_srcList(s) + " · " + s.tf)
@@ -1537,7 +1538,7 @@ if barstate.islast and masterIn
         Zn     p    = array.get(zs, pIdx)
         int    sd   = p.side
         color  dc   = sd == 1 ? colBullIn : colBearIn
-        float  potL = f_calib(f_potModel(f_liveDist(p, close), sigma, potHorIn, mu * sd, p.score), calN, calH, calKIn, calOnIn)
+        float  potL = f_calib(f_potModel(f_liveDist(p, close), sigma, potHorIn, mu * sd, p.score), calN, calH, calS, calKIn, calOnIn)
         string arw  = sd == 1 ? "▲" : "▼"
         dolTxt := arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
         potTxt := str.tostring(potL, "0.0") + "%"
