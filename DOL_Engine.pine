@@ -1,132 +1,118 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © clipzfb02-crypto
 //
-// DOL ENGINE — Draw on Liquidity
-// Original Pine Script v6 implementation of an institutional-style liquidity-mapping engine.
-// It is not derived from any proprietary / closed-source code.
+// DOL ENGINE v2 — Draw on Liquidity
+// Original Pine Script v6 code (not derived from any closed-source script).
 //
-// Pipeline:  detect candidates → classify → merge into zones → filter → score (0-100)
-//            → rank → select primary BSL / SSL draw → track sweeps → ghost trail.
+// One clean read: WHERE is price being drawn, HOW strong is that draw, and WHAT is the bias.
+//   • Target pool: BSL / SSL pools (swings, equal highs/lows, PDH/PDL, PWH/PWL, PMH/PML, sessions,
+//     structure-TF & HTF swings) + PD arrays (FVG, iFVG, Order Block, Breaker).
+//   • Each target is a zone anchored to its origin candle and scored 0-100 (proximity, freshness,
+//     confluence, density, structure, HTF alignment). The best target becomes the DOL.
+//   • A target is hit when price touches the zone. Former DOLs leave a faint Ghost Trail.
 //
-// Non-repaint contract:
-//   • every structural / liquidity / zone state change is executed only on confirmed bars
-//     (barstate.isconfirmed), so realtime history equals reloaded history;
-//   • pivots are confirmed pivots (right-side bars required) and are anchored at their true bar;
-//   • every request.security() call returns values offset by [1] with lookahead_on
-//     (= last CLOSED higher-timeframe bar only, no future leak);
-//   • the only live (intrabar) value is the PoT read-out, which never feeds back into
-//     historical target selection.
+// Non-repaint:
+//   • all engine state changes execute on confirmed bars only;
+//   • pivots are confirmed pivots anchored to their real candle;
+//   • all request.security() calls return [1]-offset values with lookahead_on (closed HTF bars only);
+//   • PoT on the label / table updates live, but target SELECTION only changes at bar close.
 //
-// PoT is a heuristic proximity / viability score (0-95 %). It is NOT a guaranteed probability.
+// PoT (Probability of Touch) is a heuristic 0-95 % estimate, not a guaranteed probability.
 
 //@version=6
-indicator("DOL Engine · Draw on Liquidity", shorttitle = "DOL Engine", overlay = true, max_boxes_count = 200, max_lines_count = 200, max_labels_count = 200, max_bars_back = 300)
+indicator("DOL Engine v2 · Draw on Liquidity", shorttitle = "DOL", overlay = true, max_boxes_count = 120, max_lines_count = 120, max_labels_count = 120, max_bars_back = 500)
 
 // =====================================================================================================
-// 2. CONSTANTS
+// CONSTANTS
 // =====================================================================================================
-S_SWING = 0
-S_EQ    = 1
-S_SESS  = 2
-S_PD    = 3
-S_PW    = 4
-S_PM    = 5
-S_HTF   = 6
-S_STF   = 7
+K_BSL  = 0
+K_SSL  = 1
+K_FVG  = 2
+K_IFVG = 3
+K_OB   = 4
+K_BRK  = 5
+
+F_SW   = 0
+F_EQ   = 1
+F_SESS = 2
+F_PD   = 3
+F_PW   = 4
+F_PM   = 5
+F_HTF  = 6
+F_STF  = 7
+
 LN2     = 0.6931471805599453
 NEG_BIG = -1000000
+INT_BIG = 2147483647
 
 G_GEN = "◆ GENERAL"
-G_TF  = "◆ TIMEFRAMES (MANUAL)"
+G_TF  = "◆ TIMEFRAMES (MANUAL MODE)"
 G_DOL = "◆ DOL TARGET"
 G_SCR = "◆ SCORING"
-G_LIQ = "◆ LIQUIDITY"
+G_LIQ = "◆ LIQUIDITY SOURCES"
 G_SES = "◆ SESSIONS"
-G_FVG = "◆ FVG / iFVG"
+G_ZON = "◆ PD ARRAYS (FVG / iFVG / OB / BREAKER)"
 G_STR = "◆ STRUCTURE"
-G_OB  = "◆ ORDER BLOCKS"
-G_BRK = "◆ BREAKERS"
-G_LVN = "◆ LVN (VOLUME)"
-G_BIA = "◆ BIAS DASHBOARD"
-G_SIG = "◆ CONFLUENCE SIGNALS"
-G_VIS = "◆ VISUALS"
+G_LVN = "◆ LVN (1H VOLUME)"
+G_TBL = "◆ BIAS TABLE"
+G_SIG = "◆ EXECUTION SIGNALS"
+G_VIS = "◆ STYLE"
 G_ALR = "◆ ALERTS"
 
 // =====================================================================================================
 // TYPES
 // =====================================================================================================
-// Liquidity candidate (merged zone)
-type Liq
+// Unified target zone: liquidity pools and PD arrays share one queue.
+type Zn
     int    id
-    int    dir
+    int    kind
+    int    pol
+    float  top
+    float  bot
     float  lvl
-    float  top
-    float  bot
     int    t0
+    int    bBorn
     int    bRef
-    int    bAdd
-    int    src
-    string tfTxt
-    string sName   = ""
-    int    refs    = 1
-    bool   hSwing  = false
-    bool   hEq     = false
-    bool   hSess   = false
-    bool   hPD     = false
-    bool   hPW     = false
-    bool   hPM     = false
-    bool   hHtf    = false
-    bool   hStf    = false
-    bool   hNode   = false
-    int    touches = 0
-    float  mitig   = 0.0
-    bool   elig    = false
-    float  score   = 0.0
-    float  fP      = 0.0
-    float  fF      = 0.0
-    float  fC      = 0.0
-    float  fD      = 0.0
-    float  fS      = 0.0
-    float  fH      = 0.0
+    int    bC
+    string tf
+    int    refs      = 1
+    float  dens      = 0.0
+    float  qual      = 0.0
+    bool   fSw       = false
+    bool   fEq       = false
+    bool   fSess     = false
+    string sName     = ""
+    bool   fPD       = false
+    bool   fPW       = false
+    bool   fPM       = false
+    bool   fHtf      = false
+    bool   fStf      = false
+    bool   hasImb    = false
+    float  mitig     = 0.0
+    int    touches   = 0
+    int    closesIn  = 0
+    bool   mitigated = false
+    bool   reached   = false
+    bool   elig      = false
+    int    side      = 0
+    float  dist      = 0.0
+    float  score     = 0.0
+    float  pot       = 0.0
+    float  fP        = 0.0
+    float  fF        = 0.0
+    float  fC        = 0.0
+    float  fD        = 0.0
+    float  fS        = 0.0
+    float  fH        = 0.0
 
-// Fair value gap / inversion fair value gap
-type Gap
-    int   kind
-    int   dir
-    float top
-    float bot
-    int   t0
-    int   b0
-    int   tInv     = na
-    float mitig    = 0.0
-    int   closesIn = 0
-
-// Order block / breaker block
-type Blk
-    int   kind
-    int   dir
-    float top
-    float bot
-    int   t0
-    int   b0
-    int   bC
-    int   tBrk      = na
-    bool  mitigated = false
-    int   retests   = 0
-    bool  hasImb    = false
-
-// Historical trace of a former primary DOL
 type Ghost
-    int    dir
-    float  top
-    float  bot
+    int    kind
+    int    side
+    float  lvl
     int    t0
     int    t1
-    string src
-    float  score
     string why
 
-// Structure break event (BOS / CHoCH)
 type SEvt
     int   dir
     float lvl
@@ -134,173 +120,154 @@ type SEvt
     int   t1
     bool  choch
 
-// Swing label (HH / HL / LH / LL)
-type SwLbl
-    float  p
-    int    t
-    string txt
-    bool   isHigh
-
 // =====================================================================================================
-// 3. INPUTS
+// INPUTS
 // =====================================================================================================
 // ── GENERAL
-modeIn   = input.string("Day Trading", "Trading Mode", options = ["Scalping", "Day Trading", "Swing"], group = G_GEN, tooltip = "Sets auto timeframe relationships and pivot sensitivity.\nScalping: STF 15m · HTF 1H · HTF2 4H\nDay: STF 1H · HTF 4H · HTF2 D\nSwing: STF 4H · HTF D · HTF2 W\nAll auto timeframes are clamped so they are never below the chart timeframe.")
+modeIn   = input.string("Day Trading", "Trading Mode", options = ["Scalping", "Day Trading", "Swing"], group = G_GEN, tooltip = "Auto timeframes (never below the chart):\nScalping → STF 15m · HTF 1H · Macro 4H\nDay Trading → STF 1H · HTF 4H · Macro D\nSwing → STF 4H · HTF D · Macro W")
 tfSelIn  = input.string("Auto", "Timeframe Selection", options = ["Auto", "Manual"], group = G_GEN)
+histIn   = input.int(5000, "History Depth (bars)", minval = 500, maxval = 20000, step = 500, group = G_GEN, tooltip = "Bars processed by the engine. Keeps the script fast and inside TradingView limits.")
 masterIn = input.bool(true, "Master Enable", group = G_GEN)
-debugIn  = input.bool(false, "Debug Mode", group = G_GEN)
+debugIn  = input.bool(false, "Debug Panel", group = G_GEN)
 
 // ── MANUAL TIMEFRAMES
-mHtf2In  = input.timeframe("D",   "HTF 2 (macro)", group = G_TF)
-mHtf1In  = input.timeframe("240", "HTF 1 (bias)",  group = G_TF)
-mStfIn   = input.timeframe("60",  "Structure TF",  group = G_TF)
-mExecIn  = input.timeframe("",    "Execution TF",  group = G_TF, tooltip = "Blank = chart timeframe. Any manual timeframe below the chart timeframe falls back to the chart timeframe.")
+mHtf2In  = input.timeframe("D",   "Macro TF",     group = G_TF)
+mHtf1In  = input.timeframe("240", "HTF",          group = G_TF)
+mStfIn   = input.timeframe("60",  "Structure TF", group = G_TF)
+mExecIn  = input.timeframe("",    "Execution TF", group = G_TF, tooltip = "Blank = chart timeframe. A timeframe below the chart falls back to the chart timeframe.")
 htfPivIn = input.int(3, "HTF Pivot Length", minval = 1, maxval = 20, group = G_TF)
 
 // ── DOL
-showDolIn  = input.bool(true, "Show Active DOL", group = G_DOL)
-maxDistIn  = input.float(8.0, "Max ATR Distance", minval = 0.5, maxval = 50.0, step = 0.5, group = G_DOL, tooltip = "Targets farther than this (in ATR) are not eligible to be the DOL.")
-minScoreIn = input.int(35, "Minimum Target Score", minval = 0, maxval = 100, group = G_DOL)
-mergeIn    = input.float(0.25, "Merge Distance (ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = G_DOL, tooltip = "Liquidity references closer than this are merged into one zone.")
-zoneIn     = input.float(0.12, "Zone Size (ATR)", minval = 0.01, maxval = 2.0, step = 0.01, group = G_DOL)
-candMaxIn  = input.int(30, "Candidate Limit", minval = 5, maxval = 80, group = G_DOL)
-hystIn     = input.float(6.0, "Switch Hysteresis (pts)", minval = 0.0, maxval = 30.0, step = 0.5, group = G_DOL, tooltip = "A challenger must beat the current DOL score by this many points to replace it. Prevents flicker.")
-maxAgeIn   = input.int(2000, "Max Candidate Age (bars)", minval = 50, maxval = 10000, group = G_DOL)
-showPotIn  = input.bool(true, "Show PoT", group = G_DOL)
+showDolIn  = input.bool(true, "Show DOL", group = G_DOL)
+minPotIn   = input.float(5.0, "Minimum PoT to Show DOL (%)", minval = 0.0, maxval = 95.0, step = 0.5, group = G_DOL)
+minScoreIn = input.int(40, "Minimum Target Score", minval = 0, maxval = 100, group = G_DOL)
+maxDistIn  = input.float(6.0, "Max ATR Distance", minval = 0.5, maxval = 50.0, step = 0.5, group = G_DOL, tooltip = "Targets farther than this are not eligible. The active DOL is ejected (Ghost Trail) when price moves too far away.")
+hitRuleIn  = input.string("Touch Zone", "Target Hit Rule", options = ["Touch Zone", "Wick Through", "Close Through"], group = G_DOL, tooltip = "Touch Zone: any trade inside the zone hits the target.\nWick Through: price must trade beyond the liquidity level.\nClose Through: a candle must close beyond it.")
+useArrIn   = input.bool(true, "PD Arrays Can Be Targets", group = G_DOL, tooltip = "Allow FVG / iFVG / OB / Breaker zones to become the DOL (not only BSL / SSL pools).")
+mergeIn    = input.float(0.25, "Merge Distance (ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = G_DOL)
+zoneIn     = input.float(0.10, "Pool Zone Height (ATR)", minval = 0.01, maxval = 2.0, step = 0.01, group = G_DOL)
+hystIn     = input.float(6.0, "Switch Hysteresis (pts)", minval = 0.0, maxval = 30.0, step = 0.5, group = G_DOL, tooltip = "A challenger must beat the active DOL by this many score points. Prevents flicker.")
 potHorIn   = input.int(30, "PoT Horizon (bars)", minval = 5, maxval = 500, group = G_DOL)
-showSecIn  = input.bool(true, "Show Opposite-Side Target", group = G_DOL)
-showLvlIn  = input.bool(true, "Show Ranked Liquidity Levels", group = G_DOL)
-lvlSideIn  = input.int(2, "Ranked Levels Per Side", minval = 0, maxval = 6, group = G_DOL)
-showPathIn = input.bool(true, "Show Draw Path", group = G_DOL)
+poolMaxIn  = input.int(24, "Max Liquidity Pools", minval = 6, maxval = 60, group = G_DOL)
+maxAgeIn   = input.int(1500, "Max Target Age (bars)", minval = 50, maxval = 10000, group = G_DOL)
+showSecIn  = input.bool(false, "Show Opposite-Side Target", group = G_DOL)
+showLvlIn  = input.bool(false, "Show Next Ranked Targets", group = G_DOL)
 
 // ── SCORING
-wProxIn    = input.float(25.0, "Proximity Weight",  minval = 0.0, maxval = 100.0, group = G_SCR)
-wFreshIn   = input.float(10.0, "Freshness Weight",  minval = 0.0, maxval = 100.0, group = G_SCR)
+wProxIn    = input.float(30.0, "Proximity Weight",  minval = 0.0, maxval = 100.0, group = G_SCR)
+wFreshIn   = input.float(15.0, "Freshness Weight",  minval = 0.0, maxval = 100.0, group = G_SCR)
 wConfIn    = input.float(20.0, "Confluence Weight", minval = 0.0, maxval = 100.0, group = G_SCR)
 wDensIn    = input.float(15.0, "Density Weight",    minval = 0.0, maxval = 100.0, group = G_SCR)
-wStrIn     = input.float(15.0, "Structure Weight",  minval = 0.0, maxval = 100.0, group = G_SCR)
-wHtfIn     = input.float(15.0, "HTF Weight",        minval = 0.0, maxval = 100.0, group = G_SCR, tooltip = "Weights are normalised automatically, so the score is always 0-100.")
-halfLifeIn = input.int(250, "Freshness Half-Life (bars)", minval = 5, maxval = 10000, group = G_SCR, tooltip = "freshness = exp(-ln2 · age / halfLife). Higher-timeframe references decay up to 3x slower.")
+wStrIn     = input.float(10.0, "Structure Weight",  minval = 0.0, maxval = 100.0, group = G_SCR)
+wHtfIn     = input.float(10.0, "HTF Weight",        minval = 0.0, maxval = 100.0, group = G_SCR, tooltip = "Weights are normalised: the score is always 0-100.")
+halfLifeIn = input.int(200, "Freshness Half-Life (bars)", minval = 5, maxval = 10000, group = G_SCR, tooltip = "freshness = exp(-ln2 · age / half-life). HTF references decay up to 3x slower.")
 mitPenIn   = input.float(0.6, "Mitigation Penalty", minval = 0.0, maxval = 1.0, step = 0.05, group = G_SCR)
 
-// ── LIQUIDITY
-useSwingIn  = input.bool(true, "Swing Highs / Lows", group = G_LIQ)
-useEqIn     = input.bool(true, "Equal Highs / Lows", inline = "eq", group = G_LIQ)
-eqTolIn     = input.float(0.10, "Tolerance (ATR)", minval = 0.01, maxval = 1.0, step = 0.01, inline = "eq", group = G_LIQ)
-usePdIn     = input.bool(true, "PDH / PDL", group = G_LIQ)
-usePwIn     = input.bool(true, "PWH / PWL", group = G_LIQ)
-usePmIn     = input.bool(true, "PMH / PML", group = G_LIQ)
-useStfIn    = input.bool(true, "Structure-TF Swings", group = G_LIQ)
-useHtfIn    = input.bool(true, "HTF Swings", group = G_LIQ)
-sweepModeIn = input.string("Wick", "Sweep Confirmation", options = ["Wick", "Close", "Wick + Rejection"], group = G_LIQ, tooltip = "Wick: any trade beyond the level takes it.\nClose: a close beyond the level is required.\nWick + Rejection: the level is taken by a wick; only wick-and-close-back-inside counts as a sweep event (alerts / signals).")
-minPenIn    = input.float(0.02, "Min Penetration (ATR)", minval = 0.0, maxval = 1.0, step = 0.01, group = G_LIQ)
-brkAtrIn    = input.float(0.30, "Break Close Beyond (ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = G_LIQ, tooltip = "A close this far beyond a taken level marks it BROKEN (accepted) rather than SWEPT.")
+// ── LIQUIDITY SOURCES
+useSwingIn = input.bool(true, "Swing Highs / Lows", group = G_LIQ)
+useEqIn    = input.bool(true, "Equal Highs / Lows", inline = "eq", group = G_LIQ)
+eqTolIn    = input.float(0.10, "Tol (ATR)", minval = 0.01, maxval = 1.0, step = 0.01, inline = "eq", group = G_LIQ)
+usePdIn    = input.bool(true, "PDH / PDL", inline = "pd", group = G_LIQ)
+usePwIn    = input.bool(true, "PWH / PWL", inline = "pd", group = G_LIQ)
+usePmIn    = input.bool(true, "PMH / PML", inline = "pd", group = G_LIQ)
+useStfIn   = input.bool(true, "Structure-TF Swings", inline = "tf", group = G_LIQ)
+useHtfIn   = input.bool(true, "HTF Swings", inline = "tf", group = G_LIQ)
+densLbIn   = input.int(20, "Density Lookback (bars)", minval = 5, maxval = 100, group = G_LIQ, tooltip = "Bars before a swing that are scanned for equal-high/low tests and range compression (coiling).")
+minPenIn   = input.float(0.02, "Min Penetration (ATR)", minval = 0.0, maxval = 1.0, step = 0.01, group = G_LIQ, tooltip = "Used by the Wick / Close Through hit rules and for sweep detection.")
 
 // ── SESSIONS
-useSessIn   = input.bool(true, "Session Highs / Lows", group = G_SES)
-tzIn        = input.string("Exchange", "Timezone", options = ["Exchange", "UTC", "America/New_York", "America/Chicago", "Europe/London", "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai", "Asia/Singapore", "Australia/Sydney"], group = G_SES, tooltip = "Session times below are interpreted in this timezone. The defaults are New York-time windows: for Forex / Gold / Crypto set this to America/New_York.")
-asiaOnIn    = input.bool(true, "Asia", inline = "as", group = G_SES)
-asiaIn      = input.session("2000-2359", "", inline = "as", group = G_SES)
-lonOnIn     = input.bool(true, "London", inline = "ld", group = G_SES)
-lonIn       = input.session("0200-0500", "", inline = "ld", group = G_SES)
-nyOnIn      = input.bool(true, "New York", inline = "ny", group = G_SES)
-nyIn        = input.session("0930-1130", "", inline = "ny", group = G_SES)
-showDayHLIn = input.bool(false, "Show Current Day High / Low", group = G_SES)
+useSessIn = input.bool(true, "Session Highs / Lows", group = G_SES)
+tzIn      = input.string("Exchange", "Timezone", options = ["Exchange", "UTC", "America/New_York", "America/Chicago", "Europe/London", "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai", "Asia/Singapore", "Australia/Sydney"], group = G_SES, tooltip = "Session windows are read in this timezone. Defaults are New York times: for Forex / Gold / Crypto choose America/New_York.")
+asiaOnIn  = input.bool(true, "Asia", inline = "as", group = G_SES)
+asiaIn    = input.session("2000-2359", "", inline = "as", group = G_SES)
+lonOnIn   = input.bool(true, "London", inline = "ld", group = G_SES)
+lonIn     = input.session("0200-0500", "", inline = "ld", group = G_SES)
+nyOnIn    = input.bool(true, "New York", inline = "ny", group = G_SES)
+nyIn      = input.session("0930-1130", "", inline = "ny", group = G_SES)
 
-// ── FVG / iFVG
-showFvgIn    = input.bool(true, "Show FVG", group = G_FVG)
-showIfvgIn   = input.bool(true, "Show iFVG", group = G_FVG)
-fvgMinIn     = input.float(0.15, "Min FVG Size (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_FVG)
-fvgMitIn     = input.int(100, "Mitigation Threshold %", minval = 10, maxval = 100, group = G_FVG, tooltip = "An FVG filled at least this much (by wicks) without an inverting close is retired.")
-fvgInvIn     = input.float(0.0, "Inversion Threshold (ATR)", minval = 0.0, maxval = 2.0, step = 0.05, group = G_FVG, tooltip = "Close beyond the far edge of an FVG by this amount inverts it into an iFVG.")
-ifvgInvIn    = input.float(0.10, "iFVG Invalidation (ATR)", minval = 0.0, maxval = 2.0, step = 0.05, group = G_FVG)
-ifvgClosesIn = input.int(3, "iFVG Max Body Closes Inside", minval = 1, maxval = 20, group = G_FVG)
-fvgMaxIn     = input.int(14, "Max Tracked FVGs", minval = 2, maxval = 50, group = G_FVG)
-ifvgMaxIn    = input.int(8, "Max Tracked iFVGs", minval = 1, maxval = 30, group = G_FVG)
-fvgShowIn    = input.int(2, "Visible Per Side", minval = 0, maxval = 10, group = G_FVG)
-fvgDistIn    = input.float(6.0, "Visible Within (ATR)", minval = 0.5, maxval = 50.0, step = 0.5, group = G_FVG)
-gapAgeIn     = input.int(600, "Max Zone Age (bars)", minval = 20, maxval = 5000, group = G_FVG)
+// ── PD ARRAYS
+fvgMinIn     = input.float(0.20, "Min FVG Size (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_ZON)
+fvgMitIn     = input.int(100, "FVG Fill to Retire (%)", minval = 10, maxval = 100, group = G_ZON)
+fvgInvIn     = input.float(0.0, "iFVG Flip: Close Beyond (ATR)", minval = 0.0, maxval = 2.0, step = 0.05, group = G_ZON)
+ifvgInvIn    = input.float(0.10, "iFVG Invalidation (ATR)", minval = 0.0, maxval = 2.0, step = 0.05, group = G_ZON)
+ifvgClosesIn = input.int(3, "iFVG Max Body Closes Inside", minval = 1, maxval = 20, group = G_ZON)
+obLookIn     = input.int(10, "OB Search Lookback", minval = 3, maxval = 30, group = G_ZON)
+obDispIn     = input.float(1.5, "OB Min Displacement (ATR)", minval = 0.2, maxval = 10.0, step = 0.1, group = G_ZON)
+obVolIn      = input.bool(false, "OB Requires Volume Expansion", group = G_ZON)
+obMitIn      = input.string("50%", "OB Mitigation Rule", options = ["Wick", "50%", "Close"], group = G_ZON)
+fvgMaxIn     = input.int(10, "Max FVGs", minval = 1, maxval = 40, inline = "cap1", group = G_ZON)
+ifvgMaxIn    = input.int(6, "Max iFVGs", minval = 1, maxval = 30, inline = "cap1", group = G_ZON)
+obMaxIn      = input.int(6, "Max OBs", minval = 1, maxval = 30, inline = "cap2", group = G_ZON)
+brkMaxIn     = input.int(4, "Max Breakers", minval = 1, maxval = 20, inline = "cap2", group = G_ZON)
+zoneAgeIn    = input.int(500, "Max PD Array Age (bars)", minval = 20, maxval = 5000, group = G_ZON)
+showFvgIn    = input.bool(false, "Draw FVG", inline = "d1", group = G_ZON)
+showIfvgIn   = input.bool(false, "Draw iFVG", inline = "d1", group = G_ZON)
+showObIn     = input.bool(false, "Draw OB", inline = "d2", group = G_ZON)
+showBrkIn    = input.bool(false, "Draw Breaker", inline = "d2", group = G_ZON)
+arrSideIn    = input.int(1, "Drawn Per Side", minval = 1, maxval = 5, group = G_ZON)
 
 // ── STRUCTURE
 pivAutoIn  = input.bool(true, "Auto Pivot Length (by Mode)", group = G_STR)
-sensIn     = input.string("Normal", "Structure Sensitivity", options = ["High", "Normal", "Low"], group = G_STR, tooltip = "Auto lengths — Scalping 2/3/5 · Day 3/5/8 · Swing 5/8/12 (High/Normal/Low).")
+sensIn     = input.string("Normal", "Sensitivity", options = ["High", "Normal", "Low"], group = G_STR, tooltip = "Auto lengths — Scalping 2/3/5 · Day 3/5/8 · Swing 5/8/12 (High / Normal / Low).")
 pivLenIn   = input.int(5, "Pivot Length (manual)", minval = 1, maxval = 30, group = G_STR)
-showBosIn  = input.bool(true, "Show BOS", inline = "bs", group = G_STR)
-showChIn   = input.bool(true, "Show CHoCH", inline = "bs", group = G_STR)
-showSwIn   = input.bool(false, "Show Swing Labels (HH/HL/LH/LL)", group = G_STR)
-strMaxIn   = input.int(3, "Max Structure Drawings", minval = 1, maxval = 10, group = G_STR)
-
-// ── ORDER BLOCKS
-showObIn    = input.bool(true, "Show Order Blocks", group = G_OB)
-obLookIn    = input.int(10, "OB Search Lookback", minval = 3, maxval = 30, group = G_OB)
-obDispIn    = input.float(1.5, "Min Displacement (ATR)", minval = 0.2, maxval = 10.0, step = 0.1, group = G_OB, tooltip = "Distance from the OB extreme to the break close. Filters weak, non-impulsive moves.")
-obVolIn     = input.bool(false, "Require Volume Expansion", group = G_OB)
-obMitIn     = input.string("50%", "Mitigation Rule", options = ["Wick", "50%", "Close"], group = G_OB)
-obHideMitIn = input.bool(true, "Hide Mitigated OBs", group = G_OB)
-obMaxIn     = input.int(8, "Max Tracked OBs", minval = 2, maxval = 30, group = G_OB)
-
-// ── BREAKERS
-showBrkIn = input.bool(true, "Show Breaker Blocks", group = G_BRK)
-brkMaxIn  = input.int(6, "Max Tracked Breakers", minval = 1, maxval = 20, group = G_BRK)
-blkShowIn = input.int(1, "Visible OB / Breakers Per Side", minval = 0, maxval = 5, group = G_BRK)
+showStrIn  = input.bool(false, "Draw BOS / CHoCH", group = G_STR)
+strMaxIn   = input.int(2, "Max Structure Drawings", minval = 1, maxval = 10, group = G_STR)
 
 // ── LVN
-showLvnIn = input.bool(false, "Show LVN", group = G_LVN)
-lvnTfIn   = input.timeframe("60", "LVN Source TF", group = G_LVN)
+showLvnIn = input.bool(false, "Show LVN Zones", group = G_LVN)
+lvnTfIn   = input.timeframe("60", "Source TF", group = G_LVN)
 lvnBinsIn = input.int(40, "Bins", minval = 10, maxval = 100, group = G_LVN)
 lvnLookIn = input.int(200, "Lookback (source bars)", minval = 20, maxval = 500, group = G_LVN)
 lvnThrIn  = input.float(0.35, "LVN Threshold (x mean)", minval = 0.05, maxval = 1.0, step = 0.05, group = G_LVN)
-lvnShowIn = input.int(2, "LVNs Per Side", minval = 1, maxval = 5, group = G_LVN)
+lvnShowIn = input.int(1, "LVNs Per Side", minval = 1, maxval = 5, group = G_LVN)
 
-// ── BIAS
-showBiasIn = input.bool(true, "Show Bias Dashboard", group = G_BIA)
-biasPosIn  = input.string("Top Right", "Dashboard Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = G_BIA)
+// ── BIAS TABLE
+showTblIn = input.bool(true, "Show Bias Table", group = G_TBL)
+tblPosIn  = input.string("Top Right", "Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = G_TBL)
+tblSizeIn = input.string("Small", "Text Size", options = ["Tiny", "Small", "Normal"], group = G_TBL)
 
 // ── SIGNALS
-sigOnIn       = input.bool(false, "Enable Confluence Signals", group = G_SIG)
-sigMinScoreIn = input.int(55, "Min DOL Score", minval = 0, maxval = 100, group = G_SIG)
-sigMinPotIn   = input.int(35, "Min PoT %", minval = 0, maxval = 95, group = G_SIG)
-sigHtfIn      = input.bool(true, "Require HTF Alignment", group = G_SIG)
-sigWinIn      = input.int(12, "Sweep → Structure Window (bars)", minval = 1, maxval = 100, group = G_SIG)
-sigCoolIn     = input.int(15, "Cooldown (bars)", minval = 0, maxval = 500, group = G_SIG)
+sigOnIn    = input.bool(false, "Show Execution Signals", group = G_SIG, tooltip = "Printed on a confirmed execution-TF break in the HTF direction, with the DOL on the same side.")
+sigReqSwIn = input.bool(true, "Require Opposite Liquidity Sweep", group = G_SIG)
+sigScoreIn = input.int(55, "Min DOL Score", minval = 0, maxval = 100, group = G_SIG)
+sigPotIn   = input.float(30.0, "Min PoT %", minval = 0.0, maxval = 95.0, step = 0.5, group = G_SIG)
+sigWinIn   = input.int(12, "Sweep Window (bars)", minval = 1, maxval = 100, group = G_SIG)
+sigCoolIn  = input.int(15, "Cooldown (bars)", minval = 0, maxval = 500, group = G_SIG)
 
-// ── VISUALS
-colBullIn  = input.color(#26A69A, "Bullish", inline = "c1", group = G_VIS)
-colBearIn  = input.color(#EF5350, "Bearish", inline = "c1", group = G_VIS)
-colNeuIn   = input.color(#8C93A8, "Neutral", inline = "c1", group = G_VIS)
-colIfvgIn  = input.color(#9C7CF4, "iFVG", inline = "c2", group = G_VIS)
-colObBIn   = input.color(#3D8BFD, "OB Bull", inline = "c2", group = G_VIS)
-colObSIn   = input.color(#F4A62A, "OB Bear", inline = "c2", group = G_VIS)
-colLvnIn   = input.color(#E6C35C, "LVN", inline = "c3", group = G_VIS)
-colTextIn  = input.color(#D1D4DC, "Text", inline = "c3", group = G_VIS)
-colPanelIn = input.color(#0E1117, "Panel", inline = "c3", group = G_VIS)
-dolOpIn    = input.int(78, "DOL Zone Transparency", minval = 0, maxval = 100, group = G_VIS)
-zoneOpIn   = input.int(90, "Zone Transparency", minval = 0, maxval = 100, group = G_VIS)
-ghostOpIn  = input.int(94, "Ghost Transparency", minval = 0, maxval = 100, group = G_VIS)
+// ── STYLE
+colBullIn  = input.color(#22D3A6, "Bull", inline = "c1", group = G_VIS)
+colBearIn  = input.color(#FF4D6D, "Bear", inline = "c1", group = G_VIS)
+colNeuIn   = input.color(#7C8699, "Neutral", inline = "c1", group = G_VIS)
+colIfvgIn  = input.color(#A78BFA, "iFVG", inline = "c2", group = G_VIS)
+colObIn    = input.color(#60A5FA, "OB", inline = "c2", group = G_VIS)
+colLvnIn   = input.color(#E6C35C, "LVN", inline = "c2", group = G_VIS)
+colTextIn  = input.color(#E6EAF2, "Text", inline = "c3", group = G_VIS)
+colPanelIn = input.color(#0B0E14, "Panel", inline = "c3", group = G_VIS)
+dolOpIn    = input.int(84, "DOL Zone Transparency", minval = 0, maxval = 100, group = G_VIS)
+glowIn     = input.bool(true, "Glow Line", group = G_VIS)
 lblSizeIn  = input.string("Small", "Label Size", options = ["Tiny", "Small", "Normal"], group = G_VIS)
-extIn      = input.int(20, "Right Extension (bars)", minval = 2, maxval = 200, group = G_VIS)
-showGhIn   = input.bool(true, "Show Ghost Trail", group = G_VIS)
-ghostMaxIn = input.int(6, "Max Ghost Trails", minval = 0, maxval = 10, group = G_VIS)
-maxVisIn   = input.int(70, "Max Visible Objects", minval = 10, maxval = 180, group = G_VIS, tooltip = "Hard cap for secondary drawings. The active DOL is always drawn.")
+detailIn   = input.bool(false, "Show Source Line on Label", group = G_VIS)
+extIn      = input.int(15, "Right Extension (bars)", minval = 2, maxval = 200, group = G_VIS)
+ghostOnIn  = input.bool(true, "Ghost Trail", inline = "gh", group = G_VIS)
+ghostMaxIn = input.int(5, "Max", minval = 1, maxval = 10, inline = "gh", group = G_VIS)
+maxVisIn   = input.int(60, "Max Secondary Objects", minval = 10, maxval = 110, group = G_VIS)
 
-// ── ALERTS
-alNewIn     = input.bool(true, "New Primary DOL", group = G_ALR)
-alChgIn     = input.bool(true, "DOL Target Changed", group = G_ALR)
-alSweptIn   = input.bool(true, "DOL Target Swept", group = G_ALR)
-alBslIn     = input.bool(false, "BSL Target Activated", group = G_ALR)
-alSslIn     = input.bool(false, "SSL Target Activated", group = G_ALR)
-alFvgIn     = input.bool(false, "New FVG", group = G_ALR)
-alIfvgIn    = input.bool(false, "New iFVG", group = G_ALR)
-alScoreIn   = input.bool(false, "DOL Score Crosses", inline = "asc", group = G_ALR)
-alScoreThIn = input.int(75, "", minval = 1, maxval = 100, inline = "asc", group = G_ALR)
-alPotIn     = input.bool(false, "PoT Crosses", inline = "apt", group = G_ALR)
-alPotThIn   = input.int(60, "", minval = 1, maxval = 95, inline = "apt", group = G_ALR)
-alBullIn    = input.bool(true, "Bullish Confluence Signal", group = G_ALR)
-alBearIn    = input.bool(true, "Bearish Confluence Signal", group = G_ALR)
-alBiasIn    = input.bool(false, "HTF Bias Change", group = G_ALR)
+// ── ALERTS (dynamic alert() messages — create one alert with "Any alert() function call")
+alNewIn   = input.bool(true, "New DOL Target Active", group = G_ALR)
+alHitIn   = input.bool(true, "DOL Target Hit / Swept", group = G_ALR)
+alIfvgIn  = input.bool(true, "New iFVG", group = G_ALR)
+alFvgIn   = input.bool(false, "New FVG", group = G_ALR)
+alSideIn  = input.bool(false, "BSL / SSL Side Activated", group = G_ALR)
+alScoreIn = input.bool(false, "Score Crosses", inline = "asc", group = G_ALR)
+alScoreTh = input.int(75, "", minval = 1, maxval = 100, inline = "asc", group = G_ALR)
+alPotIn   = input.bool(false, "PoT Crosses", inline = "apt", group = G_ALR)
+alPotTh   = input.float(60.0, "", minval = 1.0, maxval = 95.0, step = 0.5, inline = "apt", group = G_ALR)
+alSigIn   = input.bool(true, "Execution Signals", group = G_ALR)
+alBiasIn  = input.bool(false, "HTF Bias Change", group = G_ALR)
+alAlignIn = input.bool(false, "Exec / HTF Alignment", group = G_ALR)
 
 // =====================================================================================================
-// 4. UTILITY FUNCTIONS
+// UTILITY FUNCTIONS
 // =====================================================================================================
 f_join(string a, string b) =>
     a == "" ? b : a + "·" + b
@@ -311,7 +278,7 @@ f_sz(string s) =>
 f_pos(string p) =>
     p == "Top Left" ? position.top_left : p == "Bottom Right" ? position.bottom_right : p == "Bottom Left" ? position.bottom_left : position.top_right
 
-// Standard normal CDF (Abramowitz & Stegun 26.2.17, |error| < 7.5e-8)
+// Standard normal CDF (Abramowitz & Stegun 26.2.17)
 f_ncdf(float x) =>
     float ax = math.abs(x)
     float t  = 1.0 / (1.0 + 0.2316419 * ax)
@@ -319,83 +286,108 @@ f_ncdf(float x) =>
     float p  = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
     x >= 0 ? 1.0 - p : p
 
-// Structural weight of a single source type
-f_srcW(int s) =>
-    s == S_PM ? 1.0 : s == S_PW ? 0.85 : s == S_HTF ? 0.8 : s == S_PD ? 0.7 : s == S_EQ ? 0.6 : s == S_SESS ? 0.5 : s == S_STF ? 0.5 : 0.35
+// Probability of Touch (heuristic, 0-95 %, 0.1 precision)
+// Reflection principle for a driftless walk: P(touch within T) = 2·(1 − Φ(d / (σ·√T))),
+// scaled by target quality and momentum toward the target.
+f_pot(float distPx, float sig, int horizon, float sc, float momToward) =>
+    float res = 0.0
+    if not na(distPx) and sig > 0
+        float z    = math.max(distPx, 0.0) / (sig * math.sqrt(horizon))
+        float base = 2.0 * (1.0 - f_ncdf(z))
+        float q    = 0.55 + 0.45 * math.min(math.max(nz(sc), 0.0), 100.0) / 100.0
+        float m    = 1.0 + 0.20 * math.max(-1.0, math.min(1.0, nz(momToward)))
+        res := math.round(math.max(0.1, math.min(95.0, 100.0 * base * q * m)), 1)
+    res
 
-f_flagCount(Liq c) =>
+f_isPool(Zn z) =>
+    z.kind == K_BSL or z.kind == K_SSL
+
+f_kindTxt(Zn z) =>
+    z.kind == K_BSL ? "BSL" : z.kind == K_SSL ? "SSL" : z.kind == K_FVG ? "FVG" : z.kind == K_IFVG ? "iFVG" : z.kind == K_OB ? "OB" : "BRK"
+
+f_kindTxtK(int k) =>
+    k == K_BSL ? "BSL" : k == K_SSL ? "SSL" : k == K_FVG ? "FVG" : k == K_IFVG ? "iFVG" : k == K_OB ? "OB" : "BRK"
+
+f_flagW(int f) =>
+    f == F_PM ? 1.0 : f == F_PW ? 0.85 : f == F_HTF ? 0.8 : f == F_PD ? 0.7 : f == F_EQ ? 0.6 : f == F_SESS ? 0.5 : f == F_STF ? 0.5 : 0.35
+
+f_flagCount(Zn z) =>
     int n = 0
-    n += c.hSwing ? 1 : 0
-    n += c.hEq    ? 1 : 0
-    n += c.hSess  ? 1 : 0
-    n += c.hPD    ? 1 : 0
-    n += c.hPW    ? 1 : 0
-    n += c.hPM    ? 1 : 0
-    n += c.hHtf   ? 1 : 0
-    n += c.hStf   ? 1 : 0
-    n += c.hNode  ? 1 : 0
+    n += z.fSw   ? 1 : 0
+    n += z.fEq   ? 1 : 0
+    n += z.fSess ? 1 : 0
+    n += z.fPD   ? 1 : 0
+    n += z.fPW   ? 1 : 0
+    n += z.fPM   ? 1 : 0
+    n += z.fHtf  ? 1 : 0
+    n += z.fStf  ? 1 : 0
     n
 
-// Structural importance of a merged zone (strongest source + bonus for independent sources)
-f_structW(Liq c) =>
+// Structural importance (0..1)
+f_structW(Zn z) =>
     float w = 0.0
-    w := c.hSwing ? math.max(w, 0.35) : w
-    w := c.hStf   ? math.max(w, 0.50) : w
-    w := c.hSess  ? math.max(w, 0.50) : w
-    w := c.hEq    ? math.max(w, 0.60) : w
-    w := c.hPD    ? math.max(w, 0.70) : w
-    w := c.hHtf   ? math.max(w, 0.80) : w
-    w := c.hPW    ? math.max(w, 0.85) : w
-    w := c.hPM    ? math.max(w, 1.00) : w
-    math.min(1.0, w + 0.08 * math.max(0, f_flagCount(c) - 1))
+    if z.kind == K_BSL or z.kind == K_SSL
+        w := z.fSw   ? math.max(w, 0.35) : w
+        w := z.fStf  ? math.max(w, 0.50) : w
+        w := z.fSess ? math.max(w, 0.50) : w
+        w := z.fEq   ? math.max(w, 0.60) : w
+        w := z.fPD   ? math.max(w, 0.70) : w
+        w := z.fHtf  ? math.max(w, 0.80) : w
+        w := z.fPW   ? math.max(w, 0.85) : w
+        w := z.fPM   ? math.max(w, 1.00) : w
+        w := math.min(1.0, w + 0.08 * math.max(0, f_flagCount(z) - 1))
+    else
+        w := z.kind == K_FVG ? 0.50 : z.kind == K_IFVG ? 0.60 : z.kind == K_OB ? (z.hasImb ? 0.75 : 0.60) : 0.60
+    w
 
-f_setFlag(Liq c, int src, string nm) =>
-    if src == S_SWING
-        c.hSwing := true
-    else if src == S_EQ
-        c.hSwing := true
-        c.hEq := true
-    else if src == S_SESS
-        c.sName := c.sName == "" ? nm : c.sName
-        c.hSess := true
-    else if src == S_PD
-        c.hPD := true
-    else if src == S_PW
-        c.hPW := true
-    else if src == S_PM
-        c.hPM := true
-    else if src == S_HTF
-        c.hHtf := true
-    else if src == S_STF
-        c.hStf := true
-    c
+f_setFlag(Zn z, int f, string nm) =>
+    if f == F_SW
+        z.fSw := true
+    else if f == F_EQ
+        z.fSw := true
+        z.fEq := true
+    else if f == F_SESS
+        z.sName := z.sName == "" ? nm : z.sName
+        z.fSess := true
+    else if f == F_PD
+        z.fPD := true
+    else if f == F_PW
+        z.fPW := true
+    else if f == F_PM
+        z.fPM := true
+    else if f == F_HTF
+        z.fHtf := true
+    else if f == F_STF
+        z.fStf := true
+    z
 
-f_srcList(Liq c) =>
-    bool   b = c.dir == 1
+f_srcList(Zn z) =>
     string s = ""
-    if c.hPM
-        s := f_join(s, b ? "PMH" : "PML")
-    if c.hPW
-        s := f_join(s, b ? "PWH" : "PWL")
-    if c.hPD
-        s := f_join(s, b ? "PDH" : "PDL")
-    if c.hHtf
-        s := f_join(s, "HTF")
-    if c.hEq
-        s := f_join(s, b ? "EQH" : "EQL")
-    if c.hSess
-        s := f_join(s, c.sName)
-    if c.hStf
-        s := f_join(s, "STF")
-    if c.hSwing and not c.hEq
-        s := f_join(s, b ? "SWH" : "SWL")
-    if c.hNode
-        s := f_join(s, "NODE")
-    if c.refs >= 3
-        s := s + " ×" + str.tostring(c.refs)
+    if f_isPool(z)
+        bool b = z.kind == K_BSL
+        if z.fPM
+            s := f_join(s, b ? "PMH" : "PML")
+        if z.fPW
+            s := f_join(s, b ? "PWH" : "PWL")
+        if z.fPD
+            s := f_join(s, b ? "PDH" : "PDL")
+        if z.fHtf
+            s := f_join(s, "HTF")
+        if z.fEq
+            s := f_join(s, b ? "EQH" : "EQL")
+        if z.fSess
+            s := f_join(s, z.sName)
+        if z.fStf
+            s := f_join(s, "STF")
+        if z.fSw and not z.fEq
+            s := f_join(s, b ? "Swing H" : "Swing L")
+        if z.refs >= 3
+            s := s + " ×" + str.tostring(z.refs)
+    else
+        s := f_kindTxt(z) + (z.kind == K_OB and z.hasImb ? " +imb" : "")
     s
 
-f_findId(array<Liq> a, int id) =>
+f_findId(array<Zn> a, int id) =>
     int r = -1
     int n = array.size(a)
     if id >= 0 and n > 0
@@ -405,26 +397,28 @@ f_findId(array<Liq> a, int id) =>
                 break
     r
 
-// Add a liquidity reference: merge into an existing zone when within mD, otherwise create a new
-// candidate (evicting the weakest one — never the active DOL, never one added this bar).
-f_addLiq(array<Liq> arr, int dir, float lvl, float zH, int src, string tfTxt, string nm, int t0, int bRef, float mD, float eqD, int maxN, int newId, int keepId, int curBar) =>
+// Add a liquidity reference to the pool queue (merge into an existing pool within mD).
+f_addPool(array<Zn> arr, int pol, float lvl, float zH, int f, string tf, string nm, int t0, int bRef, float dens, float mD, float eqD, int maxN, int newId, int keepId, int curBar) =>
     int hit = -1
-    if not na(lvl) and not na(t0)
-        int n = array.size(arr)
+    if not na(lvl) and not na(t0) and not na(bRef)
+        int k  = pol == 1 ? K_BSL : K_SSL
+        int n  = array.size(arr)
+        int pc = 0
         if n > 0
             for i = 0 to n - 1
-                Liq c1 = array.get(arr, i)
-                if c1.dir == dir and math.abs(c1.lvl - lvl) <= mD
-                    hit := i
-                    break
+                Zn c1 = array.get(arr, i)
+                if c1.kind == k
+                    pc += 1
+                    if hit < 0 and math.abs(c1.lvl - lvl) <= mD
+                        hit := i
         if hit >= 0
-            Liq c2 = array.get(arr, hit)
-            bool isSw = src == S_SWING or src == S_STF
-            if isSw and (c2.hSwing or c2.hStf) and eqD >= 0 and math.abs(c2.lvl - lvl) <= eqD
-                c2.hEq := true
+            Zn c2 = array.get(arr, hit)
+            if (f == F_SW or f == F_STF) and (c2.fSw or c2.fStf) and eqD >= 0 and math.abs(c2.lvl - lvl) <= eqD
+                c2.fEq := true
             c2.refs += 1
+            c2.dens := math.max(c2.dens, dens)
             float cap = (mD + zH) * 2.0
-            if dir == 1
+            if pol == 1
                 c2.lvl := math.max(c2.lvl, lvl)
                 c2.top := c2.lvl
                 c2.bot := math.max(math.min(c2.bot, lvl - zH), c2.top - cap)
@@ -434,90 +428,74 @@ f_addLiq(array<Liq> arr, int dir, float lvl, float zH, int src, string tfTxt, st
                 c2.top := math.min(math.max(c2.top, lvl + zH), c2.bot + cap)
             c2.t0   := math.min(c2.t0, t0)
             c2.bRef := math.max(c2.bRef, bRef)
-            if f_srcW(src) > f_srcW(c2.src)
-                c2.src   := src
-                c2.tfTxt := tfTxt
-            f_setFlag(c2, src, nm)
+            if f == F_HTF or f == F_PW or f == F_PM or f == F_PD
+                c2.tf := tf
+            f_setFlag(c2, f, nm)
         else
-            if n >= maxN and n > 0
+            if pc >= maxN
                 int   wi = -1
                 float ws = 1e20
                 for i = 0 to n - 1
-                    Liq c3 = array.get(arr, i)
-                    if c3.id != keepId and c3.bAdd != curBar and c3.score < ws
+                    Zn c3 = array.get(arr, i)
+                    if c3.kind == k and c3.id != keepId and c3.bC != curBar and c3.score < ws
                         ws := c3.score
                         wi := i
                 if wi >= 0
                     array.remove(arr, wi)
-            Liq nc = Liq.new(id = newId, dir = dir, lvl = lvl, top = dir == 1 ? lvl : lvl + zH, bot = dir == 1 ? lvl - zH : lvl, t0 = t0, bRef = bRef, bAdd = curBar, src = src, tfTxt = tfTxt)
-            f_setFlag(nc, src, nm)
-            array.push(arr, nc)
+            Zn nz0 = Zn.new(id = newId, kind = k, pol = pol, top = pol == 1 ? lvl : lvl + zH, bot = pol == 1 ? lvl - zH : lvl, lvl = lvl, t0 = t0, bBorn = bRef, bRef = bRef, bC = curBar, tf = tf, dens = dens)
+            f_setFlag(nz0, f, nm)
+            array.push(arr, nz0)
     hit
 
-f_ghost(array<Ghost> gs, Liq c, int t1, string why, int maxG) =>
-    if maxG > 0
-        array.push(gs, Ghost.new(c.dir, c.top, c.bot, c.t0, t1, f_srcList(c), c.score, why))
-        while array.size(gs) > maxG
-            array.shift(gs)
+// Keep at most `cap` zones of one kind (drops the oldest; never the active DOL)
+f_capKind(array<Zn> arr, int kind, int cap, int keepId) =>
+    int cnt = 0
+    int n   = array.size(arr)
+    if n > 0
+        for i = 0 to n - 1
+            if array.get(arr, i).kind == kind
+                cnt += 1
+    while cnt > cap
+        int oi = -1
+        int ob = INT_BIG
+        int m  = array.size(arr)
+        for i = 0 to m - 1
+            Zn z = array.get(arr, i)
+            if z.kind == kind and z.id != keepId and z.bBorn < ob
+                ob := z.bBorn
+                oi := i
+        if oi < 0
+            break
+        array.remove(arr, oi)
+        cnt -= 1
+    cnt
+
+f_ghost(array<Ghost> gs, Zn z, int t1, string why, int maxG) =>
+    array.push(gs, Ghost.new(z.kind, z.side, z.lvl, z.t0, t1, why))
+    while array.size(gs) > maxG
+        array.shift(gs)
     true
 
-f_gapOverlap(array<Gap> a, float lo, float hi) =>
-    bool r = false
-    int  n = array.size(a)
-    if n > 0
-        for k = 0 to n - 1
-            Gap g = array.get(a, k)
-            if g.top >= lo and g.bot <= hi
-                r := true
-                break
-    r
-
-f_blkOverlap(array<Blk> a, float lo, float hi, bool skipMit) =>
-    bool r = false
-    int  n = array.size(a)
-    if n > 0
-        for k = 0 to n - 1
-            Blk b = array.get(a, k)
-            if b.top >= lo and b.bot <= hi and not (skipMit and b.mitigated)
-                r := true
-                break
-    r
-
-// HTF alignment factor: state in [-2, 2] → 0..1 for the given target direction
-f_align(int st, int dir) =>
-    0.5 + 0.25 * nz(st) * dir
-
-// Heuristic Probability-of-Touch (0-95 %).
-// Base: reflection principle for a driftless random walk → P(touch within T) = 2·(1 − Φ(d / (σ·√T))).
-// Scaled by target quality and momentum toward the target. Heuristic, not a guarantee.
-f_pot(float lvl, int dir, float sc, float px, float sig, int horizon, float mom) =>
-    float res = na
-    if not na(lvl) and dir != 0 and sig > 0
-        float dist = math.max(dir == 1 ? lvl - px : px - lvl, 0.0)
-        float z    = dist / (sig * math.sqrt(horizon))
-        float base = 2.0 * (1.0 - f_ncdf(z))
-        float q    = 0.55 + 0.45 * math.min(math.max(nz(sc), 0.0), 100.0) / 100.0
-        float m    = 1.0 + 0.20 * math.max(-1.0, math.min(1.0, nz(mom) * dir))
-        res := math.max(1.0, math.min(95.0, 100.0 * base * q * m))
-    res
+// HTF alignment factor: structure state in [-2, 2] vs target side → 0..1
+f_align(int st, int side) =>
+    0.5 + 0.25 * nz(st) * side
 
 f_biasTxt(int st) =>
-    st >= 2 ? "BULLISH" : st == 1 ? "BULLISH" : st <= -2 ? "BEARISH" : st == -1 ? "BEARISH" : "NEUTRAL"
+    st > 0 ? "BULL" : st < 0 ? "BEAR" : "NEUT"
 
 f_biasArrow(int st) =>
-    st >= 2 ? "▲" : st == 1 ? "△" : st <= -2 ? "▼" : st == -1 ? "▽" : "◆"
+    st >= 2 ? "▲" : st == 1 ? "△" : st <= -2 ? "▼" : st == -1 ? "▽" : "•"
 
 // =====================================================================================================
-// 5. TIMEFRAME FUNCTIONS
+// TIMEFRAME FUNCTIONS
 // =====================================================================================================
 f_orChart(simple string tf) =>
     tf == "" ? timeframe.period : tf
 
-// Smallest standard timeframe that is >= minSec
+// Smallest standard timeframe >= minSec
 f_ladder(simple int minSec) =>
     minSec <= 60 ? "1" : minSec <= 180 ? "3" : minSec <= 300 ? "5" : minSec <= 900 ? "15" : minSec <= 1800 ? "30" : minSec <= 3600 ? "60" : minSec <= 7200 ? "120" : minSec <= 14400 ? "240" : minSec <= 86400 ? "1D" : minSec <= 604800 ? "1W" : "1M"
 
-// Manual timeframe guard: never request a timeframe below the chart
 f_clampTf(simple string tf, simple int minSec) =>
     timeframe.in_seconds(tf) < minSec ? timeframe.period : tf
 
@@ -525,10 +503,9 @@ f_tfLbl(simple string tf) =>
     int s = timeframe.in_seconds(tf)
     s < 60 ? str.tostring(s) + "s" : s < 3600 ? str.tostring(math.round(s / 60.0)) + "m" : s < 86400 ? str.tostring(math.round(s / 3600.0)) + "H" : s < 604800 ? str.tostring(math.round(s / 86400.0)) + "D" : s < 2419200 ? str.tostring(math.round(s / 604800.0)) + "W" : str.tostring(math.round(s / 2628003.0)) + "M"
 
-// Confirmed market-structure state for request.security().
-// Returns values of the previous (closed) bar of the requested timeframe → used with lookahead_on
-// this is the standard non-repainting pattern.
-// st: +2 bullish (BOS), +1 bullish (CHoCH / first break), 0 neutral, -1 / -2 bearish.
+// Confirmed structure state for request.security() — body-close breaks of confirmed pivots.
+// Values are returned from the PREVIOUS (closed) bar → used with lookahead_on = no repaint.
+// st: +2 bull (BOS) · +1 bull (CHoCH / first break) · 0 none yet · -1 / -2 bear
 f_tfState(simple int len) =>
     float ph0 = ta.pivothigh(high, len, len)
     float pl0 = ta.pivotlow(low, len, len)
@@ -583,7 +560,7 @@ f_session(string sess, string tz) =>
     bool ended = not inS and inS[1]
     [hi, lo, hiT, loT, hiB, loB, ended]
 
-// Calendar period tracker (previous + current period extremes with origin time / bar)
+// Calendar period tracker: previous period extremes with their exact candle (time + bar)
 f_period(bool isNew) =>
     var float cHi  = na
     var float cLo  = na
@@ -597,7 +574,6 @@ f_period(bool isNew) =>
     var int   pLoT = na
     var int   pHiB = na
     var int   pLoB = na
-    var int   sT   = na
     if isNew
         pHi  := cHi
         pLo  := cLo
@@ -611,7 +587,6 @@ f_period(bool isNew) =>
         cLoT := time
         cHiB := bar_index
         cLoB := bar_index
-        sT   := time
     else
         if na(cHi) or high > cHi
             cHi  := high
@@ -621,12 +596,10 @@ f_period(bool isNew) =>
             cLo  := low
             cLoT := time
             cLoB := bar_index
-        if na(sT)
-            sT := time
-    [pHi, pHiT, pHiB, pLo, pLoT, pLoB, cHi, cLo, sT]
+    [pHi, pHiT, pHiB, pLo, pLoT, pLoB]
 
 // =====================================================================================================
-// TIMEFRAME RESOLUTION (all simple strings → safe for request.security)
+// TIMEFRAME RESOLUTION (simple strings only — required by request.security)
 // =====================================================================================================
 int    chartSec = timeframe.in_seconds()
 bool   isAuto   = tfSelIn == "Auto"
@@ -634,7 +607,6 @@ string aStf     = modeIn == "Scalping" ? "15"  : modeIn == "Day Trading" ? "60" 
 string aH1      = modeIn == "Scalping" ? "60"  : modeIn == "Day Trading" ? "240" : "1D"
 string aH2      = modeIn == "Scalping" ? "240" : modeIn == "Day Trading" ? "1D"  : "1W"
 
-// (plain ternaries instead of math.max keep every value 'simple', as request.security requires)
 int    sAStf  = timeframe.in_seconds(aStf)
 string stfTf  = isAuto ? f_ladder(sAStf > chartSec ? sAStf : chartSec) : f_clampTf(f_orChart(mStfIn), chartSec)
 int    stfSec = timeframe.in_seconds(stfTf)
@@ -654,7 +626,7 @@ string h1Lbl  = f_tfLbl(h1Tf)
 string h2Lbl  = f_tfLbl(h2Tf)
 string exLbl  = f_tfLbl(exTf)
 
-// Pivot length by mode / sensitivity (simple int — required by ta.pivothigh)
+// Pivot length by mode / sensitivity (simple int)
 int pivLen = pivAutoIn ? (modeIn == "Scalping" ? (sensIn == "High" ? 2 : sensIn == "Normal" ? 3 : 5) : modeIn == "Day Trading" ? (sensIn == "High" ? 3 : sensIn == "Normal" ? 5 : 8) : (sensIn == "High" ? 5 : sensIn == "Normal" ? 8 : 12)) : pivLenIn
 
 bool pdOk    = chartSec < 86400
@@ -662,21 +634,22 @@ bool pwOk    = chartSec < 604800
 bool pmOk    = chartSec < 2419200
 bool intraOk = timeframe.isintraday and chartSec <= 3600
 int  barMs   = math.max(chartSec, 1) * 1000
+bool inWin   = bar_index >= last_bar_index - histIn
 
 // =====================================================================================================
-// 6. ATR / VOLATILITY ENGINE
+// VOLATILITY / MOMENTUM
 // =====================================================================================================
 float atrRaw = ta.atr(14)
 float atrS   = math.max(nz(atrRaw, high - low), syminfo.mintick)
 float sdRet  = ta.stdev(close - nz(close[1], close), 50)
 float sigma  = math.max(nz(sdRet, 0.0), atrS * 0.25)
-float momRaw = (close - nz(close[10], close)) / (atrS * math.sqrt(10.0))
+float momRaw = nz((close - nz(close[10], close)) / (atrS * math.sqrt(10.0)))
 float volCum = ta.cum(nz(volume))
 bool  hasVol = volCum > 0
 float volSma = ta.sma(nz(volume), 20)
 
 // =====================================================================================================
-// MULTI-TIMEFRAME DATA — every call: expression offset [1] inside f_tfState + lookahead_on
+// MULTI-TIMEFRAME DATA — [1]-offset inside f_tfState + lookahead_on = closed HTF bars only
 // =====================================================================================================
 [stSt, stSH, stSHT, stSHB, stSL, stSLT, stSLB] = request.security(syminfo.tickerid, stfTf, f_tfState(htfPivIn), lookahead = barmerge.lookahead_on)
 [h1St, h1SH, h1SHT, h1SHB, h1SL, h1SLT, h1SLB] = request.security(syminfo.tickerid, h1Tf,  f_tfState(htfPivIn), lookahead = barmerge.lookahead_on)
@@ -685,7 +658,7 @@ float volSma = ta.sma(nz(volume), 20)
 [lvTm, lvHi, lvLo, lvVo]                        = request.security(syminfo.tickerid, lvTf,  [time[1], high[1], low[1], volume[1]], lookahead = barmerge.lookahead_on)
 
 // =====================================================================================================
-// 14. SESSION ENGINE / CALENDAR LEVELS (trackers run every tick; consumed on confirmed bars only)
+// SESSIONS / CALENDAR LEVELS (trackers run every bar; consumed on confirmed bars only)
 // =====================================================================================================
 string tzStr = tzIn == "Exchange" ? syminfo.timezone : tzIn
 [asHi, asLo, asHiT, asLoT, asHiB, asLoB, asEnd] = f_session(asiaIn, tzStr)
@@ -695,45 +668,37 @@ string tzStr = tzIn == "Exchange" ? syminfo.timezone : tzIn
 bool newDay   = timeframe.change("D")
 bool newWeek  = timeframe.change("W")
 bool newMonth = timeframe.change("M")
-[pdh, pdhT, pdhB, pdl, pdlT, pdlB, cdh, cdl, dStartT] = f_period(newDay)
-[pwh, pwhT, pwhB, pwl, pwlT, pwlB, cwh, cwl, wStartT] = f_period(newWeek)
-[pmh, pmhT, pmhB, pml, pmlT, pmlB, cmh, cml, mStartT] = f_period(newMonth)
+[pdh, pdhT, pdhB, pdl, pdlT, pdlB] = f_period(newDay)
+[pwh, pwhT, pwhB, pwl, pwlT, pwlB] = f_period(newWeek)
+[pmh, pmhT, pmhB, pml, pmlT, pmlB] = f_period(newMonth)
 
 // =====================================================================================================
-// 7. SWING ENGINE (confirmed pivots only)
+// SWINGS (confirmed pivots) + FVG raw condition
 // =====================================================================================================
 float ph = ta.pivothigh(high, pivLen, pivLen)
 float pl = ta.pivotlow(low, pivLen, pivLen)
 
-// FVG raw conditions (three-candle imbalance, evaluated on the closing candle)
 bool bullFvgRaw = low > high[2] and (low - high[2]) >= fvgMinIn * atrS
 bool bearFvgRaw = high < low[2] and (low[2] - high) >= fvgMinIn * atrS
 
 // =====================================================================================================
 // PERSISTENT STATE
 // =====================================================================================================
-var array<Liq>   liqs   = array.new<Liq>()
-var array<Gap>   fvgs   = array.new<Gap>()
-var array<Gap>   ifvgs  = array.new<Gap>()
-var array<Blk>   obs    = array.new<Blk>()
-var array<Blk>   brks   = array.new<Blk>()
+var array<Zn>    zs     = array.new<Zn>()
 var array<Ghost> ghosts = array.new<Ghost>()
 var array<SEvt>  sEvts  = array.new<SEvt>()
-var array<SwLbl> swLbls = array.new<SwLbl>()
 var array<int>   lvTs   = array.new<int>()
 var array<float> lvHs   = array.new<float>()
 var array<float> lvLs   = array.new<float>()
 var array<float> lvVs   = array.new<float>()
 
-var int   nextId   = 0
-var int   primId   = -1
-var int   primDir  = 0
-var float primLvl  = na
-var float primScr  = na
-var int   secId    = -1
-var int   secDir   = 0
-var float secLvl   = na
-var float secScr   = na
+var int   nextId  = 0
+var int   primId  = -1
+var int   primSide = 0
+var int   primKind = -1
+var float primScr = na
+var float primPot = na
+var int   secId   = -1
 
 var float lastSH   = na
 var int   lastSHT  = na
@@ -744,172 +709,75 @@ var bool  slBrk    = true
 var int   structSt = 0
 var int   lastBrkDir = 0
 
-var int lastBslSwB  = NEG_BIG
-var int lastSslSwB  = NEG_BIG
-var int lastBullPdB = NEG_BIG
-var int lastBearPdB = NEG_BIG
-var int lastBullFvgB = NEG_BIG
-var int lastBearFvgB = NEG_BIG
-var int lastSigB    = NEG_BIG
-var float prevScore = 0.0
-var float prevPot   = 0.0
-var string lastSwTxt = "—"
-var int   eligCnt   = 0
+var int    lastBslSwB  = NEG_BIG
+var int    lastSslSwB  = NEG_BIG
+var int    lastSigB    = NEG_BIG
+var float  prevScore   = 0.0
+var float  prevPot     = 0.0
+var int    eligCnt     = 0
+var string lastEvtTxt  = "—"
 
-// Per-bar events (reset every execution)
-bool evNewDol   = false
-bool evDolChg   = false
-bool evDolSwept = false
-bool evBslAct   = false
-bool evSslAct   = false
-bool evNewFvg   = false
-bool evNewIfvg  = false
-bool evScoreX   = false
-bool evPotX     = false
-bool evBullBrk  = false
-bool evBearBrk  = false
-bool evBullCh   = false
-bool evBearCh   = false
-bool sigBull    = false
-bool sigBear    = false
-string swMsg    = ""
+// Per-bar events
+bool   evNewDol  = false
+bool   evDolHit  = false
+bool   evSideAct = false
+bool   evNewFvg  = false
+bool   evNewIfvg = false
+bool   evScoreX  = false
+bool   evPotX    = false
+bool   evBullBrk = false
+bool   evBearBrk = false
+bool   sigBull   = false
+bool   sigBear   = false
+string hitMsg    = ""
 
 // =====================================================================================================
-// MAIN ENGINE — confirmed bars only (historical == realtime after close)
+// ENGINE — confirmed bars only
 // =====================================================================================================
-if barstate.isconfirmed and masterIn
-    float mD  = mergeIn * atrS
-    float zH  = zoneIn * atrS
-    float eqD = useEqIn ? eqTolIn * atrS : -1.0
+if barstate.isconfirmed and masterIn and inWin
+    float mD      = mergeIn * atrS
+    float zH      = zoneIn * atrS
+    float eqD     = useEqIn ? eqTolIn * atrS : -1.0
+    float pen     = minPenIn * atrS
     int   oldPrim = primId
 
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 8. MARKET STRUCTURE ENGINE
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    // ── 1. MARKET STRUCTURE (confirmed pivots, body-close breaks)
     if not na(ph)
-        int    tP = time[pivLen]
-        string tg = na(lastSH) ? "H" : ph > lastSH ? "HH" : "LH"
         lastSH  := ph
-        lastSHT := tP
+        lastSHT := time[pivLen]
         shBrk   := false
-        array.push(swLbls, SwLbl.new(ph, tP, tg, true))
     if not na(pl)
-        int    tQ = time[pivLen]
-        string tg2 = na(lastSL) ? "L" : pl < lastSL ? "LL" : "HL"
         lastSL  := pl
-        lastSLT := tQ
+        lastSLT := time[pivLen]
         slBrk   := false
-        array.push(swLbls, SwLbl.new(pl, tQ, tg2, false))
-    while array.size(swLbls) > 20
-        array.shift(swLbls)
-
     if not shBrk and not na(lastSH) and close > lastSH
         shBrk := true
         bool ch = structSt <= -1
         structSt   := structSt >= 1 ? 2 : 1
         evBullBrk  := true
-        evBullCh   := ch
         lastBrkDir := 1
         array.push(sEvts, SEvt.new(1, lastSH, lastSHT, time, ch))
-        // the protected swing low behind a bullish break is a structural node
-        if not na(lastSL)
-            for c in liqs
-                if c.dir == -1 and math.abs(c.lvl - lastSL) <= mD
-                    c.hNode := true
     if not slBrk and not na(lastSL) and close < lastSL
         slBrk := true
         bool ch2 = structSt >= 1
         structSt   := structSt <= -1 ? -2 : -1
         evBearBrk  := true
-        evBearCh   := ch2
         lastBrkDir := -1
         array.push(sEvts, SEvt.new(-1, lastSL, lastSLT, time, ch2))
-        if not na(lastSH)
-            for c in liqs
-                if c.dir == 1 and math.abs(c.lvl - lastSH) <= mD
-                    c.hNode := true
-    while array.size(sEvts) > 12
+    while array.size(sEvts) > 10
         array.shift(sEvts)
 
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 9. FVG ENGINE
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    int nF = array.size(fvgs)
-    if nF > 0
-        for i = nF - 1 to 0
-            Gap  g    = array.get(fvgs, i)
-            float gh  = math.max(g.top - g.bot, syminfo.mintick)
-            bool kill = false
-            if g.dir == 1
-                if low < g.top
-                    g.mitig := math.max(g.mitig, math.min(1.0, (g.top - math.max(low, g.bot)) / gh))
-                if close < g.bot - fvgInvIn * atrS
-                    kill := true
-                    array.push(ifvgs, Gap.new(kind = 1, dir = -1, top = g.top, bot = g.bot, t0 = g.t0, b0 = bar_index, tInv = time))
-                    evNewIfvg := true
-                else if low < g.top
-                    lastBullPdB := bar_index
-                    kill := g.mitig * 100.0 >= fvgMitIn
-            else
-                if high > g.bot
-                    g.mitig := math.max(g.mitig, math.min(1.0, (math.min(high, g.top) - g.bot) / gh))
-                if close > g.top + fvgInvIn * atrS
-                    kill := true
-                    array.push(ifvgs, Gap.new(kind = 1, dir = 1, top = g.top, bot = g.bot, t0 = g.t0, b0 = bar_index, tInv = time))
-                    evNewIfvg := true
-                else if high > g.bot
-                    lastBearPdB := bar_index
-                    kill := g.mitig * 100.0 >= fvgMitIn
-            if not kill and bar_index - g.b0 > gapAgeIn
-                kill := true
-            if kill
-                array.remove(fvgs, i)
-
+    // ── 2. PD ARRAY DETECTION
     if bullFvgRaw
-        array.push(fvgs, Gap.new(kind = 0, dir = 1, top = low, bot = high[2], t0 = time[1], b0 = bar_index - 1))
-        lastBullFvgB := bar_index
+        nextId += 1
+        array.push(zs, Zn.new(id = nextId, kind = K_FVG, pol = 1, top = low, bot = high[2], lvl = (low + high[2]) / 2.0, t0 = time[1], bBorn = bar_index, bRef = bar_index, bC = bar_index, tf = chLbl, qual = math.min(1.0, (low - high[2]) / atrS)))
         evNewFvg := true
     if bearFvgRaw
-        array.push(fvgs, Gap.new(kind = 0, dir = -1, top = low[2], bot = high, t0 = time[1], b0 = bar_index - 1))
-        lastBearFvgB := bar_index
+        nextId += 1
+        array.push(zs, Zn.new(id = nextId, kind = K_FVG, pol = -1, top = low[2], bot = high, lvl = (low[2] + high) / 2.0, t0 = time[1], bBorn = bar_index, bRef = bar_index, bC = bar_index, tf = chLbl, qual = math.min(1.0, (low[2] - high) / atrS)))
         evNewFvg := true
-    while array.size(fvgs) > fvgMaxIn
-        array.shift(fvgs)
 
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 10-11. iFVG ENGINE (bull FVG → bearish iFVG, bear FVG → bullish iFVG)
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    int nI = array.size(ifvgs)
-    if nI > 0
-        for i = nI - 1 to 0
-            Gap  g    = array.get(ifvgs, i)
-            bool kill = false
-            if g.tInv != time
-                bool inBody = close > g.bot and close < g.top
-                if g.dir == -1
-                    if high >= g.bot
-                        lastBearPdB := bar_index
-                    if close > g.top + ifvgInvIn * atrS
-                        kill := true
-                else
-                    if low <= g.top
-                        lastBullPdB := bar_index
-                    if close < g.bot - ifvgInvIn * atrS
-                        kill := true
-                if inBody
-                    g.closesIn += 1
-                if g.closesIn >= ifvgClosesIn
-                    kill := true
-            if not kill and bar_index - g.b0 > gapAgeIn
-                kill := true
-            if kill
-                array.remove(ifvgs, i)
-    while array.size(ifvgs) > ifvgMaxIn
-        array.shift(ifvgs)
-
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 12. ORDER BLOCK ENGINE — created only on a confirmed structure break with displacement
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    // Order block: last opposite candle of the impulse that produced a confirmed break
     if evBullBrk
         int   bi = -1
         float bl = na
@@ -922,14 +790,14 @@ if barstate.isconfirmed and masterIn
             for k = 0 to bi - 1
                 vmax := math.max(vmax, nz(volume[k]))
             bool volOk = not obVolIn or not hasVol or vmax > nz(volSma) * 1.3
-            if close - bl >= obDispIn * atrS and volOk
-                int  tb  = time[bi]
-                bool dup = false
-                for b in obs
-                    if b.t0 == tb and b.dir == 1
-                        dup := true
-                if not dup
-                    array.push(obs, Blk.new(kind = 0, dir = 1, top = high[bi], bot = bl, t0 = tb, b0 = bar_index - bi, bC = bar_index, hasImb = lastBullFvgB >= bar_index - bi))
+            float disp = close - bl
+            if disp >= obDispIn * atrS and volOk
+                bool imb = false
+                for k = 0 to bi - 1
+                    if low[k] > high[k + 2]
+                        imb := true
+                nextId += 1
+                array.push(zs, Zn.new(id = nextId, kind = K_OB, pol = 1, top = high[bi], bot = bl, lvl = (high[bi] + bl) / 2.0, t0 = time[bi], bBorn = bar_index, bRef = bar_index, bC = bar_index, tf = chLbl, qual = math.min(1.0, disp / (3.0 * atrS)), hasImb = imb))
     if evBearBrk
         int   bj = -1
         float bh = na
@@ -942,352 +810,365 @@ if barstate.isconfirmed and masterIn
             for k = 0 to bj - 1
                 vmax2 := math.max(vmax2, nz(volume[k]))
             bool volOk2 = not obVolIn or not hasVol or vmax2 > nz(volSma) * 1.3
-            if bh - close >= obDispIn * atrS and volOk2
-                int  tb2  = time[bj]
-                bool dup2 = false
-                for b in obs
-                    if b.t0 == tb2 and b.dir == -1
-                        dup2 := true
-                if not dup2
-                    array.push(obs, Blk.new(kind = 0, dir = -1, top = bh, bot = low[bj], t0 = tb2, b0 = bar_index - bj, bC = bar_index, hasImb = lastBearFvgB >= bar_index - bj))
+            float disp2 = bh - close
+            if disp2 >= obDispIn * atrS and volOk2
+                bool imb2 = false
+                for k = 0 to bj - 1
+                    if high[k] < low[k + 2]
+                        imb2 := true
+                nextId += 1
+                array.push(zs, Zn.new(id = nextId, kind = K_OB, pol = -1, top = bh, bot = low[bj], lvl = (bh + low[bj]) / 2.0, t0 = time[bj], bBorn = bar_index, bRef = bar_index, bC = bar_index, tf = chLbl, qual = math.min(1.0, disp2 / (3.0 * atrS)), hasImb = imb2))
 
-    int nO = array.size(obs)
-    if nO > 0
-        for i = nO - 1 to 0
-            Blk  b    = array.get(obs, i)
-            bool kill = false
-            if b.bC != bar_index
-                float mid = (b.top + b.bot) / 2.0
-                if b.dir == 1
-                    bool hit = obMitIn == "Wick" ? low <= b.top : obMitIn == "50%" ? low <= mid : close <= b.top
-                    if hit
-                        b.mitigated := true
-                    if low <= b.top
-                        lastBullPdB := bar_index
-                    if close < b.bot
-                        kill := true
-                        array.push(brks, Blk.new(kind = 1, dir = -1, top = b.top, bot = b.bot, t0 = b.t0, b0 = b.b0, bC = bar_index, tBrk = time))
-                else
-                    bool hit2 = obMitIn == "Wick" ? high >= b.bot : obMitIn == "50%" ? high >= mid : close >= b.bot
-                    if hit2
-                        b.mitigated := true
-                    if high >= b.bot
-                        lastBearPdB := bar_index
-                    if close > b.top
-                        kill := true
-                        array.push(brks, Blk.new(kind = 1, dir = 1, top = b.top, bot = b.bot, t0 = b.t0, b0 = b.b0, bC = bar_index, tBrk = time))
-            if not kill and bar_index - b.b0 > gapAgeIn * 2
-                kill := true
-            if kill
-                array.remove(obs, i)
-    while array.size(obs) > obMaxIn
-        array.shift(obs)
-
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 13. BREAKER ENGINE (failed OB → opposite-direction zone; retests counted; invalidated on close)
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    int nB = array.size(brks)
-    if nB > 0
-        for i = nB - 1 to 0
-            Blk  b    = array.get(brks, i)
-            bool kill = false
-            if b.bC != bar_index
-                if b.dir == -1
-                    if high >= b.bot
-                        lastBearPdB := bar_index
-                        if high[1] < b.bot
-                            b.retests += 1
-                    if close > b.top
-                        kill := true
-                else
-                    if low <= b.top
-                        lastBullPdB := bar_index
-                        if low[1] > b.top
-                            b.retests += 1
-                    if close < b.bot
-                        kill := true
-            if not kill and bar_index - b.b0 > gapAgeIn * 2
-                kill := true
-            if kill
-                array.remove(brks, i)
-    while array.size(brks) > brkMaxIn
-        array.shift(brks)
-
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 9b. LIQUIDITY DETECTION → candidate queue
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    // ── 3. LIQUIDITY POOLS
+    // Swing pools carry a pre-formation density score: equal-level tests + range compression (coiling)
     if useSwingIn and not na(ph)
+        int   tests = 0
+        float hh    = high[pivLen]
+        float ll    = low[pivLen]
+        for k = 1 to densLbIn
+            float hk = high[pivLen + k]
+            float lk = low[pivLen + k]
+            if not na(hk)
+                tests += math.abs(hk - ph) <= eqTolIn * atrS ? 1 : 0
+                hh := math.max(hh, hk)
+                ll := math.min(ll, lk)
+        float coil = 1.0 - math.min(1.0, (hh - ll) / (atrS * math.sqrt(densLbIn) * 1.5))
+        float dns  = math.min(1.0, 0.6 * math.min(1.0, tests / 3.0) + 0.4 * coil)
         nextId += 1
-        f_addLiq(liqs, 1, ph, zH, S_SWING, chLbl, "", time[pivLen], bar_index - pivLen, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, 1, ph, zH, tests >= 1 and useEqIn ? F_EQ : F_SW, chLbl, "", time[pivLen], bar_index - pivLen, dns, mD, eqD, poolMaxIn, nextId, primId, bar_index)
     if useSwingIn and not na(pl)
+        int   tests2 = 0
+        float hh2    = high[pivLen]
+        float ll2    = low[pivLen]
+        for k = 1 to densLbIn
+            float hk2 = high[pivLen + k]
+            float lk2 = low[pivLen + k]
+            if not na(lk2)
+                tests2 += math.abs(lk2 - pl) <= eqTolIn * atrS ? 1 : 0
+                hh2 := math.max(hh2, hk2)
+                ll2 := math.min(ll2, lk2)
+        float coil2 = 1.0 - math.min(1.0, (hh2 - ll2) / (atrS * math.sqrt(densLbIn) * 1.5))
+        float dns2  = math.min(1.0, 0.6 * math.min(1.0, tests2 / 3.0) + 0.4 * coil2)
         nextId += 1
-        f_addLiq(liqs, -1, pl, zH, S_SWING, chLbl, "", time[pivLen], bar_index - pivLen, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, -1, pl, zH, tests2 >= 1 and useEqIn ? F_EQ : F_SW, chLbl, "", time[pivLen], bar_index - pivLen, dns2, mD, eqD, poolMaxIn, nextId, primId, bar_index)
 
     if useSessIn and intraOk
         if asiaOnIn and asEnd
             nextId += 1
-            f_addLiq(liqs, 1, asHi, zH, S_SESS, chLbl, "Asia", asHiT, asHiB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, 1, asHi, zH, F_SESS, chLbl, "Asia H", asHiT, asHiB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
             nextId += 1
-            f_addLiq(liqs, -1, asLo, zH, S_SESS, chLbl, "Asia", asLoT, asLoB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, -1, asLo, zH, F_SESS, chLbl, "Asia L", asLoT, asLoB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         if lonOnIn and ldEnd
             nextId += 1
-            f_addLiq(liqs, 1, ldHi, zH, S_SESS, chLbl, "LDN", ldHiT, ldHiB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, 1, ldHi, zH, F_SESS, chLbl, "LDN H", ldHiT, ldHiB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
             nextId += 1
-            f_addLiq(liqs, -1, ldLo, zH, S_SESS, chLbl, "LDN", ldLoT, ldLoB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, -1, ldLo, zH, F_SESS, chLbl, "LDN L", ldLoT, ldLoB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         if nyOnIn and nyEnd
             nextId += 1
-            f_addLiq(liqs, 1, nyHi, zH, S_SESS, chLbl, "NY", nyHiT, nyHiB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, 1, nyHi, zH, F_SESS, chLbl, "NY H", nyHiT, nyHiB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
             nextId += 1
-            f_addLiq(liqs, -1, nyLo, zH, S_SESS, chLbl, "NY", nyLoT, nyLoB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, -1, nyLo, zH, F_SESS, chLbl, "NY L", nyLoT, nyLoB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
 
     if usePdIn and pdOk and newDay
         nextId += 1
-        f_addLiq(liqs, 1, pdh, zH, S_PD, "D", "", pdhT, pdhB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, 1, pdh, zH, F_PD, "D", "", pdhT, pdhB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         nextId += 1
-        f_addLiq(liqs, -1, pdl, zH, S_PD, "D", "", pdlT, pdlB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, -1, pdl, zH, F_PD, "D", "", pdlT, pdlB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
     if usePwIn and pwOk and newWeek
         nextId += 1
-        f_addLiq(liqs, 1, pwh, zH, S_PW, "W", "", pwhT, pwhB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, 1, pwh, zH, F_PW, "W", "", pwhT, pwhB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         nextId += 1
-        f_addLiq(liqs, -1, pwl, zH, S_PW, "W", "", pwlT, pwlB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, -1, pwl, zH, F_PW, "W", "", pwlT, pwlB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
     if usePmIn and pmOk and newMonth
         nextId += 1
-        f_addLiq(liqs, 1, pmh, zH, S_PM, "M", "", pmhT, pmhB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, 1, pmh, zH, F_PM, "M", "", pmhT, pmhB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         nextId += 1
-        f_addLiq(liqs, -1, pml, zH, S_PM, "M", "", pmlT, pmlB, mD, eqD, candMaxIn, nextId, primId, bar_index)
+        f_addPool(zs, -1, pml, zH, F_PM, "M", "", pmlT, pmlB, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
 
     if useStfIn and stfSec != chartSec
         if not na(stSH) and not stSHB and stSHT != nz(stSHT[1], -1)
             nextId += 1
-            f_addLiq(liqs, 1, stSH, zH, S_STF, stfLbl, "", stSHT, bar_index, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, 1, stSH, zH, F_STF, stfLbl, "", stSHT, bar_index, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         if not na(stSL) and not stSLB and stSLT != nz(stSLT[1], -1)
             nextId += 1
-            f_addLiq(liqs, -1, stSL, zH, S_STF, stfLbl, "", stSLT, bar_index, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, -1, stSL, zH, F_STF, stfLbl, "", stSLT, bar_index, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
     if useHtfIn
         if not na(h1SH) and not h1SHB and h1SHT != nz(h1SHT[1], -1)
             nextId += 1
-            f_addLiq(liqs, 1, h1SH, zH, S_HTF, h1Lbl, "", h1SHT, bar_index, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, 1, h1SH, zH, F_HTF, h1Lbl, "", h1SHT, bar_index, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         if not na(h1SL) and not h1SLB and h1SLT != nz(h1SLT[1], -1)
             nextId += 1
-            f_addLiq(liqs, -1, h1SL, zH, S_HTF, h1Lbl, "", h1SLT, bar_index, mD, eqD, candMaxIn, nextId, primId, bar_index)
+            f_addPool(zs, -1, h1SL, zH, F_HTF, h1Lbl, "", h1SLT, bar_index, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
         if h2Sec != h1Sec
             if not na(h2SH) and not h2SHB and h2SHT != nz(h2SHT[1], -1)
                 nextId += 1
-                f_addLiq(liqs, 1, h2SH, zH, S_HTF, h2Lbl, "", h2SHT, bar_index, mD, eqD, candMaxIn, nextId, primId, bar_index)
+                f_addPool(zs, 1, h2SH, zH, F_HTF, h2Lbl, "", h2SHT, bar_index, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
             if not na(h2SL) and not h2SLB and h2SLT != nz(h2SLT[1], -1)
                 nextId += 1
-                f_addLiq(liqs, -1, h2SL, zH, S_HTF, h2Lbl, "", h2SLT, bar_index, mD, eqD, candMaxIn, nextId, primId, bar_index)
+                f_addPool(zs, -1, h2SL, zH, F_HTF, h2Lbl, "", h2SLT, bar_index, 0.0, mD, eqD, poolMaxIn, nextId, primId, bar_index)
 
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 18. SWEEP / INVALIDATION / MITIGATION ENGINE
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    float pen = minPenIn * atrS
-    int   nL  = array.size(liqs)
-    if nL > 0
-        for i = nL - 1 to 0
-            Liq  c        = array.get(liqs, i)
-            bool taken    = false
-            bool rejected = false
-            bool broken   = false
-            if c.dir == 1
-                bool wHit = high > c.lvl + pen
-                bool cHit = close > c.lvl + pen
-                taken    := sweepModeIn == "Close" ? cHit : wHit
-                rejected := wHit and close < c.lvl
-                broken   := close > c.lvl + brkAtrIn * atrS
-                if not taken and high >= c.bot
-                    c.mitig := math.max(c.mitig, math.min(1.0, (high - c.bot) / math.max(c.top - c.bot, syminfo.mintick)))
-                    if nz(high[1]) < c.bot
-                        c.touches += 1
-            else
-                bool wHit2 = low < c.lvl - pen
-                bool cHit2 = close < c.lvl - pen
-                taken    := sweepModeIn == "Close" ? cHit2 : wHit2
-                rejected := wHit2 and close > c.lvl
-                broken   := close < c.lvl - brkAtrIn * atrS
-                if not taken and low <= c.top
-                    c.mitig := math.max(c.mitig, math.min(1.0, (c.top - low) / math.max(c.top - c.bot, syminfo.mintick)))
-                    if nz(low[1], 1e20) > c.top
-                        c.touches += 1
-            bool   isSweepEvt = taken and (sweepModeIn != "Wick + Rejection" or rejected)
-            string why        = broken ? "BROKEN" : rejected ? "SWEPT" : "TAKEN"
-            float  distL      = math.abs(c.lvl - close) / atrS
-            bool   expired    = bar_index - c.bRef > maxAgeIn
-            bool   farOut     = distL > maxDistIn * 3.0
-            if isSweepEvt
-                if c.dir == 1
-                    lastBslSwB := bar_index
-                else
-                    lastSslSwB := bar_index
-                lastSwTxt := (c.dir == 1 ? "BSL " : "SSL ") + why
-            if taken or expired or farOut
-                if c.id == primId
-                    f_ghost(ghosts, c, time, taken ? why : expired ? "EXPIRED" : "EJECTED", ghostMaxIn)
-                    if taken
-                        evDolSwept := true
-                        swMsg := "DOL Swept | " + (c.dir == 1 ? "BSL " : "SSL ") + why + " | Score " + str.tostring(math.round(c.score)) + " | " + syminfo.ticker + " " + chLbl
-                array.remove(liqs, i)
+    // ── 4. LIFECYCLE: hits, sweeps, mitigation, inversion, invalidation, expiry
+    int nZ = array.size(zs)
+    if nZ > 0
+        for i = nZ - 1 to 0
+            Zn   z      = array.get(zs, i)
+            bool isP    = z.id == primId
+            bool isNew  = z.bC == bar_index
+            bool remove = false
+            string why  = ""
+            bool touch  = high >= z.bot and low <= z.top
+            if f_isPool(z)
+                bool wHit = z.kind == K_BSL ? high > z.lvl + pen : low < z.lvl - pen
+                bool cHit = z.kind == K_BSL ? close > z.lvl + pen : close < z.lvl - pen
+                bool rej  = wHit and (z.kind == K_BSL ? close < z.lvl : close > z.lvl)
+                if wHit and rej
+                    if z.kind == K_BSL
+                        lastBslSwB := bar_index
+                    else
+                        lastSslSwB := bar_index
+                bool hit = hitRuleIn == "Touch Zone" ? (touch and not isNew) or wHit : hitRuleIn == "Wick Through" ? wHit : cHit
+                if hit
+                    remove := true
+                    why    := cHit ? "BROKEN" : rej ? "SWEPT" : "HIT"
+                else if touch and not isNew
+                    z.mitig := math.max(z.mitig, math.min(1.0, z.kind == K_BSL ? (high - z.bot) / math.max(z.top - z.bot, syminfo.mintick) : (z.top - low) / math.max(z.top - z.bot, syminfo.mintick)))
+                    z.touches += 1
+            else if not isNew
+                float gh  = math.max(z.top - z.bot, syminfo.mintick)
+                if isP and touch
+                    why := "HIT"
+                if touch
+                    z.reached := true
+                if z.kind == K_FVG
+                    if z.pol == 1
+                        if low < z.top
+                            z.mitig := math.max(z.mitig, math.min(1.0, (z.top - math.max(low, z.bot)) / gh))
+                        if close < z.bot - fvgInvIn * atrS
+                            z.kind := K_IFVG
+                            z.pol := -1
+                            z.bBorn := bar_index
+                            z.bRef := bar_index
+                            z.bC := bar_index
+                            z.mitig := 0.0
+                            z.closesIn := 0
+                            z.reached := false
+                            evNewIfvg := true
+                        else if z.mitig * 100.0 >= fvgMitIn
+                            remove := true
+                    else
+                        if high > z.bot
+                            z.mitig := math.max(z.mitig, math.min(1.0, (math.min(high, z.top) - z.bot) / gh))
+                        if close > z.top + fvgInvIn * atrS
+                            z.kind := K_IFVG
+                            z.pol := 1
+                            z.bBorn := bar_index
+                            z.bRef := bar_index
+                            z.bC := bar_index
+                            z.mitig := 0.0
+                            z.closesIn := 0
+                            z.reached := false
+                            evNewIfvg := true
+                        else if z.mitig * 100.0 >= fvgMitIn
+                            remove := true
+                else if z.kind == K_IFVG
+                    if close > z.bot and close < z.top
+                        z.closesIn += 1
+                    if z.pol == -1 and close > z.top + ifvgInvIn * atrS
+                        remove := true
+                    if z.pol == 1 and close < z.bot - ifvgInvIn * atrS
+                        remove := true
+                    if z.closesIn >= ifvgClosesIn
+                        remove := true
+                else if z.kind == K_OB
+                    float mid = (z.top + z.bot) / 2.0
+                    if z.pol == 1
+                        if (obMitIn == "Wick" and low <= z.top) or (obMitIn == "50%" and low <= mid) or (obMitIn == "Close" and close <= z.top)
+                            z.mitigated := true
+                        if close < z.bot
+                            z.kind := K_BRK
+                            z.pol := -1
+                            z.bBorn := bar_index
+                            z.bRef := bar_index
+                            z.bC := bar_index
+                            z.mitigated := false
+                            z.reached := false
+                    else
+                        if (obMitIn == "Wick" and high >= z.bot) or (obMitIn == "50%" and high >= mid) or (obMitIn == "Close" and close >= z.bot)
+                            z.mitigated := true
+                        if close > z.top
+                            z.kind := K_BRK
+                            z.pol := 1
+                            z.bBorn := bar_index
+                            z.bRef := bar_index
+                            z.bC := bar_index
+                            z.mitigated := false
+                            z.reached := false
+                else if z.kind == K_BRK
+                    if z.pol == -1 and close > z.top
+                        remove := true
+                    if z.pol == 1 and close < z.bot
+                        remove := true
+            float dAtr = math.abs(z.lvl - close) / atrS
+            bool expired = bar_index - z.bRef > (f_isPool(z) ? maxAgeIn : zoneAgeIn)
+            bool farOut  = dAtr > maxDistIn * 3.0
+            if isP and why == "" and (remove or expired or farOut)
+                why := expired ? "EXPIRED" : farOut ? "EJECTED" : "INVALID"
+            if isP and why != ""
+                f_ghost(ghosts, z, time, why, ghostMaxIn)
+                evDolHit := why == "HIT" or why == "SWEPT" or why == "BROKEN"
+                lastEvtTxt := f_kindTxt(z) + " " + why
+                hitMsg := "DOL " + why + " | " + f_kindTxt(z) + " | Score " + str.tostring(math.round(z.score)) + " | " + syminfo.ticker + " " + chLbl
+                primId := -1
+            if remove or expired or farOut
+                array.remove(zs, i)
 
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 16. CANDIDATE SCORING (0-100, normalised weights)
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    f_capKind(zs, K_FVG, fvgMaxIn, primId)
+    f_capKind(zs, K_IFVG, ifvgMaxIn, primId)
+    f_capKind(zs, K_OB, obMaxIn, primId)
+    f_capKind(zs, K_BRK, brkMaxIn, primId)
+
+    // ── 5. SCORING (0-100, normalised weights)
     float wSum  = wProxIn + wFreshIn + wConfIn + wDensIn + wStrIn + wHtfIn
     float wDiv  = wSum > 0 ? wSum : 1.0
     float pdPos = not na(lastSH) and not na(lastSL) and lastSH > lastSL ? (close - lastSL) / (lastSH - lastSL) : 0.5
-    int   nS    = array.size(liqs)
+    int   h1S   = int(nz(h1St))
+    int   h2S   = int(nz(h2St))
+    int   nS    = array.size(zs)
     eligCnt := 0
     if nS > 0
         for i = 0 to nS - 1
-            Liq   c     = array.get(liqs, i)
-            float distL = math.abs(c.lvl - close) / atrS
-            bool  side  = c.dir == 1 ? c.lvl > close : c.lvl < close
-            bool  elig  = side and distL <= maxDistIn
-            // A. proximity (Cauchy-shaped, 0.5 at 35 % of max distance)
-            float fP = 1.0 / (1.0 + math.pow(distL / (maxDistIn * 0.35), 2))
+            Zn    z     = array.get(zs, i)
+            bool  pool  = f_isPool(z)
+            int   side  = z.bot > close ? 1 : z.top < close ? -1 : 0
+            float nearD = side == 1 ? z.bot - close : side == -1 ? close - z.top : 0.0
+            float dPx   = pool and hitRuleIn != "Touch Zone" ? math.abs(z.lvl - close) : nearD
+            float dAtr  = dPx / atrS
+            bool  okK   = pool ? side == z.pol : useArrIn and not z.reached
+            bool  elig  = okK and side != 0 and dAtr <= maxDistIn
+            // A. proximity (Cauchy-shaped: 1 at price, 0.5 at 35 % of max distance)
+            float fP = 1.0 / (1.0 + math.pow(dAtr / (maxDistIn * 0.35), 2))
             // B. freshness (exponential half-life; HTF sources decay slower)
-            float sw = f_structW(c)
-            float hl = halfLifeIn * (1.0 + 2.0 * sw)
-            float fF = math.exp(-LN2 * math.max(0, bar_index - c.bRef) / hl)
-            // C. confluence + D. density (full evaluation only for eligible targets)
-            float cnt  = math.max(0, f_flagCount(c) - 1)
-            float dens = c.refs - 1
+            float sw = f_structW(z)
+            float hl = halfLifeIn * (1.0 + 2.0 * (pool and (z.fHtf or z.fPW or z.fPM) ? 1.0 : 0.0) + (pool and z.fPD ? 1.0 : 0.0))
+            float fF = math.exp(-LN2 * math.max(0, bar_index - z.bRef) / hl)
+            // C. confluence + D. density
+            float cnt  = pool ? math.max(0, f_flagCount(z) - 1) : 0.0
+            float dens = pool ? 0.5 * z.dens + 0.25 * (z.refs - 1) : z.qual
             if elig
                 eligCnt += 1
-                float lo = c.bot - mD
-                float hi = c.top + mD
-                cnt += f_gapOverlap(fvgs, lo, hi) ? 1 : 0
-                cnt += f_gapOverlap(ifvgs, lo, hi) ? 1 : 0
-                cnt += f_blkOverlap(obs, lo, hi, true) ? 1 : 0
-                cnt += f_blkOverlap(brks, lo, hi, false) ? 1 : 0
+                bool oPool = false
+                bool oFvg  = false
+                bool oIfvg = false
+                bool oOb   = false
+                bool oBrk  = false
+                float lo = z.bot - mD
+                float hi = z.top + mD
                 for j = 0 to nS - 1
                     if j != i
-                        Liq o = array.get(liqs, j)
-                        if o.dir == c.dir and math.abs(o.lvl - c.lvl) <= atrS
-                            dens += 0.5
-            cnt += lastBrkDir == c.dir ? 1 : 0
-            cnt += (c.dir == 1 and pdPos < 0.45) or (c.dir == -1 and pdPos > 0.55) ? 1 : 0
-            cnt += (c.dir == 1 ? bar_index - lastSslSwB : bar_index - lastBslSwB) <= 30 ? 1 : 0
+                        Zn o = array.get(zs, j)
+                        if o.top >= lo and o.bot <= hi
+                            oPool := oPool or f_isPool(o)
+                            oFvg  := oFvg or o.kind == K_FVG
+                            oIfvg := oIfvg or o.kind == K_IFVG
+                            oOb   := oOb or (o.kind == K_OB and not o.mitigated)
+                            oBrk  := oBrk or o.kind == K_BRK
+                        if pool and o.kind == z.kind and math.abs(o.lvl - z.lvl) <= atrS
+                            dens += 0.15
+                cnt += (oPool and not pool ? 1 : 0) + (oFvg and z.kind != K_FVG ? 1 : 0) + (oIfvg and z.kind != K_IFVG ? 1 : 0) + (oOb and z.kind != K_OB ? 1 : 0) + (oBrk and z.kind != K_BRK ? 1 : 0)
+            cnt += lastBrkDir == side ? 1 : 0
+            cnt += (side == 1 and pdPos < 0.5) or (side == -1 and pdPos > 0.5) ? 1 : 0
+            cnt += (side == 1 ? bar_index - lastSslSwB : bar_index - lastBslSwB) <= 30 ? 1 : 0
+            cnt += momRaw * side > 0.3 ? 1 : 0
             float fC = math.min(1.0, cnt / 4.0)
-            float fD = math.min(1.0, dens / 3.0)
-            // E. structural importance
-            float fS = math.min(1.0, sw + (c.hNode ? 0.2 : 0.0))
+            float fD = math.min(1.0, dens)
+            // E. structure
+            float fS = sw
             // F. HTF alignment
-            float lvlH = c.hHtf or c.hPW or c.hPM ? 1.0 : c.hPD or c.hStf ? 0.5 : 0.0
-            float fH   = 0.45 * f_align(int(nz(h1St)), c.dir) + 0.25 * f_align(int(nz(h2St)), c.dir) + 0.30 * lvlH
+            float lvlH = pool and (z.fHtf or z.fPW or z.fPM) ? 1.0 : pool and (z.fPD or z.fStf) ? 0.5 : 0.0
+            float fH   = 0.45 * f_align(h1S, side) + 0.25 * f_align(h2S, side) + 0.30 * lvlH
             float raw  = (wProxIn * fP + wFreshIn * fF + wConfIn * fC + wDensIn * fD + wStrIn * fS + wHtfIn * fH) / wDiv
             // G. mitigation penalty
-            raw := raw * (1.0 - mitPenIn * c.mitig) * math.pow(0.85, c.touches)
-            c.score := math.max(0.0, math.min(100.0, 100.0 * raw))
-            c.elig  := elig
-            c.fP := fP
-            c.fF := fF
-            c.fC := fC
-            c.fD := fD
-            c.fS := fS
-            c.fH := fH
+            raw := raw * (1.0 - mitPenIn * z.mitig) * math.pow(0.85, z.touches) * (z.kind == K_OB and z.mitigated ? 0.7 : 1.0)
+            float sc = math.max(0.0, math.min(100.0, 100.0 * raw))
+            z.side  := side
+            z.dist  := dAtr
+            z.elig  := elig
+            z.score := sc
+            z.pot   := f_pot(dPx, sigma, potHorIn, sc, momRaw * side)
+            z.fP := fP
+            z.fF := fF
+            z.fC := fC
+            z.fD := fD
+            z.fS := fS
+            z.fH := fH
 
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // 17. DOL RANKING / SELECTION (quality-ranked, hysteresis-stabilised)
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    int   bestB = -1
-    int   bestS = -1
-    float scB   = -1.0
-    float scS   = -1.0
+    // ── 6. DOL SELECTION (quality-ranked, PoT-filtered, hysteresis-stabilised)
+    int   best  = -1
+    int   bestU = -1
+    int   bestD = -1
+    float sBest = -1.0
+    float sUp   = -1.0
+    float sDn   = -1.0
     if nS > 0
         for i = 0 to nS - 1
-            Liq c = array.get(liqs, i)
-            if c.elig and c.score >= minScoreIn
-                if c.dir == 1 and c.score > scB
-                    scB   := c.score
-                    bestB := i
-                if c.dir == -1 and c.score > scS
-                    scS   := c.score
-                    bestS := i
-    int candIdx = scB >= scS ? bestB : bestS
-    int curIdx  = f_findId(liqs, primId)
+            Zn z = array.get(zs, i)
+            if z.elig and z.score >= minScoreIn and z.pot >= minPotIn
+                if z.score > sBest
+                    sBest := z.score
+                    best  := i
+                if z.side == 1 and z.score > sUp
+                    sUp   := z.score
+                    bestU := i
+                if z.side == -1 and z.score > sDn
+                    sDn   := z.score
+                    bestD := i
+    int curIdx = f_findId(zs, primId)
     if curIdx >= 0
-        Liq cur = array.get(liqs, curIdx)
-        if not cur.elig or cur.score < minScoreIn - hystIn * 0.5
-            f_ghost(ghosts, cur, time, "FADED", ghostMaxIn)
+        Zn cur = array.get(zs, curIdx)
+        bool faded = cur.score < minScoreIn - hystIn * 0.5 or cur.pot < minPotIn - 1.0
+        if not cur.elig or faded
+            string why2 = cur.dist > maxDistIn ? "EJECTED" : "FADED"
+            f_ghost(ghosts, cur, time, why2, ghostMaxIn)
+            lastEvtTxt := f_kindTxt(cur) + " " + why2
             curIdx := -1
-    int newIdx = candIdx
+    int newIdx = best
     if curIdx >= 0
-        if candIdx < 0
+        if best < 0
             newIdx := curIdx
-        else if candIdx != curIdx and array.get(liqs, candIdx).score < array.get(liqs, curIdx).score + hystIn
+        else if best != curIdx and array.get(zs, best).score < array.get(zs, curIdx).score + hystIn
             newIdx := curIdx
     int newId = -1
     if newIdx >= 0
-        newId := array.get(liqs, newIdx).id
-    if newId != oldPrim and newId >= 0
-        Liq nw = array.get(liqs, newIdx)
-        evNewDol := oldPrim < 0
-        evDolChg := oldPrim >= 0
-        evBslAct := nw.dir == 1
-        evSslAct := nw.dir == -1
+        newId := array.get(zs, newIdx).id
+    if newId >= 0 and newId != oldPrim
+        Zn nw = array.get(zs, newIdx)
+        evNewDol  := true
+        evSideAct := oldPrim < 0 or nw.side != primSide
     primId := newId
     if newIdx >= 0
-        Liq p = array.get(liqs, newIdx)
-        primDir := p.dir
-        primLvl := p.lvl
-        primScr := p.score
+        Zn p = array.get(zs, newIdx)
+        primSide := p.side
+        primKind := p.kind
+        primScr  := p.score
+        primPot  := p.pot
     else
-        primDir := 0
-        primLvl := na
-        primScr := na
-    int secIdx = primDir == 1 ? bestS : primDir == -1 ? bestB : -1
+        primSide := 0
+        primKind := -1
+        primScr  := na
+        primPot  := na
+    int secIdx = primSide == 1 ? bestD : primSide == -1 ? bestU : -1
+    secId := -1
     if secIdx >= 0
-        Liq s = array.get(liqs, secIdx)
-        secId  := s.id
-        secDir := s.dir
-        secLvl := s.lvl
-        secScr := s.score
-    else
-        secId  := -1
-        secDir := 0
-        secLvl := na
-        secScr := na
+        secId := array.get(zs, secIdx).id
 
     float curScore = nz(primScr, 0.0)
-    evScoreX  := primId >= 0 and curScore >= alScoreThIn and prevScore < alScoreThIn
+    float curPot   = nz(primPot, 0.0)
+    evScoreX  := primId >= 0 and curScore >= alScoreTh and prevScore < alScoreTh
+    evPotX    := primId >= 0 and curPot >= alPotTh and prevPot < alPotTh
     prevScore := curScore
+    prevPot   := curPot
 
-// =====================================================================================================
-// 20. PoT ENGINE — live read-out (may update intrabar; never feeds back into target selection)
-// =====================================================================================================
-float potLive = f_pot(primLvl, primDir, primScr, close, sigma, potHorIn, momRaw)
-float potSec  = f_pot(secLvl, secDir, secScr, close, sigma, potHorIn, momRaw)
-
-// =====================================================================================================
-// 19. BIAS ENGINE — confirmed structure on every timeframe
-// =====================================================================================================
-int   bH2   = int(nz(h2St))
-int   bH1   = int(nz(h1St))
-int   bSt   = stfSec == chartSec ? structSt : int(nz(stSt))
-int   bEx   = exIsCh ? structSt : int(nz(xSt))
-float comp  = (0.40 * bH2 + 0.35 * bH1 + 0.25 * bSt) / 2.0
-int   bComp = comp > 0.25 ? 2 : comp > 0.05 ? 1 : comp < -0.25 ? -2 : comp < -0.05 ? -1 : 0
-int   h1Sign = bH1 > 0 ? 1 : bH1 < 0 ? -1 : 0
-bool  evBiasChg = barstate.isconfirmed and masterIn and h1Sign != nz(h1Sign[1]) and bar_index > 0
-
-// =====================================================================================================
-// 25. CONFLUENCE SIGNAL LAYER (optional, confirmed bars only) + LVN sampling
-// =====================================================================================================
-if barstate.isconfirmed and masterIn
-    float potC = nz(potLive, 0.0)
-    evPotX  := primId >= 0 and potC >= alPotThIn and prevPot < alPotThIn
-    prevPot := primId >= 0 ? potC : 0.0
-
-    if sigOnIn
-        bool coolOk = bar_index - lastSigB > sigCoolIn
-        bool bullOk = bar_index - lastSslSwB <= sigWinIn and evBullBrk and primDir == 1 and nz(primScr) >= sigMinScoreIn and potC >= sigMinPotIn and (not sigHtfIn or bH1 >= 1) and (bar_index - lastBullPdB <= sigWinIn or bar_index - lastBullFvgB <= 3)
-        bool bearOk = bar_index - lastBslSwB <= sigWinIn and evBearBrk and primDir == -1 and nz(primScr) >= sigMinScoreIn and potC >= sigMinPotIn and (not sigHtfIn or bH1 <= -1) and (bar_index - lastBearPdB <= sigWinIn or bar_index - lastBearFvgB <= 3)
-        sigBull := coolOk and bullOk
-        sigBear := coolOk and bearOk and not sigBull
-        if sigBull or sigBear
-            lastSigB := bar_index
-
-    // 15. LVN sampling — one row per CLOSED source-timeframe bar
+    // ── 7. LVN sampling (one row per CLOSED source-TF bar)
     if showLvnIn and not na(lvTm) and lvTm != nz(lvTm[1], -1)
         array.push(lvTs, lvTm)
         array.push(lvHs, lvHi)
@@ -1300,11 +1181,35 @@ if barstate.isconfirmed and masterIn
             array.shift(lvVs)
 
 // =====================================================================================================
-// 21. VISUAL ENGINE — state-driven redraw on the last bar only (bounded object count)
+// BIAS ENGINE — confirmed body-close structure on HTF / STF / EXEC
 // =====================================================================================================
-var array<box>   rBoxes = array.new<box>()
-var array<line>  rLines = array.new<line>()
-var array<label> rLbls  = array.new<label>()
+int  bH1    = int(nz(h1St))
+int  bSt    = stfSec == chartSec ? structSt : int(nz(stSt))
+int  bEx    = exIsCh ? structSt : int(nz(xSt))
+int  h1Sign = bH1 > 0 ? 1 : bH1 < 0 ? -1 : 0
+int  exSign = bEx > 0 ? 1 : bEx < 0 ? -1 : 0
+bool aligned   = exSign != 0 and exSign == h1Sign
+bool evBiasChg = barstate.isconfirmed and masterIn and bar_index > 0 and h1Sign != nz(h1Sign[1])
+bool evAlign   = barstate.isconfirmed and masterIn and aligned and not aligned[1]
+
+// =====================================================================================================
+// EXECUTION SIGNALS (optional, confirmed bars only)
+// =====================================================================================================
+if barstate.isconfirmed and masterIn and inWin and sigOnIn
+    bool coolOk = bar_index - lastSigB > sigCoolIn
+    bool bullOk = evBullBrk and h1Sign == 1 and primSide == 1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastSslSwB <= sigWinIn)
+    bool bearOk = evBearBrk and h1Sign == -1 and primSide == -1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastBslSwB <= sigWinIn)
+    sigBull := coolOk and bullOk
+    sigBear := coolOk and bearOk and not sigBull
+    if sigBull or sigBear
+        lastSigB := bar_index
+
+// =====================================================================================================
+// VISUAL ENGINE — rebuilt from state on the last bar only (bounded, no historical clutter)
+// =====================================================================================================
+var array<box>   rB = array.new<box>()
+var array<line>  rL = array.new<line>()
+var array<label> rT = array.new<label>()
 
 f_clearAll(array<box> bs, array<line> ls, array<label> lbs) =>
     for b in bs
@@ -1322,7 +1227,7 @@ f_room(array<box> bs, array<line> ls, array<label> lbs, int cap) =>
     array.size(bs) + array.size(ls) + array.size(lbs) < cap
 
 f_mkBox(array<box> store, int l, float t, int r, float b, color bg, color bd, string bst, string txt, color tc) =>
-    box bx = box.new(l, t, r, b, border_color = bd, border_width = 1, border_style = bst, xloc = xloc.bar_time, bgcolor = bg, text = txt, text_size = size.tiny, text_color = tc, text_halign = text.align_right, text_valign = text.align_center)
+    box bx = box.new(l, t, r, b, border_color = bd, border_width = 1, border_style = bst, xloc = xloc.bar_time, bgcolor = bg, text = txt, text_size = size.tiny, text_color = tc, text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
     array.push(store, bx)
     bx
 
@@ -1332,12 +1237,12 @@ f_mkLine(array<line> store, int x1, float y1, int x2, float y2, color c, string 
     ln
 
 f_mkLbl(array<label> store, int x, float y, string txt, color bg, color tc, string st, string sz, string tip) =>
-    label lb = label.new(x, y, txt, xloc = xloc.bar_time, color = bg, textcolor = tc, style = st, size = sz, textalign = text.align_left, tooltip = tip)
+    label lb = label.new(x, y, txt, xloc = xloc.bar_time, color = bg, textcolor = tc, style = st, size = sz, textalign = text.align_left, tooltip = tip, text_font_family = font.family_monospace)
     array.push(store, lb)
     lb
 
-// Nearest-first selection of gaps on one side of price
-f_pickGaps(array<Gap> a, int side, int k, float px, float maxD) =>
+// Nearest PD arrays of one kind on one side of price
+f_pickKind(array<Zn> a, int kind, int side, int k, float px, float maxD, int exId) =>
     array<int> out = array.new<int>()
     int n = array.size(a)
     if n > 0 and k > 0
@@ -1345,9 +1250,9 @@ f_pickGaps(array<Gap> a, int side, int k, float px, float maxD) =>
             int   bi = -1
             float bd = 1e20
             for j = 0 to n - 1
-                Gap   g   = array.get(a, j)
-                float mid = (g.top + g.bot) / 2.0
-                bool  ok  = side == 1 ? mid >= px : mid < px
+                Zn    z   = array.get(a, j)
+                float mid = (z.top + z.bot) / 2.0
+                bool  ok  = z.kind == kind and z.id != exId and (side == 1 ? mid >= px : mid < px) and not (z.kind == K_OB and z.mitigated)
                 float d   = math.abs(mid - px)
                 if ok and d <= maxD and d < bd and not array.includes(out, j)
                     bd := d
@@ -1356,28 +1261,8 @@ f_pickGaps(array<Gap> a, int side, int k, float px, float maxD) =>
                 array.push(out, bi)
     out
 
-// Nearest-first selection of blocks on one side of price
-f_pickBlks(array<Blk> a, int side, int k, float px, float maxD, bool skipMit) =>
-    array<int> out = array.new<int>()
-    int n = array.size(a)
-    if n > 0 and k > 0
-        for rep = 1 to k
-            int   bi = -1
-            float bd = 1e20
-            for j = 0 to n - 1
-                Blk   b   = array.get(a, j)
-                float mid = (b.top + b.bot) / 2.0
-                bool  ok  = (side == 1 ? mid >= px : mid < px) and not (skipMit and b.mitigated)
-                float d   = math.abs(mid - px)
-                if ok and d <= maxD and d < bd and not array.includes(out, j)
-                    bd := d
-                    bi := j
-            if bi >= 0
-                array.push(out, bi)
-    out
-
-// Highest-score selection of liquidity levels on one side (excluding the primary / secondary)
-f_pickLiq(array<Liq> a, int side, int k, int ex1, int ex2) =>
+// Next-best eligible targets on one side (excluding the DOL and the opposite target)
+f_pickNext(array<Zn> a, int side, int k, int ex1, int ex2) =>
     array<int> out = array.new<int>()
     int n = array.size(a)
     if n > 0 and k > 0
@@ -1385,28 +1270,43 @@ f_pickLiq(array<Liq> a, int side, int k, int ex1, int ex2) =>
             int   bi = -1
             float bs = -1.0
             for j = 0 to n - 1
-                Liq c = array.get(a, j)
-                if c.dir == side and c.elig and c.id != ex1 and c.id != ex2 and c.score > bs and not array.includes(out, j)
-                    bs := c.score
+                Zn z = array.get(a, j)
+                if z.elig and z.side == side and z.id != ex1 and z.id != ex2 and z.score > bs and not array.includes(out, j)
+                    bs := z.score
                     bi := j
             if bi >= 0
                 array.push(out, bi)
     out
 
-var table dash = table.new(f_pos(biasPosIn), 3, 8, bgcolor = color.new(colPanelIn, 12), frame_color = color.new(colNeuIn, 70), frame_width = 1, border_color = color.new(colNeuIn, 88), border_width = 1)
-var table dbg  = table.new(position.bottom_left, 2, 18, bgcolor = color.new(colPanelIn, 10), frame_color = color.new(colNeuIn, 70), frame_width = 1)
+// Live distance (price units) from the close to a target, following the hit rule
+f_liveDist(Zn z, float px) =>
+    float d = 0.0
+    if f_isPool(z) and hitRuleIn != "Touch Zone"
+        d := math.abs(z.lvl - px)
+    else
+        d := z.side == 1 ? math.max(z.bot - px, 0.0) : math.max(px - z.top, 0.0)
+    d
+
+var table tbl = table.new(f_pos(tblPosIn), 3, 7, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
+var table dbg = table.new(position.bottom_left, 2, 16, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
-    f_clearAll(rBoxes, rLines, rLbls)
-    table.clear(dash, 0, 0, 2, 7)
-    table.clear(dbg, 0, 0, 1, 17)
+    f_clearAll(rB, rL, rT)
+    table.clear(tbl, 0, 0, 2, 6)
+    table.clear(dbg, 0, 0, 1, 15)
 
 if barstate.islast and masterIn
     int    rightT = time + extIn * barMs
     string lsz    = f_sz(lblSizeIn)
     color  noCol  = color.new(#000000, 100)
 
-    // ── LVN (subtle, optional)
+    // ── Active DOL: live read-out (PoT updates intrabar; the selection itself does not)
+    int    pIdx   = f_findId(zs, primId)
+    string dolTxt = "—"
+    string potTxt = "—"
+    color  dolCol = colNeuIn
+
+    // ── LVN zones (optional)
     if showLvnIn and array.size(lvHs) >= 10
         float pLo = array.min(lvLs)
         float pHi = array.max(lvHs)
@@ -1416,11 +1316,11 @@ if barstate.islast and masterIn
             array<float> bins = array.new<float>(nb, 0.0)
             int nL2 = array.size(lvHs)
             for j = 0 to nL2 - 1
-                float bh = array.get(lvHs, j)
-                float bl = array.get(lvLs, j)
-                float bv = array.get(lvVs, j)
-                int   i0 = math.max(0, math.min(nb - 1, math.floor((bl - pLo) / step)))
-                int   i1 = math.max(0, math.min(nb - 1, math.floor((bh - pLo) / step)))
+                float bh  = array.get(lvHs, j)
+                float bl  = array.get(lvLs, j)
+                float bv  = array.get(lvVs, j)
+                int   i0  = math.max(0, math.min(nb - 1, math.floor((bl - pLo) / step)))
+                int   i1  = math.max(0, math.min(nb - 1, math.floor((bh - pLo) / step)))
                 float per = bv / (i1 - i0 + 1)
                 for k = i0 to i1
                     array.set(bins, k, array.get(bins, k) + per)
@@ -1442,229 +1342,195 @@ if barstate.islast and masterIn
                     int upC  = 0
                     for k = 0 to nP - 1
                         float y = array.get(lvnP, k)
-                        if y > close and upC < lvnShowIn and f_room(rBoxes, rLines, rLbls, maxVisIn)
-                            f_mkBox(rBoxes, lvT0, y + step * 0.5, rightT, y - step * 0.5, color.new(colLvnIn, 93), color.new(colLvnIn, 100), line.style_solid, "LVN", color.new(colLvnIn, 45))
+                        if y > close and upC < lvnShowIn and f_room(rB, rL, rT, maxVisIn)
+                            f_mkBox(rB, lvT0, y + step * 0.5, rightT, y - step * 0.5, color.new(colLvnIn, 94), color.new(colLvnIn, 100), line.style_solid, "LVN", color.new(colLvnIn, 50))
                             upC += 1
                     int dnC = 0
                     for k = nP - 1 to 0
                         float y = array.get(lvnP, k)
-                        if y < close and dnC < lvnShowIn and f_room(rBoxes, rLines, rLbls, maxVisIn)
-                            f_mkBox(rBoxes, lvT0, y + step * 0.5, rightT, y - step * 0.5, color.new(colLvnIn, 93), color.new(colLvnIn, 100), line.style_solid, "LVN", color.new(colLvnIn, 45))
+                        if y < close and dnC < lvnShowIn and f_room(rB, rL, rT, maxVisIn)
+                            f_mkBox(rB, lvT0, y + step * 0.5, rightT, y - step * 0.5, color.new(colLvnIn, 94), color.new(colLvnIn, 100), line.style_solid, "LVN", color.new(colLvnIn, 50))
                             dnC += 1
 
-    // ── FVG / iFVG
-    float gapD = fvgDistIn * atrS
-    if showFvgIn
+    // ── PD arrays (optional)
+    if showFvgIn or showIfvgIn or showObIn or showBrkIn
+        float aD = maxDistIn * atrS
         for sd = 0 to 1
             int side = sd == 0 ? 1 : -1
-            array<int> idx = f_pickGaps(fvgs, side, fvgShowIn, close, gapD)
-            for j in idx
-                Gap   g  = array.get(fvgs, j)
-                color gc = g.dir == 1 ? colBullIn : colBearIn
-                if f_room(rBoxes, rLines, rLbls, maxVisIn)
-                    string ft = g.mitig > 0.01 ? "FVG " + str.tostring(math.round(g.mitig * 100)) + "%" : "FVG"
-                    f_mkBox(rBoxes, g.t0, g.top, rightT, g.bot, color.new(gc, zoneOpIn), color.new(gc, 75), line.style_solid, ft, color.new(gc, 25))
-    if showIfvgIn
-        for sd = 0 to 1
-            int side = sd == 0 ? 1 : -1
-            array<int> idx = f_pickGaps(ifvgs, side, fvgShowIn, close, gapD)
-            for j in idx
-                Gap g = array.get(ifvgs, j)
-                if f_room(rBoxes, rLines, rLbls, maxVisIn)
-                    f_mkBox(rBoxes, g.t0, g.top, rightT, g.bot, color.new(colIfvgIn, zoneOpIn), color.new(colIfvgIn, 45), line.style_dashed, g.dir == 1 ? "iFVG ▲" : "iFVG ▼", color.new(colIfvgIn, 20))
+            for kk = 0 to 3
+                int  kind = kk == 0 ? K_FVG : kk == 1 ? K_IFVG : kk == 2 ? K_OB : K_BRK
+                bool want = kk == 0 ? showFvgIn : kk == 1 ? showIfvgIn : kk == 2 ? showObIn : showBrkIn
+                if want
+                    array<int> idx = f_pickKind(zs, kind, side, arrSideIn, close, aD, primId)
+                    for j in idx
+                        Zn z = array.get(zs, j)
+                        if f_room(rB, rL, rT, maxVisIn)
+                            color  c  = kind == K_IFVG ? colIfvgIn : kind == K_OB ? colObIn : kind == K_BRK ? colNeuIn : (z.pol == 1 ? colBullIn : colBearIn)
+                            string bs = kind == K_IFVG ? line.style_dashed : kind == K_BRK ? line.style_dotted : line.style_solid
+                            f_mkBox(rB, z.t0, z.top, rightT, z.bot, color.new(c, 91), color.new(c, 72), bs, f_kindTxt(z), color.new(c, 35))
 
-    // ── Order blocks / breakers
-    float blkD = maxDistIn * atrS
-    if showObIn
-        for sd = 0 to 1
-            int side = sd == 0 ? 1 : -1
-            array<int> idx = f_pickBlks(obs, side, blkShowIn, close, blkD, obHideMitIn)
-            for j in idx
-                Blk   b  = array.get(obs, j)
-                color oc = b.dir == 1 ? colObBIn : colObSIn
-                if f_room(rBoxes, rLines, rLbls, maxVisIn)
-                    f_mkBox(rBoxes, b.t0, b.top, rightT, b.bot, color.new(oc, b.mitigated ? 94 : zoneOpIn), color.new(oc, 55), line.style_solid, b.dir == 1 ? "OB+" : "OB−", color.new(oc, 20))
-    if showBrkIn
-        for sd = 0 to 1
-            int side = sd == 0 ? 1 : -1
-            array<int> idx = f_pickBlks(brks, side, blkShowIn, close, blkD, false)
-            for j in idx
-                Blk   b  = array.get(brks, j)
-                color bc = b.dir == 1 ? colBullIn : colBearIn
-                if f_room(rBoxes, rLines, rLbls, maxVisIn)
-                    f_mkBox(rBoxes, b.t0, b.top, rightT, b.bot, color.new(bc, 93), color.new(bc, 40), line.style_dotted, b.dir == 1 ? "BRK+" : "BRK−", color.new(bc, 20))
-
-    // ── Market structure (BOS / CHoCH / swing labels)
+    // ── Structure (optional)
     int nE = array.size(sEvts)
-    if nE > 0 and (showBosIn or showChIn)
+    if showStrIn and nE > 0
         int drawn = 0
         for k = nE - 1 to 0
             SEvt e = array.get(sEvts, k)
-            bool want = e.choch ? showChIn : showBosIn
-            if want and drawn < strMaxIn and f_room(rBoxes, rLines, rLbls, maxVisIn)
+            if drawn < strMaxIn and f_room(rB, rL, rT, maxVisIn)
                 color ec = e.dir == 1 ? colBullIn : colBearIn
-                f_mkLine(rLines, e.t0, e.lvl, e.t1, e.lvl, color.new(ec, 35), line.style_dashed, 1)
-                f_mkLbl(rLbls, int((e.t0 + e.t1) / 2), e.lvl, e.choch ? "CHoCH" : "BOS", noCol, color.new(ec, 15), e.dir == 1 ? label.style_label_down : label.style_label_up, size.tiny, "")
+                f_mkLine(rL, e.t0, e.lvl, e.t1, e.lvl, color.new(ec, 45), line.style_dashed, 1)
+                f_mkLbl(rT, int((e.t0 + e.t1) / 2), e.lvl, e.choch ? "CHoCH" : "BOS", noCol, color.new(ec, 25), e.dir == 1 ? label.style_label_down : label.style_label_up, size.tiny, "")
                 drawn += 1
-    int nW = array.size(swLbls)
-    if showSwIn and nW > 0
-        int drawnW = 0
-        for k = nW - 1 to 0
-            SwLbl w = array.get(swLbls, k)
-            if drawnW < strMaxIn * 2 and f_room(rBoxes, rLines, rLbls, maxVisIn)
-                f_mkLbl(rLbls, w.t, w.p, w.txt, noCol, color.new(colTextIn, 35), w.isHigh ? label.style_label_down : label.style_label_up, size.tiny, "")
-                drawnW += 1
 
-    // ── Current day high / low
-    if showDayHLIn and pdOk and not na(cdh) and not na(dStartT)
-        f_mkLine(rLines, dStartT, cdh, rightT, cdh, color.new(colNeuIn, 45), line.style_dotted, 1)
-        f_mkLine(rLines, dStartT, cdl, rightT, cdl, color.new(colNeuIn, 45), line.style_dotted, 1)
-        f_mkLbl(rLbls, rightT, cdh, "DH", noCol, color.new(colNeuIn, 20), label.style_label_left, size.tiny, "Current day high")
-        f_mkLbl(rLbls, rightT, cdl, "DL", noCol, color.new(colNeuIn, 20), label.style_label_left, size.tiny, "Current day low")
-
-    // ── Ghost trail (former DOL targets)
+    // ── Ghost Trail: faint dotted trace of former DOLs + a tiny ✕ where they ended
     int nG = array.size(ghosts)
-    if showGhIn and nG > 0
-        for k = nG - 1 to 0
-            Ghost gh = array.get(ghosts, k)
-            color gc = gh.dir == 1 ? colBullIn : colBearIn
-            if f_room(rBoxes, rLines, rLbls, maxVisIn)
-                string gt = (gh.dir == 1 ? "BSL " : "SSL ") + str.tostring(math.round(gh.score)) + " ✕ " + gh.why
-                f_mkBox(rBoxes, gh.t0, gh.top, math.max(gh.t1, gh.t0 + barMs), gh.bot, color.new(gc, ghostOpIn), color.new(gc, 80), line.style_dotted, gt, color.new(gc, 55))
+    if ghostOnIn and nG > 0
+        for k = 0 to nG - 1
+            Ghost g  = array.get(ghosts, k)
+            color gc = g.side == 1 ? colBullIn : g.side == -1 ? colBearIn : colNeuIn
+            int   tE = math.max(g.t1, g.t0 + barMs)
+            if f_room(rB, rL, rT, maxVisIn)
+                f_mkLine(rL, g.t0, g.lvl, tE, g.lvl, color.new(gc, 72), line.style_dotted, 1)
+                f_mkLbl(rT, tE, g.lvl, "✕", noCol, color.new(gc, 45), label.style_label_center, size.tiny, "Former DOL · " + f_kindTxtK(g.kind) + " · " + g.why)
 
-    // ── Ranked liquidity levels (non-primary)
-    if showLvlIn and lvlSideIn > 0
+    // ── Next ranked targets (optional)
+    if showLvlIn
         for sd = 0 to 1
             int side = sd == 0 ? 1 : -1
-            array<int> idx = f_pickLiq(liqs, side, lvlSideIn, primId, secId)
+            array<int> idx = f_pickNext(zs, side, 2, primId, secId)
             for j in idx
-                Liq   c  = array.get(liqs, j)
-                color lc = c.dir == 1 ? colBullIn : colBearIn
-                if f_room(rBoxes, rLines, rLbls, maxVisIn)
-                    f_mkLine(rLines, c.t0, c.lvl, rightT, c.lvl, color.new(lc, 60), line.style_dotted, 1)
-                    f_mkLbl(rLbls, rightT, c.lvl, (c.dir == 1 ? "BSL " : "SSL ") + str.tostring(math.round(c.score)), noCol, color.new(lc, 35), label.style_label_left, size.tiny, f_srcList(c) + " · " + c.tfTxt)
+                Zn    z  = array.get(zs, j)
+                color lc = side == 1 ? colBullIn : colBearIn
+                float y  = f_isPool(z) ? z.lvl : side == 1 ? z.bot : z.top
+                if f_room(rB, rL, rT, maxVisIn)
+                    f_mkLine(rL, z.t0, y, rightT, y, color.new(lc, 70), line.style_dotted, 1)
+                    f_mkLbl(rT, rightT, y, f_kindTxt(z) + " " + str.tostring(math.round(z.score)), noCol, color.new(lc, 40), label.style_label_left, size.tiny, f_srcList(z) + " · " + z.tf)
 
-    // ── Opposite-side target
-    int sIdx = f_findId(liqs, secId)
+    // ── Opposite-side target (optional)
+    int sIdx = f_findId(zs, secId)
     if showDolIn and showSecIn and sIdx >= 0
-        Liq   s  = array.get(liqs, sIdx)
-        color sc = s.dir == 1 ? colBullIn : colBearIn
-        f_mkBox(rBoxes, s.t0, s.top, rightT, s.bot, color.new(sc, 92), color.new(sc, 70), line.style_dashed, "", sc)
-        f_mkLine(rLines, s.t0, s.lvl, rightT, s.lvl, color.new(sc, 40), line.style_dashed, 1)
-        string st = (s.dir == 1 ? "BSL " : "SSL ") + str.tostring(math.round(s.score)) + (showPotIn and not na(potSec) ? "  ·  " + str.tostring(math.round(potSec)) + "%" : "")
-        f_mkLbl(rLbls, rightT, s.lvl, st, color.new(sc, 80), color.new(colTextIn, 10), label.style_label_left, size.tiny, f_srcList(s) + " · " + s.tfTxt)
+        Zn    s  = array.get(zs, sIdx)
+        color sc = s.side == 1 ? colBullIn : colBearIn
+        float y  = f_isPool(s) ? s.lvl : s.side == 1 ? s.bot : s.top
+        float sp = f_pot(f_liveDist(s, close), sigma, potHorIn, s.score, momRaw * s.side)
+        f_mkBox(rB, s.t0, s.top, rightT, s.bot, color.new(sc, 93), color.new(sc, 100), line.style_solid, "", sc)
+        f_mkLine(rL, s.t0, y, rightT, y, color.new(sc, 45), line.style_dashed, 1)
+        f_mkLbl(rT, rightT, y, f_kindTxt(s) + " " + str.tostring(math.round(s.score)) + " · " + str.tostring(sp, "0.0") + "%", noCol, color.new(sc, 30), label.style_label_left, size.tiny, f_srcList(s) + " · " + s.tf)
 
-    // ── ACTIVE DOL (always drawn — bypasses the visible-object cap)
-    int pIdx = f_findId(liqs, primId)
-    if showDolIn and pIdx >= 0
-        Liq   p  = array.get(liqs, pIdx)
-        color dc = p.dir == 1 ? colBullIn : colBearIn
-        float dA = math.abs(p.lvl - close) / atrS
-        f_mkBox(rBoxes, p.t0, p.top, rightT, p.bot, color.new(dc, dolOpIn), color.new(dc, 30), line.style_solid, "", dc)
-        f_mkLine(rLines, p.t0, p.lvl, rightT, p.lvl, color.new(dc, 5), line.style_solid, 2)
-        f_mkLbl(rLbls, p.t0, p.lvl, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin")
-        if showPathIn
-            f_mkLine(rLines, time, close, rightT, p.lvl, color.new(dc, 45), line.style_dotted, 1)
-        string l1  = "DOL  " + (p.dir == 1 ? "BSL ▲" : "SSL ▼")
-        string l2  = "Score " + str.tostring(math.round(p.score)) + (showPotIn and not na(potLive) ? "  |  PoT " + str.tostring(math.round(potLive)) + "%" : "")
-        string l3  = f_srcList(p) + " · " + p.tfTxt + " · " + str.tostring(dA, "#.#") + " ATR"
-        string tip = "Proximity " + str.tostring(p.fP, "#.##") + "\nFreshness " + str.tostring(p.fF, "#.##") + "\nConfluence " + str.tostring(p.fC, "#.##") + "\nDensity " + str.tostring(p.fD, "#.##") + "\nStructure " + str.tostring(p.fS, "#.##") + "\nHTF " + str.tostring(p.fH, "#.##") + "\nMitigation " + str.tostring(p.mitig * 100, "#") + "%  ·  Touches " + str.tostring(p.touches) + "\nRefs " + str.tostring(p.refs) + "\nPoT is a heuristic, not a guaranteed probability."
-        f_mkLbl(rLbls, rightT, p.lvl, l1 + "\n" + l2 + "\n" + l3, color.new(dc, 12), color.white, label.style_label_left, lsz, tip)
+    // ── ACTIVE DOL (always drawn): zone + glow key line + origin anchor + terminal label
+    if pIdx >= 0
+        Zn     p    = array.get(zs, pIdx)
+        int    sd   = p.side
+        color  dc   = sd == 1 ? colBullIn : colBearIn
+        float  potL = f_pot(f_liveDist(p, close), sigma, potHorIn, p.score, momRaw * sd)
+        string arw  = sd == 1 ? "▲" : "▼"
+        dolTxt := arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
+        potTxt := str.tostring(potL, "0.0") + "%"
+        dolCol := dc
+        if showDolIn
+            float keyY = f_isPool(p) ? p.lvl : sd == 1 ? p.bot : p.top
+            f_mkBox(rB, p.t0, p.top, rightT, p.bot, color.new(dc, dolOpIn), color.new(dc, 100), line.style_solid, "", dc)
+            if glowIn
+                f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 84), line.style_solid, 6)
+            f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 0), line.style_solid, 1)
+            f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
+            string l1  = "DOL " + arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
+            string l2  = "PoT " + str.tostring(potL, "0.0") + "%"
+            string l3  = detailIn ? "\n" + f_srcList(p) + " · " + p.tf + " · " + str.tostring(p.dist, "0.0") + " ATR" : ""
+            string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nPoT is a heuristic estimate, not a guarantee."
+            f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
 
-    // ── Bias dashboard
-    if showBiasIn
-        color hdr = color.new(colTextIn, 0)
-        table.cell(dash, 0, 0, "DOL ENGINE", text_color = hdr, text_size = size.small, text_halign = text.align_left)
-        table.cell(dash, 1, 0, "", text_size = size.small)
-        table.cell(dash, 2, 0, modeIn, text_color = color.new(colTextIn, 40), text_size = size.tiny, text_halign = text.align_right)
-        for r = 0 to 3
-            int    st2 = r == 0 ? bH2 : r == 1 ? bH1 : r == 2 ? bSt : bEx
-            string nm  = r == 0 ? "HTF2 " + h2Lbl : r == 1 ? "HTF " + h1Lbl : r == 2 ? "STF " + stfLbl : "EXEC " + exLbl
-            color  bc  = st2 > 0 ? colBullIn : st2 < 0 ? colBearIn : colNeuIn
-            table.cell(dash, 0, r + 1, nm, text_color = color.new(colTextIn, 25), text_size = size.tiny, text_halign = text.align_left)
-            table.cell(dash, 1, r + 1, f_biasArrow(st2), text_color = bc, text_size = size.small)
-            table.cell(dash, 2, r + 1, f_biasTxt(st2), text_color = bc, text_size = size.tiny, text_halign = text.align_right)
-        color cc = bComp > 0 ? colBullIn : bComp < 0 ? colBearIn : colNeuIn
-        table.cell(dash, 0, 5, "BIAS", text_color = hdr, text_size = size.tiny, text_halign = text.align_left)
-        table.cell(dash, 1, 5, f_biasArrow(bComp), text_color = cc, text_size = size.small)
-        table.cell(dash, 2, 5, f_biasTxt(bComp), text_color = cc, text_size = size.tiny, text_halign = text.align_right)
-        color  pc  = primDir == 1 ? colBullIn : primDir == -1 ? colBearIn : colNeuIn
-        string dT  = primDir == 1 ? "BSL " + str.tostring(math.round(nz(primScr))) : primDir == -1 ? "SSL " + str.tostring(math.round(nz(primScr))) : "—"
-        string pT  = showPotIn and not na(potLive) ? str.tostring(math.round(potLive)) + "%" : ""
-        table.cell(dash, 0, 6, "DOL", text_color = hdr, text_size = size.tiny, text_halign = text.align_left)
-        table.cell(dash, 1, 6, dT, text_color = pc, text_size = size.tiny)
-        table.cell(dash, 2, 6, pT, text_color = pc, text_size = size.tiny, text_halign = text.align_right)
+    // ── Bias table
+    if showTblIn
+        string tsz = f_sz(tblSizeIn)
+        color  hdr = color.new(colTextIn, 50)
+        table.cell(tbl, 0, 0, "TF", text_color = hdr, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 1, 0, "", text_size = tsz)
+        table.cell(tbl, 2, 0, "BIAS", text_color = hdr, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        for r = 0 to 2
+            int    st = r == 0 ? bH1 : r == 1 ? bSt : bEx
+            string nm = r == 0 ? "HTF " + h1Lbl : r == 1 ? "STF " + stfLbl : "EXE " + exLbl
+            color  bc = st > 0 ? colBullIn : st < 0 ? colBearIn : colNeuIn
+            table.cell(tbl, 0, r + 1, nm, text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+            table.cell(tbl, 1, r + 1, f_biasArrow(st), text_color = bc, text_size = tsz, text_font_family = font.family_monospace)
+            table.cell(tbl, 2, r + 1, f_biasTxt(st), text_color = bc, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        color  ac = aligned ? (exSign == 1 ? colBullIn : colBearIn) : colNeuIn
+        table.cell(tbl, 0, 4, "ALIGN", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 1, 4, aligned ? "✓" : "·", text_color = ac, text_size = tsz, text_font_family = font.family_monospace)
+        table.cell(tbl, 2, 4, aligned ? (exSign == 1 ? "LONG" : "SHORT") : "WAIT", text_color = ac, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 0, 5, "DOL", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 1, 5, "", text_size = tsz)
+        table.cell(tbl, 2, 5, dolTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 0, 6, "PoT", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 1, 6, "", text_size = tsz)
+        table.cell(tbl, 2, 6, potTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
-    // =================================================================================================
-    // 23. DEBUG
-    // =================================================================================================
+    // ── Debug panel
     if debugIn
-        int    dIdx = f_findId(liqs, primId)
-        string cmp  = "—"
-        string src  = "—"
-        string mit  = "—"
-        if dIdx >= 0
-            Liq d = array.get(liqs, dIdx)
-            cmp := "P" + str.tostring(d.fP, "#.##") + " F" + str.tostring(d.fF, "#.##") + " C" + str.tostring(d.fC, "#.##") + " D" + str.tostring(d.fD, "#.##") + " S" + str.tostring(d.fS, "#.##") + " H" + str.tostring(d.fH, "#.##")
-            src := f_srcList(d) + " · " + d.tfTxt
-            mit := str.tostring(d.mitig * 100, "#") + "% · " + str.tostring(d.touches) + " touch"
-        array<string> ks = array.from("Candidates", "Eligible", "FVG / iFVG", "OB / BRK", "Ghosts", "ATR", "σ (bar)", "Pivot len", "TFs", "Primary", "Score", "Components", "Source", "Mitigation", "PoT (live)", "Last sweep", "Struct state", "HTF bias")
-        array<string> vs = array.from(str.tostring(array.size(liqs)), str.tostring(eligCnt), str.tostring(array.size(fvgs)) + " / " + str.tostring(array.size(ifvgs)), str.tostring(array.size(obs)) + " / " + str.tostring(array.size(brks)), str.tostring(array.size(ghosts)), str.tostring(atrS, format.mintick), str.tostring(sigma, format.mintick), str.tostring(pivLen), stfLbl + " / " + h1Lbl + " / " + h2Lbl, primDir == 1 ? "BSL #" + str.tostring(primId) : primDir == -1 ? "SSL #" + str.tostring(primId) : "none", str.tostring(nz(primScr), "#.#"), cmp, src, mit, na(potLive) ? "—" : str.tostring(potLive, "#") + "%", lastSwTxt, str.tostring(structSt), f_biasTxt(bH1))
+        string cmp = "—"
+        string src = "—"
+        if pIdx >= 0
+            Zn d = array.get(zs, pIdx)
+            cmp := "P" + str.tostring(d.fP, "0.00") + " F" + str.tostring(d.fF, "0.00") + " C" + str.tostring(d.fC, "0.00") + " D" + str.tostring(d.fD, "0.00") + " S" + str.tostring(d.fS, "0.00") + " H" + str.tostring(d.fH, "0.00")
+            src := f_srcList(d) + " · " + d.tf
+        int nPool = 0
+        int nArr  = 0
+        for z in zs
+            nPool += f_isPool(z) ? 1 : 0
+            nArr  += f_isPool(z) ? 0 : 1
+        array<string> ks = array.from("Pools", "PD arrays", "Eligible", "Ghosts", "ATR", "σ / bar", "Pivot len", "STF / HTF / Macro", "DOL", "Score", "Components", "Source", "PoT (bar close)", "Last event", "Exec state", "HTF state")
+        array<string> vs = array.from(str.tostring(nPool), str.tostring(nArr), str.tostring(eligCnt), str.tostring(array.size(ghosts)), str.tostring(atrS, format.mintick), str.tostring(sigma, format.mintick), str.tostring(pivLen), stfLbl + " / " + h1Lbl + " / " + h2Lbl, dolTxt, str.tostring(nz(primScr), "0.0"), cmp, src, na(primPot) ? "—" : str.tostring(primPot, "0.0") + "%", lastEvtTxt, str.tostring(bEx), str.tostring(bH1))
         for r = 0 to array.size(ks) - 1
-            table.cell(dbg, 0, r, array.get(ks, r), text_color = color.new(colTextIn, 30), text_size = size.tiny, text_halign = text.align_left)
-            table.cell(dbg, 1, r, array.get(vs, r), text_color = colTextIn, text_size = size.tiny, text_halign = text.align_left)
+            table.cell(dbg, 0, r, array.get(ks, r), text_color = color.new(colTextIn, 35), text_size = size.tiny, text_halign = text.align_left, text_font_family = font.family_monospace)
+            table.cell(dbg, 1, r, array.get(vs, r), text_color = colTextIn, text_size = size.tiny, text_halign = text.align_left, text_font_family = font.family_monospace)
 
 // =====================================================================================================
-// SIGNAL MARKERS (global scope) + data-window read-outs
+// SIGNAL MARKERS + DATA WINDOW
 // =====================================================================================================
-plotshape(sigOnIn and sigBull, "Bullish Confluence", shape.triangleup, location.belowbar, colBullIn, size = size.small)
-plotshape(sigOnIn and sigBear, "Bearish Confluence", shape.triangledown, location.abovebar, colBearIn, size = size.small)
+plotshape(sigOnIn and sigBull, "Long Setup", shape.triangleup, location.belowbar, colBullIn, size = size.tiny)
+plotshape(sigOnIn and sigBear, "Short Setup", shape.triangledown, location.abovebar, colBearIn, size = size.tiny)
 plot(primScr, "DOL Score", color = colNeuIn, display = display.data_window)
-plot(potLive, "DOL PoT %", color = colNeuIn, display = display.data_window)
-plot(primLvl, "DOL Level", color = colNeuIn, display = display.data_window)
+plot(primPot, "DOL PoT % (bar close)", color = colNeuIn, display = display.data_window)
 
 // =====================================================================================================
-// 22. ALERTS
+// ALERTS
 // =====================================================================================================
-// Static alertconditions (use "Once Per Bar Close")
-alertcondition(evNewDol,   "DOL · New Primary",        "DOL Engine: new primary DOL on {{ticker}} {{interval}}")
-alertcondition(evDolChg,   "DOL · Target Changed",     "DOL Engine: DOL target changed on {{ticker}} {{interval}}")
-alertcondition(evDolSwept, "DOL · Target Swept",       "DOL Engine: DOL target swept on {{ticker}} {{interval}}")
-alertcondition(evBslAct,   "DOL · BSL Activated",      "DOL Engine: BSL target activated on {{ticker}} {{interval}}")
-alertcondition(evSslAct,   "DOL · SSL Activated",      "DOL Engine: SSL target activated on {{ticker}} {{interval}}")
-alertcondition(evNewFvg,   "DOL · New FVG",            "DOL Engine: new FVG on {{ticker}} {{interval}}")
-alertcondition(evNewIfvg,  "DOL · New iFVG",           "DOL Engine: new iFVG on {{ticker}} {{interval}}")
-alertcondition(evScoreX,   "DOL · Score Threshold",    "DOL Engine: DOL score crossed threshold on {{ticker}} {{interval}}")
-alertcondition(evPotX,     "DOL · PoT Threshold",      "DOL Engine: PoT crossed threshold on {{ticker}} {{interval}}")
-alertcondition(sigOnIn and sigBull, "DOL · Bullish Confluence", "DOL Engine: bullish confluence on {{ticker}} {{interval}}")
-alertcondition(sigOnIn and sigBear, "DOL · Bearish Confluence", "DOL Engine: bearish confluence on {{ticker}} {{interval}}")
-alertcondition(evBiasChg,  "DOL · HTF Bias Change",    "DOL Engine: HTF bias changed on {{ticker}} {{interval}}")
+// Static conditions — set the alert to "Once Per Bar Close"
+alertcondition(evNewDol,  "DOL · New Target Active", "DOL: new target active on {{ticker}} {{interval}}")
+alertcondition(evDolHit,  "DOL · Target Hit",        "DOL: target hit / swept on {{ticker}} {{interval}}")
+alertcondition(evNewIfvg, "DOL · New iFVG",          "DOL: new iFVG on {{ticker}} {{interval}}")
+alertcondition(evNewFvg,  "DOL · New FVG",           "DOL: new FVG on {{ticker}} {{interval}}")
+alertcondition(evSideAct, "DOL · Side Activated",    "DOL: draw side changed on {{ticker}} {{interval}}")
+alertcondition(evScoreX,  "DOL · Score Threshold",   "DOL: score crossed threshold on {{ticker}} {{interval}}")
+alertcondition(evPotX,    "DOL · PoT Threshold",     "DOL: PoT crossed threshold on {{ticker}} {{interval}}")
+alertcondition(sigOnIn and sigBull, "DOL · Long Setup",  "DOL: long setup on {{ticker}} {{interval}}")
+alertcondition(sigOnIn and sigBear, "DOL · Short Setup", "DOL: short setup on {{ticker}} {{interval}}")
+alertcondition(evBiasChg, "DOL · HTF Bias Change",   "DOL: HTF bias changed on {{ticker}} {{interval}}")
+alertcondition(evAlign,   "DOL · Exec/HTF Aligned",  "DOL: execution bias aligned with HTF on {{ticker}} {{interval}}")
 
-// Dynamic alert() messages (create one alert: "Any alert() function call")
-string aDir = primDir == 1 ? "BSL" : primDir == -1 ? "SSL" : "—"
-string aTail = " | " + aDir + " | Score " + str.tostring(math.round(nz(primScr))) + (na(potLive) ? "" : " | PoT " + str.tostring(math.round(potLive)) + "%") + " | " + syminfo.ticker + " " + chLbl
-if barstate.isconfirmed and masterIn
+// Dynamic messages — create one alert with "Any alert() function call"
+string aSide = primSide == 1 ? "BSL-side ▲" : primSide == -1 ? "SSL-side ▼" : "—"
+string aKind = primKind >= 0 ? f_kindTxtK(primKind) : "—"
+string aTail = " | " + aKind + " " + aSide + " | Score " + str.tostring(math.round(nz(primScr))) + " | PoT " + str.tostring(nz(primPot), "0.0") + "% | " + syminfo.ticker + " " + chLbl
+if barstate.isconfirmed and masterIn and inWin
     if alNewIn and evNewDol
         alert("New DOL" + aTail, alert.freq_once_per_bar_close)
-    if alChgIn and evDolChg
-        alert("DOL Changed" + aTail, alert.freq_once_per_bar_close)
-    if alSweptIn and evDolSwept
-        alert(swMsg, alert.freq_once_per_bar_close)
-    if alBslIn and evBslAct
-        alert("BSL Target Activated" + aTail, alert.freq_once_per_bar_close)
-    if alSslIn and evSslAct
-        alert("SSL Target Activated" + aTail, alert.freq_once_per_bar_close)
-    if alFvgIn and evNewFvg
-        alert("New FVG | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+    if alHitIn and evDolHit
+        alert(hitMsg, alert.freq_once_per_bar_close)
     if alIfvgIn and evNewIfvg
         alert("New iFVG | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+    if alFvgIn and evNewFvg
+        alert("New FVG | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+    if alSideIn and evSideAct
+        alert("DOL Side" + aTail, alert.freq_once_per_bar_close)
     if alScoreIn and evScoreX
-        alert("DOL Score ≥ " + str.tostring(alScoreThIn) + aTail, alert.freq_once_per_bar_close)
+        alert("DOL Score ≥ " + str.tostring(alScoreTh) + aTail, alert.freq_once_per_bar_close)
     if alPotIn and evPotX
-        alert("DOL PoT ≥ " + str.tostring(alPotThIn) + "%" + aTail, alert.freq_once_per_bar_close)
-    if alBullIn and sigOnIn and sigBull
-        alert("Bullish Confluence" + aTail, alert.freq_once_per_bar_close)
-    if alBearIn and sigOnIn and sigBear
-        alert("Bearish Confluence" + aTail, alert.freq_once_per_bar_close)
+        alert("DOL PoT ≥ " + str.tostring(alPotTh, "0.0") + "%" + aTail, alert.freq_once_per_bar_close)
+    if alSigIn and sigOnIn and sigBull
+        alert("Long Setup" + aTail, alert.freq_once_per_bar_close)
+    if alSigIn and sigOnIn and sigBear
+        alert("Short Setup" + aTail, alert.freq_once_per_bar_close)
     if alBiasIn and evBiasChg
-        alert("HTF Bias Change | " + h1Lbl + " " + f_biasTxt(bH1) + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+        alert("HTF Bias " + f_biasTxt(bH1) + " | " + h1Lbl + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+    if alAlignIn and evAlign
+        alert("Exec/HTF Aligned " + (exSign == 1 ? "LONG" : "SHORT") + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
