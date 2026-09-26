@@ -1,7 +1,8 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © clipzfb02-crypto
 //
-// DOL ENGINE v4 — Draw on Liquidity (auto-adaptive · two-stage self-calibration · News Guard · filtered signals)
+// DOL ENGINE v5 — Draw on Liquidity (empirical + analytic PoT · intraday seasonality · two-stage self-calibration ·
+//                 News Guard with event calendar · filtered signals · measured PoT skill)
 // Original Pine Script v6 code (not derived from any closed-source script).
 //
 // One clean read: WHERE is price being drawn, HOW strong is that draw, and WHAT is the bias.
@@ -18,14 +19,17 @@
 //   • PoT on the label / table updates live, but target SELECTION only changes at bar close.
 //
 // PoT (Probability of Touch):
-//   model  = first-passage probability of a drifting random walk (Garman-Klass volatility, EWMA drift)
-//            over the PoT horizon, lightly weighted by target quality;
-//   shown  = model corrected by this chart's OWN resolved history (self-calibration: every sampled
-//            prediction is checked against what price actually did, then binned by predicted PoT).
+//   model  = blend of (a) this market's EMPIRICAL excursion distribution (how far price actually travelled
+//            within the horizon, split by direction and HTF bias, learned bar by bar) and (b) the analytic
+//            first-passage probability of a drifting random walk (Garman-Klass volatility, EWMA drift);
+//            intraday, distances are rescaled by the time-of-day volatility profile of the bars ahead;
+//   shown  = model corrected by this chart's OWN resolved history (two-stage self-calibration: by PoT bin,
+//            then by context = target kind × HTF alignment);
+//   SKILL  = Brier skill score of the shown PoT vs. the base rate (> 0 = PoT beats a constant guess).
 //   Capped at 95 %. It is an estimate, never a guarantee.
 
 //@version=6
-indicator("DOL Engine v4 · Draw on Liquidity", shorttitle = "DOL", overlay = true, max_boxes_count = 120, max_lines_count = 120, max_labels_count = 120, max_bars_back = 500)
+indicator("DOL Engine v5 · Draw on Liquidity", shorttitle = "DOL", overlay = true, max_boxes_count = 120, max_lines_count = 120, max_labels_count = 120, max_bars_back = 500)
 
 // =====================================================================================================
 // CONSTANTS
@@ -49,6 +53,7 @@ F_STF  = 7
 LN2     = 0.6931471805599453
 NEG_BIG = -1000000
 INT_BIG = 2147483647
+EMP_NB  = 80
 
 G_GEN = "◆ GENERAL"
 G_TF  = "◆ TIMEFRAMES (MANUAL MODE)"
@@ -132,6 +137,8 @@ type Pred
     float pm
     int   ctx
     float pb
+    float pf = 0.0
+    float w  = 1.0
 
 type SEvt
     int   dir
@@ -275,13 +282,17 @@ n1In       = input.session("0825-0845", "", inline = "n1", group = G_NEWS, toolt
 n2OnIn     = input.bool(true, "Window 2", inline = "n2", group = G_NEWS)
 n2In       = input.session("0955-1015", "", inline = "n2", group = G_NEWS, tooltip = "10:00 NY: ISM, consumer sentiment, JOLTS, new home sales.")
 n3OnIn     = input.bool(false, "Window 3", inline = "n3", group = G_NEWS)
-n3In       = input.session("1355-1445", "", inline = "n3", group = G_NEWS, tooltip = "14:00 NY: FOMC statement + press conference. Enable on FOMC days.")
+n3In       = input.session("1355-1445", "", inline = "n3", group = G_NEWS, tooltip = "14:00 NY every day. FOMC days are already covered by the Event Calendar below.")
 n4OnIn     = input.bool(false, "Window 4", inline = "n4", group = G_NEWS)
 n4In       = input.session("0255-0315", "", inline = "n4", group = G_NEWS, tooltip = "Custom window (default 03:00 NY: EU / UK data).")
 shockOnIn  = input.bool(true, "Auto-Detect News Spikes", group = G_NEWS)
 shockAtrIn = input.float(2.5, "Spike Range (× ATR)", minval = 1.0, maxval = 10.0, step = 0.1, group = G_NEWS)
 shockVolIn = input.float(3.0, "Spike Volume (× avg)", minval = 1.0, maxval = 20.0, step = 0.5, group = G_NEWS)
 shockBarsIn = input.int(10, "Pause After Spike (bars)", minval = 0, maxval = 200, group = G_NEWS)
+calEvIn    = input.bool(true, "Event Calendar", group = G_NEWS, tooltip = "Blackout around dated events. Pre-filled with the official FOMC statement times 2025-2027 (federalreserve.gov). Add any high-impact event (CPI, NFP, ECB, BoE, earnings…): one per line or comma-separated, format YYYY-MM-DD HH:MM in New York time. A date without a time blocks that whole day.")
+evTxtIn    = input.text_area("2025-01-29 14:00, 2025-03-19 14:00, 2025-05-07 14:00, 2025-06-18 14:00, 2025-07-30 14:00, 2025-09-17 14:00, 2025-10-29 14:00, 2025-12-10 14:00, 2026-01-28 14:00, 2026-03-18 14:00, 2026-04-29 14:00, 2026-06-17 14:00, 2026-07-29 14:00, 2026-09-16 14:00, 2026-10-28 14:00, 2026-12-09 14:00, 2027-01-27 14:00, 2027-03-17 14:00, 2027-04-28 14:00, 2027-06-09 14:00, 2027-07-28 14:00, 2027-09-15 14:00, 2027-10-27 14:00, 2027-12-08 14:00", "Events (New York time)", group = G_NEWS)
+evPreIn    = input.int(15, "Event: Minutes Before", minval = 0, maxval = 1440, inline = "ev", group = G_NEWS)
+evPostIn   = input.int(60, "After", minval = 0, maxval = 1440, inline = "ev", group = G_NEWS)
 newsBgIn   = input.bool(false, "Shade News Blackouts", group = G_NEWS)
 
 // ── WIN-RATE TRACKER (virtual trades on the execution signals — shown in the table, no strategy needed)
@@ -291,11 +302,15 @@ stopLbIn   = input.int(20, "Stop Lookback (bars)", minval = 2, maxval = 200, gro
 stopBufIn  = input.float(0.2, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD)
 minRRIn    = input.float(1.5, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD)
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
+costIn     = input.float(0.0, "Round-Trip Cost (ticks)", minval = 0.0, maxval = 100000.0, step = 1.0, group = G_TRD, tooltip = "Spread + commission + slippage per trade, in ticks. Subtracted from every virtual trade so WIN / EDGE stay realistic.")
 beAtRIn    = input.float(0.0, "Breakeven at R (0 = off)", minval = 0.0, maxval = 10.0, step = 0.25, group = G_TRD, tooltip = "Moves the virtual stop to entry once price has moved this many R in favour.")
 
 // ── CALIBRATION / ACCURACY
 calOnIn   = input.bool(true, "Self-Calibrating PoT", group = G_CAL, tooltip = "Corrects the model PoT with this chart's own resolved predictions (non-repainting: only closed, resolved outcomes are used).")
 calKIn    = input.int(30, "Calibration Prior (samples)", minval = 1, maxval = 500, group = G_CAL, tooltip = "How many observed samples a PoT bin needs before its measured hit rate outweighs the model.")
+empOnIn   = input.bool(true, "Empirical Excursion Model", group = G_CAL, tooltip = "Learns from this market how far price actually travels (up / down, per HTF bias) within the PoT horizon and blends it with the analytic model. Adapts PoT to the fat tails, trend and mean reversion of any market.")
+empKIn    = input.int(10, "Empirical Prior (horizons)", minval = 1, maxval = 200, group = G_CAL, tooltip = "Weight of the analytic model, in independent horizons of data. Lower = trust the market's own history sooner.")
+seasOnIn  = input.bool(true, "Intraday Volatility Seasonality", group = G_CAL, tooltip = "Intraday charts up to 1H: rescales PoT by the typical volatility of the time-of-day window ahead vs. the recent window (e.g. lower into the lunch / Asia lull, higher into the London and New York opens).")
 showAccIn = input.bool(true, "Show Measured DOL Hit Rate", group = G_CAL, tooltip = "Share of DOL targets that price actually reached within the PoT horizon after they were selected.")
 
 // ── STYLE
@@ -364,10 +379,52 @@ f_touch(float d, float sig, int horizon, float mu) =>
         res := math.max(0.0, math.min(1.0, f_ncdf(a) + math.exp(ex) * f_ncdf(b)))
     res
 
-// Model PoT (%): touch probability, lightly weighted by target quality
-f_potModel(float d, float sig, int horizon, float mu, float sc) =>
-    float q = 0.75 + 0.25 * math.min(math.max(nz(sc), 0.0), 100.0) / 100.0
-    math.max(0.1, math.min(99.9, 100.0 * f_touch(d, sig, horizon, mu) * q))
+// Model PoT (%): empirical touch probability (weight nE) blended with the analytic one (weight kE),
+// lightly weighted by target quality. No empirical data → analytic only.
+f_potModel(float d, float sig, int horizon, float mu, float sc, float pE, float nE, float kE) =>
+    float q  = 0.75 + 0.25 * math.min(math.max(nz(sc), 0.0), 100.0) / 100.0
+    float pA = f_touch(d, sig, horizon, mu)
+    float pT = na(pE) ? pA : (nE * pE + kE * pA) / (nE + kE)
+    math.max(0.1, math.min(99.9, 100.0 * pT * q))
+
+// Empirical excursion store: sv[g·nb + k] = (decayed) count of samples whose excursion reached ≥ k·bw ATR.
+// Groups g = HTF state (0 bear · 1 neutral · 2 bull) × 2 + direction (0 up · 1 down).
+f_empAdd(array<float> sv, array<float> gn, int g, float x, float bw, int nb) =>
+    if not na(x)
+        int b = math.max(0, math.min(nb - 1, int(math.floor(math.max(x, 0.0) / bw))))
+        for k = 0 to b
+            array.set(sv, g * nb + k, array.get(sv, g * nb + k) + 1.0)
+        array.set(gn, g, array.get(gn, g) + 1.0)
+    true
+
+// Empirical probability that the excursion reaches x ATR (linear interpolation between bin edges)
+f_emp(array<float> sv, array<float> gn, int g, float x, float bw, int nb) =>
+    float n = array.get(gn, g)
+    float p = na
+    if n > 0 and not na(x) and x < bw * (nb - 1)
+        if x <= 0
+            p := 1.0
+        else
+            float u  = x / bw
+            int   k0 = int(math.floor(u))
+            float fr = u - k0
+            p := ((1.0 - fr) * array.get(sv, g * nb + k0) + fr * array.get(sv, g * nb + k0 + 1)) / n
+    [p, n]
+
+// Full PoT model for a target at price distance d on `side` under HTF state st3 (0 bear · 1 neutral · 2 bull).
+// sf = intraday seasonality factor of the bars ahead (1 = normal).
+f_potAll(float d, int side, int st3, float sig, int horizon, float mu, float sc, array<float> sv, array<float> gn, float bw, int nb, float atrV, float sf, float kE, bool useE) =>
+    float pE = na
+    float nE = 0.0
+    if useE and side != 0
+        [p0, n0] = f_emp(sv, gn, st3 * 2 + (side == 1 ? 0 : 1), d / (atrV * sf), bw, nb)
+        pE := p0
+        nE := n0
+    f_potModel(d, sig * sf, horizon, mu, sc, pE, nE, kE)
+
+// Time-of-day bucket of a timestamp
+f_bk(int t, string tz, int bm, int nb) =>
+    math.max(0, math.min(nb - 1, int(math.floor((hour(t, tz) * 60 + minute(t, tz)) / bm))))
 
 // Self-calibration: shift the model by the observed residual (hits − predicted) / (n + k) of the two
 // nearest PoT bins (Bayesian shrinkage toward the model with a prior of k samples). No data → model.
@@ -570,7 +627,9 @@ f_ghost(array<Ghost> gs, Zn z, int t1, string why, int maxG) =>
     true
 
 // Resolve pending predictions against the current bar: hit if price reached the level, else expire.
-f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, array<float> xN, array<float> xH, array<float> xS, bool useBins) =>
+// Samples are weighted (w = 1 / overlap) so calibration priors count independent horizons.
+// bs: [effective n, Brier(shown PoT), hits, Brier(model PoT)] for the measured skill score.
+f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, array<float> xN, array<float> xH, array<float> xS, array<float> bs, bool useBins) =>
     int hits = 0
     int done = 0
     int n    = array.size(ps)
@@ -582,14 +641,17 @@ f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, arr
                 done += 1
                 hits += h ? 1 : 0
                 if useBins
-                    array.set(cN, q.bin, array.get(cN, q.bin) + 1.0)
-                    array.set(cS, q.bin, array.get(cS, q.bin) + q.pm)
-                    if h
-                        array.set(cH, q.bin, array.get(cH, q.bin) + 1.0)
-                    array.set(xN, q.ctx, array.get(xN, q.ctx) + 1.0)
-                    array.set(xS, q.ctx, array.get(xS, q.ctx) + q.pb)
-                    if h
-                        array.set(xH, q.ctx, array.get(xH, q.ctx) + 1.0)
+                    float o = h ? 1.0 : 0.0
+                    array.set(cN, q.bin, array.get(cN, q.bin) + q.w)
+                    array.set(cS, q.bin, array.get(cS, q.bin) + q.w * q.pm)
+                    array.set(cH, q.bin, array.get(cH, q.bin) + q.w * o)
+                    array.set(xN, q.ctx, array.get(xN, q.ctx) + q.w)
+                    array.set(xS, q.ctx, array.get(xS, q.ctx) + q.w * q.pb)
+                    array.set(xH, q.ctx, array.get(xH, q.ctx) + q.w * o)
+                    array.set(bs, 0, array.get(bs, 0) + q.w)
+                    array.set(bs, 1, array.get(bs, 1) + q.w * math.pow(q.pf - o, 2))
+                    array.set(bs, 2, array.get(bs, 2) + q.w * o)
+                    array.set(bs, 3, array.get(bs, 3) + q.w * math.pow(q.pm - o, 2))
                 array.remove(ps, i)
     [hits, done]
 
@@ -817,6 +879,44 @@ string tzStr = tzIn == "Exchange" ? syminfo.timezone : tzIn
 [nyHi, nyLo, nyHiT, nyLoT, nyHiB, nyLoB, nyEnd] = f_session(nyIn, tzStr)
 
 // =====================================================================================================
+// INTRADAY VOLATILITY SEASONALITY — time-of-day range profile (learned on closed bars only)
+// sfNow = √(typical variance of the next H bars ÷ typical variance of the last 20 bars), clamped 0.5-2
+// =====================================================================================================
+bool  seasOk = seasOnIn and intraOk
+int   bkMin  = chartSec >= 1800 ? int(chartSec / 60) : 30
+int   nBk    = math.max(1, math.min(48, int(1440 / bkMin)))
+float bpb    = math.max(1.0, bkMin * 60.0 / math.max(chartSec, 1))
+float rngL   = ta.rma(high - low, 1500)
+var array<float> seasV = array.new<float>(48, 0.0)
+var array<float> seasC = array.new<float>(48, 0.0)
+float sfNow  = 1.0
+if seasOk and not na(rngL) and rngL > 0
+    if barstate.isconfirmed
+        int   sbk = f_bk(time, tzStr, bkMin, nBk)
+        float scn = array.get(seasC, sbk) + 1.0
+        float sal = math.max(1.0 / scn, 1.0 / (20.0 * bpb))
+        array.set(seasC, sbk, scn)
+        array.set(seasV, sbk, array.get(seasV, sbk) + sal * (math.pow((high - low) / rngL, 2) - array.get(seasV, sbk)))
+    float minC = 3.0 * bpb
+    float srS  = 0.0
+    float srN  = 0.0
+    for j = 0 to 19
+        if not na(time[j])
+            int bq = f_bk(time[j], tzStr, bkMin, nBk)
+            if array.get(seasC, bq) >= minC
+                srS += array.get(seasV, bq)
+                srN += 1.0
+    float sfS = 0.0
+    float sfN = 0.0
+    for i = 1 to effHor
+        int bf = f_bk(time + i * barMs, tzStr, bkMin, nBk)
+        if array.get(seasC, bf) >= minC
+            sfS += array.get(seasV, bf)
+            sfN += 1.0
+    if srN > 0 and sfN > 0 and srS > 0
+        sfNow := math.max(0.5, math.min(2.0, math.sqrt((sfS / sfN) / (srS / srN))))
+
+// =====================================================================================================
 // NEWS GUARD · VOLATILITY REGIME · SIGNAL-QUALITY INPUTS
 // =====================================================================================================
 bool  intra    = timeframe.isintraday
@@ -825,6 +925,38 @@ bool  inN2     = newsOnIn and intra and n2OnIn and not na(time(timeframe.period,
 bool  inN3     = newsOnIn and intra and n3OnIn and not na(time(timeframe.period, n3In, tzStr))
 bool  inN4     = newsOnIn and intra and n4OnIn and not na(time(timeframe.period, n4In, tzStr))
 bool  newsWin  = inN1 or inN2 or inN3 or inN4
+
+// Event calendar: parsed once, times in New York time
+var array<int>  evT   = array.new<int>()
+var array<bool> evAll = array.new<bool>()
+if barstate.isfirst and calEvIn
+    array<string> evParts = str.split(str.replace_all(str.replace_all(evTxtIn, "\n", ","), ";", ","), ",")
+    for evRaw in evParts
+        string es = str.replace_all(evRaw, " ", "")
+        int    el = str.length(es)
+        if el >= 10
+            float ey = str.tonumber(str.substring(es, 0, 4))
+            float em = str.tonumber(str.substring(es, 5, 7))
+            float ed = str.tonumber(str.substring(es, 8, 10))
+            bool  ea = el < 14
+            float eh = ea ? 0.0 : str.tonumber(str.substring(es, 10, el - 3))
+            float en = ea ? 0.0 : str.tonumber(str.substring(es, el - 2))
+            if not na(ey) and not na(em) and not na(ed) and not na(eh) and not na(en) and em >= 1 and em <= 12 and ed >= 1 and ed <= 31
+                array.push(evT, timestamp("America/New_York", int(ey), int(em), int(ed), int(eh), int(en), 0))
+                array.push(evAll, ea)
+bool evBlock = false
+int  evNext  = na
+int  nEv     = array.size(evT)
+if newsOnIn and calEvIn and nEv > 0 and chartSec <= 86400
+    for i = 0 to nEv - 1
+        int  eT   = array.get(evT, i)
+        bool eAll = array.get(evAll, i)
+        int  e0   = eAll ? eT : eT - evPreIn * 60000
+        int  e1   = eAll ? eT + 86400000 : eT + evPostIn * 60000
+        if time < e1 and time + barMs > e0
+            evBlock := true
+        if e0 > time and (na(evNext) or e0 < evNext)
+            evNext := e0
 float atrPrev  = nz(atrRaw[1], atrS)
 float volPrev  = nz(ta.sma(nz(volume), 20)[1])
 bool  shockBar = newsOnIn and shockOnIn and ((high - low) >= shockAtrIn * atrPrev or (volPrev > 0 and nz(volume) >= shockVolIn * volPrev))
@@ -832,7 +964,7 @@ var int lastShockB = NEG_BIG
 if barstate.isconfirmed and shockBar
     lastShockB := bar_index
 bool  shockPause = newsOnIn and shockOnIn and bar_index - lastShockB <= shockBarsIn
-bool  newsBlock  = newsWin or shockPause
+bool  newsBlock  = newsWin or shockPause or evBlock
 bool  evNewsOn   = barstate.isconfirmed and newsBlock and not newsBlock[1]
 
 float atrPct   = nz(ta.percentrank(nz(atrRaw, atrS), 200), 50.0)
@@ -882,6 +1014,9 @@ var array<float> calS   = array.new<float>(10, 0.0)
 var array<float> ctxN   = array.new<float>(12, 0.0)
 var array<float> ctxH   = array.new<float>(12, 0.0)
 var array<float> ctxS   = array.new<float>(12, 0.0)
+var array<float> empSv  = array.new<float>(6 * EMP_NB, 0.0)
+var array<float> empN   = array.new<float>(6, 0.0)
+var array<float> brS    = array.new<float>(4, 0.0)
 var float        accHit = 0.0
 var float        accN   = 0.0
 
@@ -926,6 +1061,28 @@ bool   sigBear   = false
 string hitMsg    = ""
 
 // =====================================================================================================
+// EMPIRICAL EXCURSION LEARNING — every closed bar adds the bar H bars ago, whose horizon has now fully
+// elapsed (max run up / down in ATR, seasonality-normalised). Uses closed data only → no look-ahead.
+// =====================================================================================================
+int   h1Sg3 = (int(nz(h1St)) > 0 ? 1 : int(nz(h1St)) < 0 ? -1 : 0) + 1
+float exUp  = ta.highest(high, effHor)
+float exDn  = ta.lowest(low, effHor)
+float empBw = effDist * 2.5 / EMP_NB
+float empK  = empKIn * effHor
+if barstate.isconfirmed and masterIn and empOnIn and bar_index > effHor + 14
+    float eC = close[effHor]
+    float eA = atrS[effHor] * nz(sfNow[effHor], 1.0)
+    int   eG = nz(h1Sg3[effHor], 1)
+    if not na(eC) and eA > 0
+        f_empAdd(empSv, empN, eG * 2, (exUp - eC) / eA, empBw, EMP_NB)
+        f_empAdd(empSv, empN, eG * 2 + 1, (eC - exDn) / eA, empBw, EMP_NB)
+    if bar_index % 100 == 0
+        for k = 0 to array.size(empSv) - 1
+            array.set(empSv, k, array.get(empSv, k) * 0.97)
+        for k = 0 to 5
+            array.set(empN, k, array.get(empN, k) * 0.97)
+
+// =====================================================================================================
 // ENGINE — confirmed bars only
 // =====================================================================================================
 if barstate.isconfirmed and masterIn and inWin
@@ -936,8 +1093,8 @@ if barstate.isconfirmed and masterIn and inWin
     int   oldPrim = primId
 
     // ── 0. RESOLVE past predictions against this bar (feeds self-calibration + measured hit rate)
-    [rH, rD] = f_resolve(preds, calN, calH, calS, ctxN, ctxH, ctxS, true)
-    [aH, aD] = f_resolve(accs, calN, calH, calS, ctxN, ctxH, ctxS, false)
+    [rH, rD] = f_resolve(preds, calN, calH, calS, ctxN, ctxH, ctxS, brS, true)
+    [aH, aD] = f_resolve(accs, calN, calH, calS, ctxN, ctxH, ctxS, brS, false)
     accHit += aH
     accN   += aD
 
@@ -1294,8 +1451,8 @@ if barstate.isconfirmed and masterIn and inWin
             z.dist  := dAtr
             z.elig  := elig
             z.score := sc
-            float pm = f_potModel(dPx, sigma, effHor, mu * side, sc)
-            int   cx = f_ctxId(z.kind, side, h1S > 0 ? 1 : h1S < 0 ? -1 : 0)
+            float pm = f_potAll(dPx, side, h1Sg3, sigma, effHor, mu * side, sc, empSv, empN, empBw, EMP_NB, atrS, sfNow, empK, empOnIn)
+            int   cx = f_ctxId(z.kind, side, h1Sg3 - 1)
             float pb = f_calib(pm, calN, calH, calS, calKIn, calOnIn)
             z.potM  := pm
             z.potB  := pb
@@ -1370,15 +1527,21 @@ if barstate.isconfirmed and masterIn and inWin
     if secIdx >= 0
         secId := array.get(zs, secIdx).id
 
-    // ── 6b. SAMPLE predictions of the active DOL (resolved on later bars only → no look-ahead)
-    if newIdx >= 0
-        Zn    pz  = array.get(zs, newIdx)
-        float tl  = f_trigLvl(pz)
-        int   smp = math.max(1, int(effHor / 5))
-        if bar_index % smp == 0 and array.size(preds) < 400
-            array.push(preds, Pred.new(tl, pz.side, bar_index + effHor, math.min(9, math.max(0, int(math.floor(pz.potM / 10.0)))), pz.potM / 100.0, pz.ctx, pz.potB / 100.0))
-        if evNewDol and array.size(accs) < 400
-            array.push(accs, Pred.new(tl, pz.side, bar_index + effHor, 0, 0.0, 0, 0.0))
+    // ── 6b. SAMPLE predictions — the DOL and the best target on each side, weighted by 1 / overlap so the
+    //        calibration prior counts independent horizons. Resolved on later bars only → no look-ahead.
+    int smp = math.max(1, int(effHor / 5))
+    if bar_index % smp == 0
+        float      wS   = float(smp) / effHor
+        array<int> cand = array.from(newIdx, bestU, bestD)
+        array<int> seen = array.new<int>()
+        for ci in cand
+            if ci >= 0 and not array.includes(seen, ci) and array.size(preds) < 400
+                array.push(seen, ci)
+                Zn pz = array.get(zs, ci)
+                array.push(preds, Pred.new(f_trigLvl(pz), pz.side, bar_index + effHor, math.min(9, math.max(0, int(math.floor(pz.potM / 10.0)))), pz.potM / 100.0, pz.ctx, pz.potB / 100.0, pz.pot / 100.0, wS))
+    if newIdx >= 0 and evNewDol and array.size(accs) < 400
+        Zn pa = array.get(zs, newIdx)
+        array.push(accs, Pred.new(f_trigLvl(pa), pa.side, bar_index + effHor, 0, 0.0, 0, 0.0, 0.0, 0.0))
 
     float curScore = nz(primScr, 0.0)
     float curPot   = nz(primPot, 0.0)
@@ -1457,6 +1620,7 @@ if barstate.isconfirmed and masterIn and inWin
         else if effHold > 0 and bar_index - vtBar >= effHold
             rr := (close - vtEn) * vtDir / risk
         if not na(rr)
+            rr  := rr - costIn * syminfo.mintick / risk
             wrN += 1
             wrW += rr > 0 ? 1 : 0
             wrPosR += math.max(rr, 0.0)
@@ -1575,13 +1739,13 @@ f_liveDist(Zn z, float px) =>
         d := z.side == 1 ? math.max(z.bot - px, 0.0) : math.max(px - z.top, 0.0)
     d
 
-var table tbl = table.new(f_pos(tblPosIn), 3, 12, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
-var table dbg = table.new(position.bottom_left, 2, 19, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
+var table tbl = table.new(f_pos(tblPosIn), 3, 13, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
+var table dbg = table.new(position.bottom_left, 2, 22, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
     f_clearAll(rB, rL, rT)
-    table.clear(tbl, 0, 0, 2, 11)
-    table.clear(dbg, 0, 0, 1, 18)
+    table.clear(tbl, 0, 0, 2, 12)
+    table.clear(dbg, 0, 0, 1, 21)
 
 if barstate.islast and masterIn
     int    rightT = time + extIn * barMs
@@ -1699,7 +1863,7 @@ if barstate.islast and masterIn
         Zn    s  = array.get(zs, sIdx)
         color sc = s.side == 1 ? colBullIn : colBearIn
         float y  = f_isPool(s) ? s.lvl : s.side == 1 ? s.bot : s.top
-        float sp = math.round(math.max(0.1, math.min(95.0, f_calib(f_potModel(f_liveDist(s, close), sigma, effHor, mu * s.side, s.score), calN, calH, calS, calKIn, calOnIn) + 100.0 * f_ctxRes(s.ctx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
+        float sp = math.round(math.max(0.1, math.min(95.0, f_calib(f_potAll(f_liveDist(s, close), s.side, h1Sg3, sigma, effHor, mu * s.side, s.score, empSv, empN, empBw, EMP_NB, atrS, sfNow, empK, empOnIn), calN, calH, calS, calKIn, calOnIn) + 100.0 * f_ctxRes(s.ctx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
         f_mkBox(rB, s.t0, s.top, rightT, s.bot, color.new(sc, 93), color.new(sc, 100), line.style_solid, "", sc)
         f_mkLine(rL, s.t0, y, rightT, y, color.new(sc, 45), line.style_dashed, 1)
         f_mkLbl(rT, rightT, y, f_kindTxt(s) + " " + str.tostring(math.round(s.score)) + " · " + str.tostring(sp, "0.0") + "%", noCol, color.new(sc, 30), label.style_label_left, size.tiny, f_srcList(s) + " · " + s.tf)
@@ -1709,7 +1873,7 @@ if barstate.islast and masterIn
         Zn     p    = array.get(zs, pIdx)
         int    sd   = p.side
         color  dc   = sd == 1 ? colBullIn : colBearIn
-        float  potL = math.round(math.max(0.1, math.min(95.0, f_calib(f_potModel(f_liveDist(p, close), sigma, effHor, mu * sd, p.score), calN, calH, calS, calKIn, calOnIn) + 100.0 * f_ctxRes(p.ctx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
+        float  potL = math.round(math.max(0.1, math.min(95.0, f_calib(f_potAll(f_liveDist(p, close), sd, h1Sg3, sigma, effHor, mu * sd, p.score, empSv, empN, empBw, EMP_NB, atrS, sfNow, empK, empOnIn), calN, calH, calS, calKIn, calOnIn) + 100.0 * f_ctxRes(p.ctx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
         string arw  = sd == 1 ? "▲" : "▼"
         dolTxt := arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
         potTxt := str.tostring(potL, "0.0") + "%"
@@ -1746,9 +1910,14 @@ if barstate.islast and masterIn
         table.cell(tbl, 0, 4, "ALIGN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
         table.cell(tbl, 1, 4, aligned ? "✓" : "·", text_color = ac, text_size = tsz, text_font_family = font.family_monospace)
         table.cell(tbl, 2, 4, aligned ? (exSign == 1 ? "LONG" : "SHORT") : "WAIT", text_color = ac, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-        string nwTxt = not newsOnIn ? "OFF" : newsWin ? "BLACKOUT" : shockPause ? "SPIKE · " + str.tostring(shockBarsIn - (bar_index - lastShockB)) + " bars" : "CLEAR"
+        string nxTxt = ""
+        if not na(evNext)
+            int mins = int((evNext - time) / 60000)
+            if mins < 10080
+                nxTxt := " · next " + (mins < 60 ? str.tostring(mins) + "m" : mins < 1440 ? str.tostring(math.round(mins / 60.0)) + "h" : str.tostring(math.round(mins / 1440.0)) + "d")
+        string nwTxt = not newsOnIn ? "OFF" : evBlock ? "EVENT" : newsWin ? "BLACKOUT" : shockPause ? "SPIKE · " + str.tostring(shockBarsIn - (bar_index - lastShockB)) + " bars" : "CLEAR" + nxTxt
         color  nwCol = not newsOnIn ? colNeuIn : newsBlock ? colBearIn : colBullIn
-        table.cell(tbl, 0, 5, "NEWS", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "News Guard: scheduled release windows + automatic spike detection. Signals are paused while not CLEAR.")
+        table.cell(tbl, 0, 5, "NEWS", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "News Guard: event calendar + daily release windows + automatic spike detection. Signals are paused while not CLEAR. 'next' = time to the next calendar event (within 7 days).")
         table.cell(tbl, 1, 5, newsBlock ? "!" : "·", text_color = nwCol, text_size = tsz, text_font_family = font.family_monospace)
         table.cell(tbl, 2, 5, nwTxt, text_color = nwCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         color  vrCol = volReg == "NORMAL" ? colBullIn : volReg == "HIGH" ? colObIn : colBearIn
@@ -1762,22 +1931,33 @@ if barstate.islast and masterIn
         table.cell(tbl, 1, 8, "", text_size = tsz)
         table.cell(tbl, 2, 8, potTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         if showAccIn
-            string accTxt = accN >= 10 ? str.tostring(100.0 * accHit / accN, "0") + "% · " + str.tostring(accHit, "0") + "/" + str.tostring(accN, "0") : "n=" + str.tostring(accN, "0")
-            table.cell(tbl, 0, 9, "HIT", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(effHor) + " bars of being selected (this chart, resolved outcomes only).")
+            float  bN    = array.get(brS, 0)
+            float  oBar  = bN > 0 ? array.get(brS, 2) / bN : 0.0
+            float  bRef  = oBar * (1.0 - oBar)
+            float  skl   = bN > 0 and bRef > 0 ? 1.0 - (array.get(brS, 1) / bN) / bRef : na
+            float  sklM  = bN > 0 and bRef > 0 ? 1.0 - (array.get(brS, 3) / bN) / bRef : na
+            bool   skOk  = bN >= 10 and not na(skl)
+            string skTxt = skOk ? (skl >= 0 ? "+" : "") + str.tostring(100.0 * skl, "0") + "% · n " + str.tostring(bN, "0") : "learning · n " + str.tostring(bN, "0")
+            color  skCol = skOk ? (skl > 0 ? colBullIn : colBearIn) : colNeuIn
+            table.cell(tbl, 0, 9, "SKILL", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Brier skill score of the shown PoT on this chart's resolved predictions vs. always guessing the base rate (" + str.tostring(100.0 * oBar, "0") + "%). Above 0 = PoT has real predictive skill here. Uncalibrated model: " + (na(sklM) ? "—" : str.tostring(100.0 * sklM, "0") + "%") + ". n = independent samples.")
             table.cell(tbl, 1, 9, "", text_size = tsz)
-            table.cell(tbl, 2, 9, accTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            table.cell(tbl, 2, 9, skTxt, text_color = skCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            string accTxt = accN >= 10 ? str.tostring(100.0 * accHit / accN, "0") + "% · " + str.tostring(accHit, "0") + "/" + str.tostring(accN, "0") : "n=" + str.tostring(accN, "0")
+            table.cell(tbl, 0, 10, "HIT", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(effHor) + " bars of being selected (this chart, resolved outcomes only).")
+            table.cell(tbl, 1, 10, "", text_size = tsz)
+            table.cell(tbl, 2, 10, accTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         if showWrIn
             string pfTxt = wrNegR > 0 ? str.tostring(wrPosR / wrNegR, "0.00") : wrPosR > 0 ? "∞" : "—"
             string wrTxt = wrN >= 1 ? str.tostring(100.0 * wrW / wrN, "0") + "% · PF " + pfTxt + " · " + str.tostring(wrN, "0") : "no trades yet"
             color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colBullIn : colBearIn) : colNeuIn
             float  expR  = wrN >= 1 ? (wrPosR - wrNegR) / wrN : 0.0
             string edTxt = wrN >= 1 ? (expR >= 0 ? "+" : "") + str.tostring(expR, "0.00") + "R/trade · DD " + str.tostring(maxDD, "0.0") + "R" : "—"
-            table.cell(tbl, 0, 10, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Stop beyond swept liquidity, target = DOL, min R:R " + str.tostring(minRRIn, "0.0") + ". Past results only — not a guarantee.")
-            table.cell(tbl, 1, 10, "", text_size = tsz)
-            table.cell(tbl, 2, 10, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-            table.cell(tbl, 0, 11, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
+            table.cell(tbl, 0, 11, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Stop beyond swept liquidity, target = DOL, min R:R " + str.tostring(minRRIn, "0.0") + ", cost " + str.tostring(costIn, "0") + " ticks. Past results only — not a guarantee.")
             table.cell(tbl, 1, 11, "", text_size = tsz)
-            table.cell(tbl, 2, 11, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            table.cell(tbl, 2, 11, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            table.cell(tbl, 0, 12, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
+            table.cell(tbl, 1, 12, "", text_size = tsz)
+            table.cell(tbl, 2, 12, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
     // ── Debug panel
     if debugIn
@@ -1796,8 +1976,8 @@ if barstate.islast and masterIn
         string potMd = "—"
         if pIdx >= 0
             potMd := str.tostring(array.get(zs, pIdx).potM, "0.0") + "% → " + str.tostring(array.get(zs, pIdx).pot, "0.0") + "%"
-        array<string> ks = array.from("Pools", "PD arrays", "Eligible", "Ghosts", "ATR", "σ / μ per bar", "Pivot len", "STF / HTF / Macro", "DOL", "Score", "Components", "Source", "PoT model → cal", "Cal samples", "Hit rate", "Last event", "Exec state", "HTF state", "Pending")
-        array<string> vs = array.from(str.tostring(nPool), str.tostring(nArr), str.tostring(eligCnt), str.tostring(array.size(ghosts)), str.tostring(atrS, format.mintick), str.tostring(sigma, format.mintick) + " / " + str.tostring(mu, format.mintick), str.tostring(pivLen), stfLbl + " / " + h1Lbl + " / " + h2Lbl, dolTxt, str.tostring(nz(primScr), "0.0"), cmp, src, potMd, str.tostring(calTot, "0"), accN > 0 ? str.tostring(100.0 * accHit / accN, "0.0") + "% (" + str.tostring(accN, "0") + ")" : "—", lastEvtTxt, str.tostring(bEx), str.tostring(bH1), str.tostring(array.size(preds)) + " / " + str.tostring(array.size(accs)))
+        array<string> ks = array.from("Pools", "PD arrays", "Eligible", "Ghosts", "ATR", "σ / μ per bar", "Pivot len", "STF / HTF / Macro", "DOL", "Score", "Components", "Source", "PoT model → cal", "Cal samples (eff)", "Hit rate", "Last event", "Exec state", "HTF state", "Pending", "Emp n up / dn", "Season factor", "Brier cal / model")
+        array<string> vs = array.from(str.tostring(nPool), str.tostring(nArr), str.tostring(eligCnt), str.tostring(array.size(ghosts)), str.tostring(atrS, format.mintick), str.tostring(sigma, format.mintick) + " / " + str.tostring(mu, format.mintick), str.tostring(pivLen), stfLbl + " / " + h1Lbl + " / " + h2Lbl, dolTxt, str.tostring(nz(primScr), "0.0"), cmp, src, potMd, str.tostring(calTot, "0"), accN > 0 ? str.tostring(100.0 * accHit / accN, "0.0") + "% (" + str.tostring(accN, "0") + ")" : "—", lastEvtTxt, str.tostring(bEx), str.tostring(bH1), str.tostring(array.size(preds)) + " / " + str.tostring(array.size(accs)), str.tostring(array.get(empN, h1Sg3 * 2), "0") + " / " + str.tostring(array.get(empN, h1Sg3 * 2 + 1), "0"), str.tostring(sfNow, "0.00") + (seasOk ? "" : " (off)"), array.get(brS, 0) > 0 ? str.tostring(array.get(brS, 1) / array.get(brS, 0), "0.000") + " / " + str.tostring(array.get(brS, 3) / array.get(brS, 0), "0.000") : "—")
         for r = 0 to array.size(ks) - 1
             table.cell(dbg, 0, r, array.get(ks, r), text_color = color.new(colTextIn, 35), text_size = size.tiny, text_halign = text.align_left, text_font_family = font.family_monospace)
             table.cell(dbg, 1, r, array.get(vs, r), text_color = colTextIn, text_size = size.tiny, text_halign = text.align_left, text_font_family = font.family_monospace)
@@ -1854,6 +2034,6 @@ if barstate.isconfirmed and masterIn and inWin
     if alBiasIn and evBiasChg
         alert("HTF Bias " + f_biasTxt(bH1) + " | " + h1Lbl + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
     if alNewsIn and evNewsOn
-        alert("News blackout started (" + (newsWin ? "scheduled window" : "volatility spike") + ") | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+        alert("News blackout started (" + (evBlock ? "calendar event" : newsWin ? "scheduled window" : "volatility spike") + ") | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
     if alAlignIn and evAlign
         alert("Exec/HTF Aligned " + (exSign == 1 ? "LONG" : "SHORT") + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
