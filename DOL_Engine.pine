@@ -1,7 +1,7 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © clipzfb02-crypto
 //
-// DOL ENGINE v4 — Draw on Liquidity (self-calibrating · News Guard · filtered signals)
+// DOL ENGINE v4 — Draw on Liquidity (auto-adaptive · two-stage self-calibration · News Guard · filtered signals)
 // Original Pine Script v6 code (not derived from any closed-source script).
 //
 // One clean read: WHERE is price being drawn, HOW strong is that draw, and WHAT is the bias.
@@ -105,6 +105,8 @@ type Zn
     float  score     = 0.0
     float  pot       = 0.0
     float  potM      = 0.0
+    float  potB      = 0.0
+    int    ctx       = 0
     float  prio      = 0.0
     float  fP        = 0.0
     float  fF        = 0.0
@@ -128,6 +130,8 @@ type Pred
     int   exp
     int   bin
     float pm
+    int   ctx
+    float pb
 
 type SEvt
     int   dir
@@ -140,7 +144,8 @@ type SEvt
 // INPUTS
 // =====================================================================================================
 // ── GENERAL
-modeIn   = input.string("Scalping", "Trading Mode", options = ["Scalping", "Day Trading", "Swing"], group = G_GEN, tooltip = "Auto timeframes (never below the chart):\nScalping → STF 15m · HTF 1H · Macro 4H\nDay Trading → STF 1H · HTF 4H · Macro D\nSwing → STF 4H · HTF D · Macro W")
+modeIn   = input.string("Auto", "Trading Mode", options = ["Auto", "Scalping", "Day Trading", "Swing"], group = G_GEN, tooltip = "Auto picks the mode from the chart timeframe: ≤ 5m Scalping · ≤ 1H Day Trading · above Swing.\nScalping → STF 15m · HTF 1H · Macro 4H\nDay Trading → STF 1H · HTF 4H · Macro D\nSwing → STF 4H · HTF D · Macro W\n(Timeframes are never below the chart.)")
+autoTuneIn = input.bool(true, "Auto-Tune Distances by Mode", group = G_GEN, tooltip = "When on, Max ATR Distance, PoT Horizon, Stop Lookback and Time Stop follow the mode (Scalping 4 / 20 / 15 / 40 · Day 6 / 30 / 20 / 60 · Swing 8 / 40 / 30 / 80) and the manual values below are ignored.")
 tfSelIn  = input.string("Auto", "Timeframe Selection", options = ["Auto", "Manual"], group = G_GEN)
 histIn   = input.int(5000, "History Depth (bars)", minval = 500, maxval = 20000, step = 500, group = G_GEN, tooltip = "Bars processed by the engine. Keeps the script fast and inside TradingView limits.")
 masterIn = input.bool(true, "Master Enable", group = G_GEN)
@@ -157,13 +162,13 @@ htfPivIn = input.int(3, "HTF Pivot Length", minval = 1, maxval = 20, group = G_T
 showDolIn  = input.bool(true, "Show DOL", group = G_DOL)
 minPotIn   = input.float(5.0, "Minimum PoT to Show DOL (%)", minval = 0.0, maxval = 95.0, step = 0.5, group = G_DOL)
 minScoreIn = input.int(40, "Minimum Target Score", minval = 0, maxval = 100, group = G_DOL)
-maxDistIn  = input.float(4.0, "Max ATR Distance", minval = 0.5, maxval = 50.0, step = 0.5, group = G_DOL, tooltip = "Targets farther than this are not eligible. The active DOL is ejected (Ghost Trail) when price moves too far away.")
+maxDistIn  = input.float(6.0, "Max ATR Distance", minval = 0.5, maxval = 50.0, step = 0.5, group = G_DOL, tooltip = "Targets farther than this are not eligible. The active DOL is ejected (Ghost Trail) when price moves too far away.")
 hitRuleIn  = input.string("Touch Zone", "Target Hit Rule", options = ["Touch Zone", "Wick Through", "Close Through"], group = G_DOL, tooltip = "Touch Zone: any trade inside the zone hits the target.\nWick Through: price must trade beyond the liquidity level.\nClose Through: a candle must close beyond it.")
 useArrIn   = input.bool(true, "PD Arrays Can Be Targets", group = G_DOL, tooltip = "Allow FVG / iFVG / OB / Breaker zones to become the DOL (not only BSL / SSL pools).")
 mergeIn    = input.float(0.25, "Merge Distance (ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = G_DOL)
 zoneIn     = input.float(0.10, "Pool Zone Height (ATR)", minval = 0.01, maxval = 2.0, step = 0.01, group = G_DOL)
 hystIn     = input.float(6.0, "Switch Hysteresis (pts)", minval = 0.0, maxval = 30.0, step = 0.5, group = G_DOL, tooltip = "A challenger must beat the active DOL by this many score points. Prevents flicker.")
-potHorIn   = input.int(20, "PoT Horizon (bars)", minval = 5, maxval = 200, group = G_DOL, tooltip = "Bars ahead over which PoT and the measured DOL hit rate are evaluated.")
+potHorIn   = input.int(30, "PoT Horizon (bars)", minval = 5, maxval = 200, group = G_DOL, tooltip = "Bars ahead over which PoT and the measured DOL hit rate are evaluated.")
 minDistIn  = input.float(0.25, "Min New-Target Distance (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_DOL, tooltip = "A new DOL must be at least this far away. Prevents picking levels price is already trading into. The active DOL is kept while price approaches it.")
 potRankIn  = input.float(0.35, "PoT Weight in Ranking", minval = 0.0, maxval = 1.0, step = 0.05, group = G_DOL, tooltip = "Ranking priority = (1 - w) × Score + w × calibrated PoT.")
 poolMaxIn  = input.int(24, "Max Liquidity Pools", minval = 6, maxval = 60, group = G_DOL)
@@ -282,10 +287,10 @@ newsBgIn   = input.bool(false, "Shade News Blackouts", group = G_NEWS)
 // ── WIN-RATE TRACKER (virtual trades on the execution signals — shown in the table, no strategy needed)
 G_TRD      = "◆ WIN-RATE TRACKER"
 showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = DOL). Works even when signal markers are hidden.")
-stopLbIn   = input.int(15, "Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD)
+stopLbIn   = input.int(20, "Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD)
 stopBufIn  = input.float(0.2, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD)
 minRRIn    = input.float(1.5, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD)
-maxHoldIn  = input.int(40, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
+maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
 beAtRIn    = input.float(0.0, "Breakeven at R (0 = off)", minval = 0.0, maxval = 10.0, step = 0.25, group = G_TRD, tooltip = "Moves the virtual stop to entry once price has moved this many R in favour.")
 
 // ── CALIBRATION / ACCURACY
@@ -377,6 +382,14 @@ f_calib(float modelPot, array<float> cN, array<float> cH, array<float> cS, float
         float r1 = (array.get(cH, b1) - array.get(cS, b1)) / (array.get(cN, b1) + k)
         res := modelPot + 100.0 * ((1.0 - w) * r0 + w * r1)
     math.round(math.max(0.1, math.min(95.0, res)), 1)
+
+// Stage-2 calibration: residual of a context (target kind × HTF alignment) measured against the
+// stage-1 (bin-calibrated) prediction, shrunk by a prior of k samples. Learns per market what works.
+f_ctxRes(int ctx, array<float> xN, array<float> xH, array<float> xS, float k, bool on) =>
+    on ? (array.get(xH, ctx) - array.get(xS, ctx)) / (array.get(xN, ctx) + k) : 0.0
+
+f_ctxId(int kind, int side, int htfSign) =>
+    math.max(0, math.min(11, kind * 2 + (side != 0 and side == htfSign ? 1 : 0)))
 
 f_isPool(Zn z) =>
     z.kind == K_BSL or z.kind == K_SSL
@@ -557,7 +570,7 @@ f_ghost(array<Ghost> gs, Zn z, int t1, string why, int maxG) =>
     true
 
 // Resolve pending predictions against the current bar: hit if price reached the level, else expire.
-f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, bool useBins) =>
+f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, array<float> xN, array<float> xH, array<float> xS, bool useBins) =>
     int hits = 0
     int done = 0
     int n    = array.size(ps)
@@ -573,6 +586,10 @@ f_resolve(array<Pred> ps, array<float> cN, array<float> cH, array<float> cS, boo
                     array.set(cS, q.bin, array.get(cS, q.bin) + q.pm)
                     if h
                         array.set(cH, q.bin, array.get(cH, q.bin) + 1.0)
+                    array.set(xN, q.ctx, array.get(xN, q.ctx) + 1.0)
+                    array.set(xS, q.ctx, array.get(xS, q.ctx) + q.pb)
+                    if h
+                        array.set(xH, q.ctx, array.get(xH, q.ctx) + 1.0)
                 array.remove(ps, i)
     [hits, done]
 
@@ -717,10 +734,18 @@ f_period(bool isNew) =>
 // TIMEFRAME RESOLUTION (simple strings only — required by request.security)
 // =====================================================================================================
 int    chartSec = timeframe.in_seconds()
+// Effective mode (Auto = from chart timeframe) and mode-tuned distances — works on any market / timeframe
+string effMode  = modeIn != "Auto" ? modeIn : chartSec <= 300 ? "Scalping" : chartSec <= 3600 ? "Day Trading" : "Swing"
+bool   mScalp   = effMode == "Scalping"
+bool   mDay     = effMode == "Day Trading"
+float  effDist  = autoTuneIn ? (mScalp ? 4.0 : mDay ? 6.0 : 8.0) : maxDistIn
+int    effHor   = autoTuneIn ? (mScalp ? 20 : mDay ? 30 : 40) : potHorIn
+int    effStop  = autoTuneIn ? (mScalp ? 15 : mDay ? 20 : 30) : stopLbIn
+int    effHold  = autoTuneIn ? (mScalp ? 40 : mDay ? 60 : 80) : maxHoldIn
 bool   isAuto   = tfSelIn == "Auto"
-string aStf     = modeIn == "Scalping" ? "15"  : modeIn == "Day Trading" ? "60"  : "240"
-string aH1      = modeIn == "Scalping" ? "60"  : modeIn == "Day Trading" ? "240" : "1D"
-string aH2      = modeIn == "Scalping" ? "240" : modeIn == "Day Trading" ? "1D"  : "1W"
+string aStf     = mScalp ? "15"  : mDay ? "60"  : "240"
+string aH1      = mScalp ? "60"  : mDay ? "240" : "1D"
+string aH2      = mScalp ? "240" : mDay ? "1D"  : "1W"
 
 int    sAStf  = timeframe.in_seconds(aStf)
 string stfTf  = isAuto ? f_ladder(sAStf > chartSec ? sAStf : chartSec) : f_clampTf(f_orChart(mStfIn), chartSec)
@@ -742,7 +767,7 @@ string h2Lbl  = f_tfLbl(h2Tf)
 string exLbl  = f_tfLbl(exTf)
 
 // Pivot length by mode / sensitivity (simple int)
-int pivLen = pivAutoIn ? (modeIn == "Scalping" ? (sensIn == "High" ? 2 : sensIn == "Normal" ? 3 : 5) : modeIn == "Day Trading" ? (sensIn == "High" ? 3 : sensIn == "Normal" ? 5 : 8) : (sensIn == "High" ? 5 : sensIn == "Normal" ? 8 : 12)) : pivLenIn
+int pivLen = pivAutoIn ? (mScalp ? (sensIn == "High" ? 2 : sensIn == "Normal" ? 3 : 5) : mDay ? (sensIn == "High" ? 3 : sensIn == "Normal" ? 5 : 8) : (sensIn == "High" ? 5 : sensIn == "Normal" ? 8 : 12)) : pivLenIn
 
 bool pdOk    = chartSec < 86400
 bool pwOk    = chartSec < 604800
@@ -854,6 +879,9 @@ var array<Pred>  accs   = array.new<Pred>()
 var array<float> calN   = array.new<float>(10, 0.0)
 var array<float> calH   = array.new<float>(10, 0.0)
 var array<float> calS   = array.new<float>(10, 0.0)
+var array<float> ctxN   = array.new<float>(12, 0.0)
+var array<float> ctxH   = array.new<float>(12, 0.0)
+var array<float> ctxS   = array.new<float>(12, 0.0)
 var float        accHit = 0.0
 var float        accN   = 0.0
 
@@ -908,8 +936,8 @@ if barstate.isconfirmed and masterIn and inWin
     int   oldPrim = primId
 
     // ── 0. RESOLVE past predictions against this bar (feeds self-calibration + measured hit rate)
-    [rH, rD] = f_resolve(preds, calN, calH, calS, true)
-    [aH, aD] = f_resolve(accs, calN, calH, calS, false)
+    [rH, rD] = f_resolve(preds, calN, calH, calS, ctxN, ctxH, ctxS, true)
+    [aH, aD] = f_resolve(accs, calN, calH, calS, ctxN, ctxH, ctxS, false)
     accHit += aH
     accN   += aD
 
@@ -1182,7 +1210,7 @@ if barstate.isconfirmed and masterIn and inWin
                         remove := true
             float dAtr = math.abs(z.lvl - close) / atrS
             bool expired = bar_index - z.bRef > (f_isPool(z) ? maxAgeIn : zoneAgeIn)
-            bool farOut  = dAtr > maxDistIn * 3.0
+            bool farOut  = dAtr > effDist * 3.0
             if isP and why == "" and (remove or expired or farOut)
                 why := expired ? "EXPIRED" : farOut ? "EJECTED" : "INVALID"
             if isP and why != ""
@@ -1216,9 +1244,9 @@ if barstate.isconfirmed and masterIn and inWin
             float dPx   = pool and hitRuleIn != "Touch Zone" ? math.abs(z.lvl - close) : nearD
             float dAtr  = dPx / atrS
             bool  okK   = pool ? side == z.pol : useArrIn and not z.reached
-            bool  elig  = okK and side != 0 and dAtr <= maxDistIn
+            bool  elig  = okK and side != 0 and dAtr <= effDist
             // A. proximity (Cauchy-shaped: 1 at price, 0.5 at 35 % of max distance)
-            float fP = 1.0 / (1.0 + math.pow(dAtr / (maxDistIn * 0.35), 2))
+            float fP = 1.0 / (1.0 + math.pow(dAtr / (effDist * 0.35), 2))
             // B. freshness (exponential half-life; HTF sources decay slower)
             float sw = f_structW(z)
             float hl = halfLifeIn * (1.0 + 2.0 * (pool and (z.fHtf or z.fPW or z.fPM) ? 1.0 : 0.0) + (pool and z.fPD ? 1.0 : 0.0))
@@ -1266,9 +1294,13 @@ if barstate.isconfirmed and masterIn and inWin
             z.dist  := dAtr
             z.elig  := elig
             z.score := sc
-            float pm = f_potModel(dPx, sigma, potHorIn, mu * side, sc)
+            float pm = f_potModel(dPx, sigma, effHor, mu * side, sc)
+            int   cx = f_ctxId(z.kind, side, h1S > 0 ? 1 : h1S < 0 ? -1 : 0)
+            float pb = f_calib(pm, calN, calH, calS, calKIn, calOnIn)
             z.potM  := pm
-            z.pot   := f_calib(pm, calN, calH, calS, calKIn, calOnIn)
+            z.potB  := pb
+            z.ctx   := cx
+            z.pot   := math.round(math.max(0.1, math.min(95.0, pb + 100.0 * f_ctxRes(cx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
             z.prio  := (1.0 - potRankIn) * sc + potRankIn * z.pot
             z.fP := fP
             z.fF := fF
@@ -1302,7 +1334,7 @@ if barstate.isconfirmed and masterIn and inWin
         Zn cur = array.get(zs, curIdx)
         bool faded = cur.score < minScoreIn - hystIn * 0.5 or cur.pot < minPotIn - 1.0
         if not cur.elig or faded
-            string why2 = cur.dist > maxDistIn ? "EJECTED" : "FADED"
+            string why2 = cur.dist > effDist ? "EJECTED" : "FADED"
             f_ghost(ghosts, cur, time, why2, ghostMaxIn)
             lastEvtTxt := f_kindTxt(cur) + " " + why2
             curIdx := -1
@@ -1342,11 +1374,11 @@ if barstate.isconfirmed and masterIn and inWin
     if newIdx >= 0
         Zn    pz  = array.get(zs, newIdx)
         float tl  = f_trigLvl(pz)
-        int   smp = math.max(1, int(potHorIn / 5))
+        int   smp = math.max(1, int(effHor / 5))
         if bar_index % smp == 0 and array.size(preds) < 400
-            array.push(preds, Pred.new(tl, pz.side, bar_index + potHorIn, math.min(9, math.max(0, int(math.floor(pz.potM / 10.0)))), pz.potM / 100.0))
+            array.push(preds, Pred.new(tl, pz.side, bar_index + effHor, math.min(9, math.max(0, int(math.floor(pz.potM / 10.0)))), pz.potM / 100.0, pz.ctx, pz.potB / 100.0))
         if evNewDol and array.size(accs) < 400
-            array.push(accs, Pred.new(tl, pz.side, bar_index + potHorIn, 0, 0.0))
+            array.push(accs, Pred.new(tl, pz.side, bar_index + effHor, 0, 0.0, 0, 0.0))
 
     float curScore = nz(primScr, 0.0)
     float curPot   = nz(primPot, 0.0)
@@ -1396,8 +1428,8 @@ if barstate.isconfirmed and masterIn and inWin
 // =====================================================================================================
 // WIN-RATE TRACKER — virtual trades, resolved on later bars only (stop checked first = conservative)
 // =====================================================================================================
-float swLo = ta.lowest(low, stopLbIn)
-float swHi = ta.highest(high, stopLbIn)
+float swLo = ta.lowest(low, effStop)
+float swHi = ta.highest(high, effStop)
 var int   vtDir  = 0
 var float vtEn   = na
 var float vtSL   = na
@@ -1422,7 +1454,7 @@ if barstate.isconfirmed and masterIn and inWin
             rr := (vtSL - vtEn) * vtDir / risk
         else if hitTP
             rr := (vtTP - vtEn) * vtDir / risk
-        else if maxHoldIn > 0 and bar_index - vtBar >= maxHoldIn
+        else if effHold > 0 and bar_index - vtBar >= effHold
             rr := (close - vtEn) * vtDir / risk
         if not na(rr)
             wrN += 1
@@ -1610,7 +1642,7 @@ if barstate.islast and masterIn
 
     // ── PD arrays (optional)
     if showFvgIn or showIfvgIn or showObIn or showBrkIn
-        float aD = maxDistIn * atrS
+        float aD = effDist * atrS
         for sd = 0 to 1
             int side = sd == 0 ? 1 : -1
             for kk = 0 to 3
@@ -1667,7 +1699,7 @@ if barstate.islast and masterIn
         Zn    s  = array.get(zs, sIdx)
         color sc = s.side == 1 ? colBullIn : colBearIn
         float y  = f_isPool(s) ? s.lvl : s.side == 1 ? s.bot : s.top
-        float sp = f_calib(f_potModel(f_liveDist(s, close), sigma, potHorIn, mu * s.side, s.score), calN, calH, calS, calKIn, calOnIn)
+        float sp = math.round(math.max(0.1, math.min(95.0, f_calib(f_potModel(f_liveDist(s, close), sigma, effHor, mu * s.side, s.score), calN, calH, calS, calKIn, calOnIn) + 100.0 * f_ctxRes(s.ctx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
         f_mkBox(rB, s.t0, s.top, rightT, s.bot, color.new(sc, 93), color.new(sc, 100), line.style_solid, "", sc)
         f_mkLine(rL, s.t0, y, rightT, y, color.new(sc, 45), line.style_dashed, 1)
         f_mkLbl(rT, rightT, y, f_kindTxt(s) + " " + str.tostring(math.round(s.score)) + " · " + str.tostring(sp, "0.0") + "%", noCol, color.new(sc, 30), label.style_label_left, size.tiny, f_srcList(s) + " · " + s.tf)
@@ -1677,7 +1709,7 @@ if barstate.islast and masterIn
         Zn     p    = array.get(zs, pIdx)
         int    sd   = p.side
         color  dc   = sd == 1 ? colBullIn : colBearIn
-        float  potL = f_calib(f_potModel(f_liveDist(p, close), sigma, potHorIn, mu * sd, p.score), calN, calH, calS, calKIn, calOnIn)
+        float  potL = math.round(math.max(0.1, math.min(95.0, f_calib(f_potModel(f_liveDist(p, close), sigma, effHor, mu * sd, p.score), calN, calH, calS, calKIn, calOnIn) + 100.0 * f_ctxRes(p.ctx, ctxN, ctxH, ctxS, calKIn, calOnIn))), 1)
         string arw  = sd == 1 ? "▲" : "▼"
         dolTxt := arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
         potTxt := str.tostring(potL, "0.0") + "%"
@@ -1731,7 +1763,7 @@ if barstate.islast and masterIn
         table.cell(tbl, 2, 8, potTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         if showAccIn
             string accTxt = accN >= 10 ? str.tostring(100.0 * accHit / accN, "0") + "% · " + str.tostring(accHit, "0") + "/" + str.tostring(accN, "0") : "n=" + str.tostring(accN, "0")
-            table.cell(tbl, 0, 9, "HIT", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(potHorIn) + " bars of being selected (this chart, resolved outcomes only).")
+            table.cell(tbl, 0, 9, "HIT", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(effHor) + " bars of being selected (this chart, resolved outcomes only).")
             table.cell(tbl, 1, 9, "", text_size = tsz)
             table.cell(tbl, 2, 9, accTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         if showWrIn
