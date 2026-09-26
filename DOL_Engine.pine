@@ -1,7 +1,7 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © clipzfb02-crypto
 //
-// DOL ENGINE v3 — Draw on Liquidity (self-calibrating)
+// DOL ENGINE v4 — Draw on Liquidity (self-calibrating · News Guard · filtered signals)
 // Original Pine Script v6 code (not derived from any closed-source script).
 //
 // One clean read: WHERE is price being drawn, HOW strong is that draw, and WHAT is the bias.
@@ -25,7 +25,7 @@
 //   Capped at 95 %. It is an estimate, never a guarantee.
 
 //@version=6
-indicator("DOL Engine v3 · Draw on Liquidity", shorttitle = "DOL", overlay = true, max_boxes_count = 120, max_lines_count = 120, max_labels_count = 120, max_bars_back = 500)
+indicator("DOL Engine v4 · Draw on Liquidity", shorttitle = "DOL", overlay = true, max_boxes_count = 120, max_lines_count = 120, max_labels_count = 120, max_bars_back = 500)
 
 // =====================================================================================================
 // CONSTANTS
@@ -252,6 +252,33 @@ sigPotIn   = input.float(30.0, "Min PoT %", minval = 0.0, maxval = 95.0, step = 
 sigWinIn   = input.int(12, "Sweep Window (bars)", minval = 1, maxval = 100, group = G_SIG)
 sigCoolIn  = input.int(15, "Cooldown (bars)", minval = 0, maxval = 500, group = G_SIG)
 
+// ── SIGNAL FILTERS (quality gates — applied to execution signals and to the win-rate tracker)
+G_FLT      = "◆ SIGNAL FILTERS"
+volFiltIn  = input.string("Skip Low", "Volatility Regime Filter", options = ["Off", "Skip Low", "Skip Low + Extreme"], group = G_FLT, tooltip = "ATR percentile over the last 200 bars. Low = dead market (targets rarely reached). Extreme = chaotic spikes (stops get run).")
+dispOnIn   = input.bool(true, "Require Displacement on Break", inline = "dp", group = G_FLT)
+dispBodyIn = input.float(0.5, "Min Body (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, inline = "dp", group = G_FLT, tooltip = "The breaking candle must close in the signal direction with a body ≥ this × ATR and body ≥ 50 % of its range.")
+rvolOnIn   = input.bool(false, "Require Relative Volume", inline = "rv", group = G_FLT)
+rvolIn     = input.float(1.2, "Min RVOL", minval = 0.1, maxval = 10.0, step = 0.1, inline = "rv", group = G_FLT)
+sigKzIn    = input.bool(false, "Signals Only in London / New York", group = G_FLT, tooltip = "Uses the London and New York windows from the Sessions group.")
+sigHtf2In  = input.bool(false, "Also Require Macro-TF Alignment", group = G_FLT)
+
+// ── NEWS GUARD (Pine cannot read news feeds — this uses scheduled release windows + automatic spike detection)
+G_NEWS     = "◆ NEWS GUARD"
+newsOnIn   = input.bool(true, "News Guard", group = G_NEWS, tooltip = "Blocks new signals / virtual trades during scheduled high-impact release windows and after abnormal volatility spikes. Windows are read in the Sessions timezone.")
+n1OnIn     = input.bool(true, "Window 1", inline = "n1", group = G_NEWS)
+n1In       = input.session("0825-0845", "", inline = "n1", group = G_NEWS, tooltip = "08:30 NY: CPI, NFP, PPI, jobless claims, retail sales, GDP.")
+n2OnIn     = input.bool(true, "Window 2", inline = "n2", group = G_NEWS)
+n2In       = input.session("0955-1015", "", inline = "n2", group = G_NEWS, tooltip = "10:00 NY: ISM, consumer sentiment, JOLTS, new home sales.")
+n3OnIn     = input.bool(false, "Window 3", inline = "n3", group = G_NEWS)
+n3In       = input.session("1355-1445", "", inline = "n3", group = G_NEWS, tooltip = "14:00 NY: FOMC statement + press conference. Enable on FOMC days.")
+n4OnIn     = input.bool(false, "Window 4", inline = "n4", group = G_NEWS)
+n4In       = input.session("0255-0315", "", inline = "n4", group = G_NEWS, tooltip = "Custom window (default 03:00 NY: EU / UK data).")
+shockOnIn  = input.bool(true, "Auto-Detect News Spikes", group = G_NEWS)
+shockAtrIn = input.float(2.5, "Spike Range (× ATR)", minval = 1.0, maxval = 10.0, step = 0.1, group = G_NEWS)
+shockVolIn = input.float(3.0, "Spike Volume (× avg)", minval = 1.0, maxval = 20.0, step = 0.5, group = G_NEWS)
+shockBarsIn = input.int(10, "Pause After Spike (bars)", minval = 0, maxval = 200, group = G_NEWS)
+newsBgIn   = input.bool(false, "Shade News Blackouts", group = G_NEWS)
+
 // ── WIN-RATE TRACKER (virtual trades on the execution signals — shown in the table, no strategy needed)
 G_TRD      = "◆ WIN-RATE TRACKER"
 showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = DOL). Works even when signal markers are hidden.")
@@ -259,6 +286,7 @@ stopLbIn   = input.int(15, "Stop Lookback (bars)", minval = 2, maxval = 200, gro
 stopBufIn  = input.float(0.2, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD)
 minRRIn    = input.float(1.5, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD)
 maxHoldIn  = input.int(40, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
+beAtRIn    = input.float(0.0, "Breakeven at R (0 = off)", minval = 0.0, maxval = 10.0, step = 0.25, group = G_TRD, tooltip = "Moves the virtual stop to entry once price has moved this many R in favour.")
 
 // ── CALIBRATION / ACCURACY
 calOnIn   = input.bool(true, "Self-Calibrating PoT", group = G_CAL, tooltip = "Corrects the model PoT with this chart's own resolved predictions (non-repainting: only closed, resolved outcomes are used).")
@@ -296,6 +324,7 @@ alPotTh   = input.float(60.0, "", minval = 1.0, maxval = 95.0, step = 0.5, inlin
 alSigIn   = input.bool(true, "Execution Signals", group = G_ALR)
 alBiasIn  = input.bool(false, "HTF Bias Change", group = G_ALR)
 alAlignIn = input.bool(false, "Exec / HTF Alignment", group = G_ALR)
+alNewsIn  = input.bool(false, "News Blackout Started", group = G_ALR)
 
 // =====================================================================================================
 // UTILITY FUNCTIONS
@@ -761,6 +790,36 @@ string tzStr = tzIn == "Exchange" ? syminfo.timezone : tzIn
 [asHi, asLo, asHiT, asLoT, asHiB, asLoB, asEnd] = f_session(asiaIn, tzStr)
 [ldHi, ldLo, ldHiT, ldLoT, ldHiB, ldLoB, ldEnd] = f_session(lonIn, tzStr)
 [nyHi, nyLo, nyHiT, nyLoT, nyHiB, nyLoB, nyEnd] = f_session(nyIn, tzStr)
+
+// =====================================================================================================
+// NEWS GUARD · VOLATILITY REGIME · SIGNAL-QUALITY INPUTS
+// =====================================================================================================
+bool  intra    = timeframe.isintraday
+bool  inN1     = newsOnIn and intra and n1OnIn and not na(time(timeframe.period, n1In, tzStr))
+bool  inN2     = newsOnIn and intra and n2OnIn and not na(time(timeframe.period, n2In, tzStr))
+bool  inN3     = newsOnIn and intra and n3OnIn and not na(time(timeframe.period, n3In, tzStr))
+bool  inN4     = newsOnIn and intra and n4OnIn and not na(time(timeframe.period, n4In, tzStr))
+bool  newsWin  = inN1 or inN2 or inN3 or inN4
+float atrPrev  = nz(atrRaw[1], atrS)
+float volPrev  = nz(ta.sma(nz(volume), 20)[1])
+bool  shockBar = newsOnIn and shockOnIn and ((high - low) >= shockAtrIn * atrPrev or (volPrev > 0 and nz(volume) >= shockVolIn * volPrev))
+var int lastShockB = NEG_BIG
+if barstate.isconfirmed and shockBar
+    lastShockB := bar_index
+bool  shockPause = newsOnIn and shockOnIn and bar_index - lastShockB <= shockBarsIn
+bool  newsBlock  = newsWin or shockPause
+bool  evNewsOn   = barstate.isconfirmed and newsBlock and not newsBlock[1]
+
+float atrPct   = nz(ta.percentrank(nz(atrRaw, atrS), 200), 50.0)
+string volReg  = atrPct < 20 ? "LOW" : atrPct > 95 ? "EXTREME" : atrPct > 80 ? "HIGH" : "NORMAL"
+bool  regOk    = volFiltIn == "Off" or (volFiltIn == "Skip Low" and atrPct >= 20) or (volFiltIn == "Skip Low + Extreme" and atrPct >= 20 and atrPct <= 95)
+float bodyAbs  = math.abs(close - open)
+float rngBar   = math.max(high - low, syminfo.mintick)
+bool  dispBull = not dispOnIn or (close > open and bodyAbs >= dispBodyIn * atrS and bodyAbs / rngBar >= 0.5)
+bool  dispBear = not dispOnIn or (close < open and bodyAbs >= dispBodyIn * atrS and bodyAbs / rngBar >= 0.5)
+bool  rvolOk   = not rvolOnIn or volPrev <= 0 or nz(volume) >= rvolIn * volPrev
+bool  inKz     = not na(time(timeframe.period, lonIn, tzStr)) or not na(time(timeframe.period, nyIn, tzStr))
+bool  kzOk     = not sigKzIn or not intra or inKz
 
 bool newDay   = timeframe.change("D")
 bool newWeek  = timeframe.change("W")
@@ -1325,8 +1384,10 @@ bool evAlign   = barstate.isconfirmed and masterIn and aligned and not aligned[1
 // =====================================================================================================
 if barstate.isconfirmed and masterIn and inWin
     bool coolOk = bar_index - lastSigB > sigCoolIn
-    bool bullOk = evBullBrk and h1Sign == 1 and primSide == 1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastSslSwB <= sigWinIn)
-    bool bearOk = evBearBrk and h1Sign == -1 and primSide == -1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastBslSwB <= sigWinIn)
+    int  h2Sign = int(nz(h2St)) > 0 ? 1 : int(nz(h2St)) < 0 ? -1 : 0
+    bool fltOk  = not newsBlock and regOk and rvolOk and kzOk
+    bool bullOk = fltOk and dispBull and (not sigHtf2In or h2Sign == 1) and evBullBrk and h1Sign == 1 and primSide == 1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastSslSwB <= sigWinIn)
+    bool bearOk = fltOk and dispBear and (not sigHtf2In or h2Sign == -1) and evBearBrk and h1Sign == -1 and primSide == -1 and nz(primScr) >= sigScoreIn and nz(primPot) >= sigPotIn and (not sigReqSwIn or bar_index - lastBslSwB <= sigWinIn)
     sigBull := coolOk and bullOk
     sigBear := coolOk and bearOk and not sigBull
     if sigBull or sigBear
@@ -1342,18 +1403,23 @@ var float vtEn   = na
 var float vtSL   = na
 var float vtTP   = na
 var int   vtBar  = na
+var float vtRisk = na
+var bool  vtBE   = false
+var float eqR    = 0.0
+var float peakR  = 0.0
+var float maxDD  = 0.0
 var float wrN    = 0.0
 var float wrW    = 0.0
 var float wrPosR = 0.0
 var float wrNegR = 0.0
 if barstate.isconfirmed and masterIn and inWin
     if vtDir != 0 and bar_index > vtBar
-        float risk  = math.abs(vtEn - vtSL)
+        float risk  = math.max(vtRisk, syminfo.mintick)
         bool  hitSL = vtDir == 1 ? low <= vtSL : high >= vtSL
         bool  hitTP = vtDir == 1 ? high >= vtTP : low <= vtTP
         float rr    = na
         if hitSL
-            rr := -1.0
+            rr := (vtSL - vtEn) * vtDir / risk
         else if hitTP
             rr := (vtTP - vtEn) * vtDir / risk
         else if maxHoldIn > 0 and bar_index - vtBar >= maxHoldIn
@@ -1363,7 +1429,13 @@ if barstate.isconfirmed and masterIn and inWin
             wrW += rr > 0 ? 1 : 0
             wrPosR += math.max(rr, 0.0)
             wrNegR += math.max(-rr, 0.0)
+            eqR    += rr
+            peakR  := math.max(peakR, eqR)
+            maxDD  := math.max(maxDD, peakR - eqR)
             vtDir := 0
+        else if beAtRIn > 0 and not vtBE and (vtDir == 1 ? high >= vtEn + beAtRIn * risk : low <= vtEn - beAtRIn * risk)
+            vtSL := vtEn
+            vtBE := true
     if vtDir == 0 and not na(primTrig)
         if sigBull and primSide == 1
             float sl = swLo - stopBufIn * atrS
@@ -1374,6 +1446,8 @@ if barstate.isconfirmed and masterIn and inWin
                 vtSL  := sl
                 vtTP  := primTrig
                 vtBar := bar_index
+                vtRisk := rk
+                vtBE  := false
         else if sigBear and primSide == -1
             float sl2 = swHi + stopBufIn * atrS
             float rk2 = sl2 - close
@@ -1383,6 +1457,8 @@ if barstate.isconfirmed and masterIn and inWin
                 vtSL  := sl2
                 vtTP  := primTrig
                 vtBar := bar_index
+                vtRisk := rk2
+                vtBE  := false
 
 // =====================================================================================================
 // VISUAL ENGINE — rebuilt from state on the last bar only (bounded, no historical clutter)
@@ -1467,12 +1543,12 @@ f_liveDist(Zn z, float px) =>
         d := z.side == 1 ? math.max(z.bot - px, 0.0) : math.max(px - z.top, 0.0)
     d
 
-var table tbl = table.new(f_pos(tblPosIn), 3, 9, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
+var table tbl = table.new(f_pos(tblPosIn), 3, 12, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
 var table dbg = table.new(position.bottom_left, 2, 19, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
     f_clearAll(rB, rL, rT)
-    table.clear(tbl, 0, 0, 2, 8)
+    table.clear(tbl, 0, 0, 2, 11)
     table.clear(dbg, 0, 0, 1, 18)
 
 if barstate.islast and masterIn
@@ -1623,6 +1699,7 @@ if barstate.islast and masterIn
     if showTblIn
         string tsz = f_sz(tblSizeIn)
         color  hdr = color.new(colTextIn, 50)
+        color  lbl = color.new(colTextIn, 15)
         table.cell(tbl, 0, 0, "TF", text_color = hdr, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
         table.cell(tbl, 1, 0, "", text_size = tsz)
         table.cell(tbl, 2, 0, "BIAS", text_color = hdr, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
@@ -1630,31 +1707,45 @@ if barstate.islast and masterIn
             int    st = r == 0 ? bH1 : r == 1 ? bSt : bEx
             string nm = r == 0 ? "HTF " + h1Lbl : r == 1 ? "STF " + stfLbl : "EXE " + exLbl
             color  bc = st > 0 ? colBullIn : st < 0 ? colBearIn : colNeuIn
-            table.cell(tbl, 0, r + 1, nm, text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+            table.cell(tbl, 0, r + 1, nm, text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
             table.cell(tbl, 1, r + 1, f_biasArrow(st), text_color = bc, text_size = tsz, text_font_family = font.family_monospace)
             table.cell(tbl, 2, r + 1, f_biasTxt(st), text_color = bc, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-        color  ac = aligned ? (exSign == 1 ? colBullIn : colBearIn) : colNeuIn
-        table.cell(tbl, 0, 4, "ALIGN", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        color ac = aligned ? (exSign == 1 ? colBullIn : colBearIn) : colNeuIn
+        table.cell(tbl, 0, 4, "ALIGN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
         table.cell(tbl, 1, 4, aligned ? "✓" : "·", text_color = ac, text_size = tsz, text_font_family = font.family_monospace)
         table.cell(tbl, 2, 4, aligned ? (exSign == 1 ? "LONG" : "SHORT") : "WAIT", text_color = ac, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-        table.cell(tbl, 0, 5, "DOL", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
-        table.cell(tbl, 1, 5, "", text_size = tsz)
-        table.cell(tbl, 2, 5, dolTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-        table.cell(tbl, 0, 6, "PoT", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        string nwTxt = not newsOnIn ? "OFF" : newsWin ? "BLACKOUT" : shockPause ? "SPIKE · " + str.tostring(shockBarsIn - (bar_index - lastShockB)) + " bars" : "CLEAR"
+        color  nwCol = not newsOnIn ? colNeuIn : newsBlock ? colBearIn : colBullIn
+        table.cell(tbl, 0, 5, "NEWS", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "News Guard: scheduled release windows + automatic spike detection. Signals are paused while not CLEAR.")
+        table.cell(tbl, 1, 5, newsBlock ? "!" : "·", text_color = nwCol, text_size = tsz, text_font_family = font.family_monospace)
+        table.cell(tbl, 2, 5, nwTxt, text_color = nwCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        color  vrCol = volReg == "NORMAL" ? colBullIn : volReg == "HIGH" ? colObIn : colBearIn
+        table.cell(tbl, 0, 6, "VOL", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Volatility regime: ATR percentile over the last 200 bars.")
         table.cell(tbl, 1, 6, "", text_size = tsz)
-        table.cell(tbl, 2, 6, potTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 2, 6, volReg + " · " + str.tostring(atrPct, "0") + "%", text_color = vrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 0, 7, "DOL", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 1, 7, "", text_size = tsz)
+        table.cell(tbl, 2, 7, dolTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 0, 8, "PoT", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 1, 8, "", text_size = tsz)
+        table.cell(tbl, 2, 8, potTxt, text_color = dolCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         if showAccIn
             string accTxt = accN >= 10 ? str.tostring(100.0 * accHit / accN, "0") + "% · " + str.tostring(accHit, "0") + "/" + str.tostring(accN, "0") : "n=" + str.tostring(accN, "0")
-            table.cell(tbl, 0, 7, "HIT", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(potHorIn) + " bars of being selected (this chart, resolved outcomes only).")
-            table.cell(tbl, 1, 7, "", text_size = tsz)
-            table.cell(tbl, 2, 7, accTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            table.cell(tbl, 0, 9, "HIT", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Measured: share of DOL targets that price reached within " + str.tostring(potHorIn) + " bars of being selected (this chart, resolved outcomes only).")
+            table.cell(tbl, 1, 9, "", text_size = tsz)
+            table.cell(tbl, 2, 9, accTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         if showWrIn
             string pfTxt = wrNegR > 0 ? str.tostring(wrPosR / wrNegR, "0.00") : wrPosR > 0 ? "∞" : "—"
             string wrTxt = wrN >= 1 ? str.tostring(100.0 * wrW / wrN, "0") + "% · PF " + pfTxt + " · " + str.tostring(wrN, "0") : "no trades yet"
             color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colBullIn : colBearIn) : colNeuIn
-            table.cell(tbl, 0, 8, "WIN", text_color = color.new(colTextIn, 15), text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on execution signals: win rate · profit factor (in R) · number of trades. Stop beyond swept liquidity, target = DOL, min R:R " + str.tostring(minRRIn, "0.0") + ". Past results only — not a guarantee.")
-            table.cell(tbl, 1, 8, "", text_size = tsz)
-            table.cell(tbl, 2, 8, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            float  expR  = wrN >= 1 ? (wrPosR - wrNegR) / wrN : 0.0
+            string edTxt = wrN >= 1 ? (expR >= 0 ? "+" : "") + str.tostring(expR, "0.00") + "R/trade · DD " + str.tostring(maxDD, "0.0") + "R" : "—"
+            table.cell(tbl, 0, 10, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Stop beyond swept liquidity, target = DOL, min R:R " + str.tostring(minRRIn, "0.0") + ". Past results only — not a guarantee.")
+            table.cell(tbl, 1, 10, "", text_size = tsz)
+            table.cell(tbl, 2, 10, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            table.cell(tbl, 0, 11, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
+            table.cell(tbl, 1, 11, "", text_size = tsz)
+            table.cell(tbl, 2, 11, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
     // ── Debug panel
     if debugIn
@@ -1684,6 +1775,7 @@ if barstate.islast and masterIn
 // =====================================================================================================
 plotshape(sigOnIn and sigBull, "Long Setup", shape.triangleup, location.belowbar, colBullIn, size = size.tiny)
 plotshape(sigOnIn and sigBear, "Short Setup", shape.triangledown, location.abovebar, colBearIn, size = size.tiny)
+bgcolor(masterIn and newsBgIn and newsBlock ? color.new(colBearIn, 93) : na, title = "News Blackout")
 plot(primScr, "DOL Score", color = colNeuIn, display = display.data_window)
 plot(primPot, "DOL PoT % (bar close)", color = colNeuIn, display = display.data_window)
 
@@ -1702,6 +1794,7 @@ alertcondition(sigOnIn and sigBull, "DOL · Long Setup",  "DOL: long setup on {{
 alertcondition(sigOnIn and sigBear, "DOL · Short Setup", "DOL: short setup on {{ticker}} {{interval}}")
 alertcondition(evBiasChg, "DOL · HTF Bias Change",   "DOL: HTF bias changed on {{ticker}} {{interval}}")
 alertcondition(evAlign,   "DOL · Exec/HTF Aligned",  "DOL: execution bias aligned with HTF on {{ticker}} {{interval}}")
+alertcondition(evNewsOn,  "DOL · News Blackout",     "DOL: news blackout started on {{ticker}} {{interval}}")
 
 // Dynamic messages — create one alert with "Any alert() function call"
 string aSide = primSide == 1 ? "BSL-side ▲" : primSide == -1 ? "SSL-side ▼" : "—"
@@ -1728,5 +1821,7 @@ if barstate.isconfirmed and masterIn and inWin
         alert("Short Setup" + aTail, alert.freq_once_per_bar_close)
     if alBiasIn and evBiasChg
         alert("HTF Bias " + f_biasTxt(bH1) + " | " + h1Lbl + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+    if alNewsIn and evNewsOn
+        alert("News blackout started (" + (newsWin ? "scheduled window" : "volatility spike") + ") | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
     if alAlignIn and evAlign
         alert("Exec/HTF Aligned " + (exSign == 1 ? "LONG" : "SHORT") + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
