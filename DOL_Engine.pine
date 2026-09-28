@@ -261,7 +261,7 @@ sigOnIn    = input.bool(false, "Show Execution Signals", group = G_SIG, tooltip 
 sigReqSwIn = input.bool(true, "Require Opposite Liquidity Sweep", group = G_SIG)
 sigScoreIn = input.int(55, "Min DOL Score", minval = 0, maxval = 100, group = G_SIG)
 sigPotIn   = input.float(30.0, "Min PoT %", minval = 0.0, maxval = 95.0, step = 0.5, group = G_SIG)
-sigWinIn   = input.int(12, "Sweep Window (bars)", minval = 1, maxval = 100, group = G_SIG)
+sigWinIn   = input.int(20, "Sweep Window (bars)", minval = 1, maxval = 100, group = G_SIG, tooltip = "The opposite-side liquidity must have been swept within this many bars before the break. The sweep extreme is also the virtual stop.")
 sigCoolIn  = input.int(15, "Cooldown (bars)", minval = 0, maxval = 500, group = G_SIG)
 
 // ── SIGNAL FILTERS (quality gates — applied to execution signals and to the win-rate tracker)
@@ -285,7 +285,7 @@ n3OnIn     = input.bool(false, "Window 3", inline = "n3", group = G_NEWS)
 n3In       = input.session("1355-1445", "", inline = "n3", group = G_NEWS, tooltip = "14:00 NY every day. FOMC days are already covered by the Event Calendar below.")
 n4OnIn     = input.bool(false, "Window 4", inline = "n4", group = G_NEWS)
 n4In       = input.session("0255-0315", "", inline = "n4", group = G_NEWS, tooltip = "Custom window (default 03:00 NY: EU / UK data).")
-shockOnIn  = input.bool(true, "Auto-Detect News Spikes", group = G_NEWS)
+shockOnIn  = input.bool(true, "Auto-Detect News Spikes", group = G_NEWS, tooltip = "A spike needs BOTH an abnormal range and abnormal volume. (v5 paused on either one, which blocked normal breakout candles and every session open.)")
 shockAtrIn = input.float(2.5, "Spike Range (× ATR)", minval = 1.0, maxval = 10.0, step = 0.1, group = G_NEWS)
 shockVolIn = input.float(3.0, "Spike Volume (× avg)", minval = 1.0, maxval = 20.0, step = 0.5, group = G_NEWS)
 shockBarsIn = input.int(10, "Pause After Spike (bars)", minval = 0, maxval = 200, group = G_NEWS)
@@ -297,7 +297,7 @@ newsBgIn   = input.bool(false, "Shade News Blackouts", group = G_NEWS)
 
 // ── WIN-RATE TRACKER (virtual trades on the execution signals — shown in the table, no strategy needed)
 G_TRD      = "◆ WIN-RATE TRACKER"
-showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = DOL). Works even when signal markers are hidden.")
+showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = nearest liquidity paying at least the min R:R). One trade at a time. Works even when signal markers are hidden.")
 stopLbIn   = input.int(20, "Fallback Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD, tooltip = "Used only when no liquidity sweep is recorded inside the sweep window. Normally the stop sits beyond the swept liquidity.")
 stopBufIn  = input.float(0.1, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD, tooltip = "Distance beyond the swept high / low for the virtual stop.")
 minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "Trades whose DOL target is closer than this multiple of the risk are skipped.")
@@ -652,6 +652,17 @@ f_resolve(array<Pred> ps, array<float> w, array<float> w0, float lr, bool learn,
 f_trigLvl(Zn z) =>
     f_isPool(z) and hitRuleIn != "Touch Zone" ? z.lvl : z.side == 1 ? z.bot : z.top
 
+// Nearest eligible target on `dir` side that pays at least `minRew` (price units) from `px`
+f_tpPick(array<Zn> a, int dir, float px, float minRew) =>
+    float best = na
+    for z in a
+        if z.elig and z.side == dir
+            float tg = f_trigLvl(z)
+            float rw = (tg - px) * dir
+            if rw >= minRew and (na(best) or rw < (best - px) * dir)
+                best := tg
+    best
+
 // HTF alignment factor: structure state in [-2, 2] vs target side → 0..1
 f_align(int st, int side) =>
     0.5 + 0.25 * nz(st) * side
@@ -952,7 +963,7 @@ if newsOnIn and calEvIn and nEv > 0 and chartSec <= 86400
             evNext := e0
 float atrPrev  = nz(atrRaw[1], atrS)
 float volPrev  = nz(ta.sma(nz(volume), 20)[1])
-bool  shockBar = newsOnIn and shockOnIn and ((high - low) >= shockAtrIn * atrPrev or (volPrev > 0 and nz(volume) >= shockVolIn * volPrev))
+bool  shockBar = newsOnIn and shockOnIn and (high - low) >= shockAtrIn * atrPrev and (volPrev <= 0 or nz(volume) >= shockVolIn * volPrev)
 var int lastShockB = NEG_BIG
 if barstate.isconfirmed and shockBar
     lastShockB := bar_index
@@ -1591,6 +1602,7 @@ var float vtEn   = na
 var float vtSL   = na
 var float vtTP   = na
 var int   vtBar  = na
+var int   vtT    = na
 var float vtRisk = na
 var bool  vtBE   = false
 var float eqR    = 0.0
@@ -1625,29 +1637,22 @@ if barstate.isconfirmed and masterIn and inWin
         else if beAtRIn > 0 and not vtBE and (vtDir == 1 ? high >= vtEn + beAtRIn * risk : low <= vtEn - beAtRIn * risk)
             vtSL := vtEn
             vtBE := true
-    if vtDir == 0 and not na(primTrig)
-        if sigBull and primSide == 1
-            float sl = (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS
-            float rk = close - sl
-            if rk > 0 and primTrig > close and (primTrig - close) / rk >= minRRIn
-                vtDir := 1
-                vtEn  := close
-                vtSL  := sl
-                vtTP  := primTrig
-                vtBar := bar_index
-                vtRisk := rk
-                vtBE  := false
-        else if sigBear and primSide == -1
-            float sl2 = (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
-            float rk2 = sl2 - close
-            if rk2 > 0 and primTrig < close and (close - primTrig) / rk2 >= minRRIn
-                vtDir := -1
-                vtEn  := close
-                vtSL  := sl2
-                vtTP  := primTrig
-                vtBar := bar_index
-                vtRisk := rk2
-                vtBE  := false
+    // Entry at the signal close · stop beyond the swept liquidity · target = nearest liquidity paying ≥ min R:R
+    if vtDir == 0 and (sigBull or sigBear)
+        int   dN  = sigBull ? 1 : -1
+        float slN = dN == 1 ? (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS : (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
+        float rkN = (close - slN) * dN
+        if rkN > 0
+            float tpN = f_tpPick(zs, dN, close, minRRIn * rkN)
+            if not na(tpN)
+                vtDir  := dN
+                vtEn   := close
+                vtSL   := slN
+                vtTP   := tpN
+                vtBar  := bar_index
+                vtT    := time
+                vtRisk := rkN
+                vtBE   := false
 
 // =====================================================================================================
 // VISUAL ENGINE — rebuilt from state on the last bar only (bounded, no historical clutter)
@@ -1878,6 +1883,16 @@ if barstate.islast and masterIn
         f_mkLine(rL, s.t0, y, rightT, y, color.new(sc, 45), line.style_dashed, 1)
         f_mkLbl(rT, rightT, y, f_kindTxt(s) + " " + str.tostring(math.round(s.score)) + " · " + str.tostring(sp, "0.0") + "%", noCol, color.new(sc, 30), label.style_label_left, size.tiny, f_srcList(s) + " · " + s.tf)
 
+    // ── Open virtual trade (entry / stop / target) when execution signals are shown
+    if sigOnIn and vtDir != 0 and not na(vtT)
+        color tcl = vtDir == 1 ? colBullIn : colBearIn
+        float rrT = math.abs(vtTP - vtEn) / math.max(vtRisk, syminfo.mintick)
+        f_mkLine(rL, vtT, vtEn, rightT, vtEn, color.new(colTextIn, 45), line.style_solid, 1)
+        f_mkLine(rL, vtT, vtSL, rightT, vtSL, color.new(colBearIn, 25), line.style_dashed, 1)
+        f_mkLine(rL, vtT, vtTP, rightT, vtTP, color.new(colBullIn, 25), line.style_dashed, 1)
+        f_mkLbl(rT, rightT, vtSL, "SL", noCol, color.new(colBearIn, 15), label.style_label_left, size.tiny, "Virtual stop (beyond the swept liquidity)")
+        f_mkLbl(rT, rightT, vtTP, "TP " + str.tostring(rrT, "0.0") + "R", noCol, color.new(tcl, 15), label.style_label_left, size.tiny, "Virtual target: nearest liquidity paying ≥ " + str.tostring(minRRIn, "0.0") + "R")
+
     // ── Reach bands: levels with the chosen probability of being touched within the horizon
     if reachOnIn and f_room(rB, rL, rT, maxVisIn)
         float rq  = reachPIn / 100.0
@@ -1919,7 +1934,7 @@ if barstate.islast and masterIn
         color  lbl = color.new(colTextIn, 15)
         table.cell(tbl, 0, 0, "TF", text_color = hdr, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
         table.cell(tbl, 1, 0, "", text_size = tsz)
-        table.cell(tbl, 2, 0, "BIAS", text_color = hdr, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 2, 0, "BIAS", text_color = hdr, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace, tooltip = "Confirmed body-close market structure per timeframe (▲▼ = BOS, △▽ = first break / CHoCH). Context only: in testing it did not predict which side gets taken first.")
         for r = 0 to 2
             int    st = r == 0 ? bH1 : r == 1 ? bSt : bEx
             string nm = r == 0 ? "HTF " + h1Lbl : r == 1 ? "STF " + stfLbl : "EXE " + exLbl
@@ -1928,7 +1943,7 @@ if barstate.islast and masterIn
             table.cell(tbl, 1, r + 1, f_biasArrow(st), text_color = bc, text_size = tsz, text_font_family = font.family_monospace)
             table.cell(tbl, 2, r + 1, f_biasTxt(st), text_color = bc, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         color ac = aligned ? (exSign == 1 ? colBullIn : colBearIn) : colNeuIn
-        table.cell(tbl, 0, 4, "ALIGN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        table.cell(tbl, 0, 4, "ALIGN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Execution-TF structure agrees with the HTF structure. Context, not a signal.")
         table.cell(tbl, 1, 4, aligned ? "✓" : "·", text_color = ac, text_size = tsz, text_font_family = font.family_monospace)
         table.cell(tbl, 2, 4, aligned ? (exSign == 1 ? "LONG" : "SHORT") : "WAIT", text_color = ac, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         string nxTxt = ""
@@ -1993,7 +2008,7 @@ if barstate.islast and masterIn
             color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colBullIn : colBearIn) : colNeuIn
             float  expR  = wrN >= 1 ? (wrPosR - wrNegR) / wrN : 0.0
             string edTxt = wrN >= 1 ? (expR >= 0 ? "+" : "") + str.tostring(expR, "0.00") + "R/trade · DD " + str.tostring(maxDD, "0.0") + "R" : "—"
-            table.cell(tbl, 0, 12, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Stop beyond the swept liquidity, target = DOL, min R:R " + str.tostring(minRRIn, "0.0") + ", cost " + str.tostring(costIn, "0") + " ticks. Research across 13 markets found no reliable edge in these setups; judge them only by this chart's own numbers.")
+            table.cell(tbl, 0, 12, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Stop beyond the swept liquidity, target = nearest liquidity paying ≥ min R:R " + str.tostring(minRRIn, "0.0") + ", cost " + str.tostring(costIn, "0") + " ticks. Research across 13 markets found no reliable edge in these setups; judge them only by this chart's own numbers.")
             table.cell(tbl, 1, 12, "", text_size = tsz)
             table.cell(tbl, 2, 12, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
             table.cell(tbl, 0, 13, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
