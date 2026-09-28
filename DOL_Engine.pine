@@ -300,7 +300,7 @@ G_TRD      = "◆ WIN-RATE TRACKER"
 showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = nearest liquidity paying at least the min R:R). One trade at a time. Works even when signal markers are hidden.")
 stopLbIn   = input.int(20, "Fallback Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD, tooltip = "Used only when no liquidity sweep is recorded inside the sweep window. Normally the stop sits beyond the swept liquidity.")
 stopBufIn  = input.float(0.1, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD, tooltip = "Distance beyond the swept high / low for the virtual stop.")
-minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "Trades whose DOL target is closer than this multiple of the risk are skipped.")
+minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "The virtual target is the nearest liquidity on the signal side that pays at least this multiple of the risk. No such target = no trade.")
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
 costIn     = input.float(0.0, "Round-Trip Cost (ticks)", minval = 0.0, maxval = 100000.0, step = 1.0, group = G_TRD, tooltip = "Spread + commission + slippage per trade, in ticks. Subtracted from every virtual trade so WIN / EDGE stay realistic.")
 beAtRIn    = input.float(0.0, "Breakeven at R (0 = off)", minval = 0.0, maxval = 10.0, step = 0.25, group = G_TRD, tooltip = "Moves the virtual stop to entry once price has moved this many R in favour.")
