@@ -174,9 +174,11 @@ hitRuleIn  = input.string("Touch Zone", "Target Hit Rule", options = ["Touch Zon
 useArrIn   = input.bool(true, "PD Arrays Can Be Targets", group = G_DOL, tooltip = "Allow FVG / iFVG / OB / Breaker zones to become the DOL (not only BSL / SSL pools).")
 mergeIn    = input.float(0.25, "Merge Distance (ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = G_DOL)
 zoneIn     = input.float(0.10, "Pool Zone Height (ATR)", minval = 0.01, maxval = 2.0, step = 0.01, group = G_DOL)
+lockIn     = input.bool(true, "Lock DOL Until Hit", group = G_DOL, tooltip = "Once placed, the DOL stays until price hits it, it is invalidated or it expires. It never jumps to another level while you are in a trade.")
+confBarsIn = input.int(2, "Confirm New DOL (bar closes)", minval = 1, maxval = 10, group = G_DOL, tooltip = "A new DOL is only placed after the same level has ranked best for this many consecutive closed bars.")
 hystIn     = input.float(6.0, "Switch Hysteresis (pts)", minval = 0.0, maxval = 30.0, step = 0.5, group = G_DOL, tooltip = "A challenger must beat the active DOL by this many score points. Prevents flicker.")
 potHorIn   = input.int(30, "PoT Horizon (bars)", minval = 5, maxval = 200, group = G_DOL, tooltip = "Bars ahead over which PoT and the measured DOL hit rate are evaluated.")
-minDistIn  = input.float(0.25, "Min New-Target Distance (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_DOL, tooltip = "A new DOL must be at least this far away. Prevents picking levels price is already trading into. The active DOL is kept while price approaches it.")
+minDistIn  = input.float(0.5, "Min New-Target Distance (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_DOL, tooltip = "A new DOL must be at least this far away. Prevents picking levels price is already trading into. The active DOL is kept while price approaches it.")
 potRankIn  = input.float(0.35, "PoT Weight in Ranking", minval = 0.0, maxval = 1.0, step = 0.05, group = G_DOL, tooltip = "Ranking priority = (1 - w) × Score + w × calibrated PoT.")
 poolMaxIn  = input.int(24, "Max Liquidity Pools", minval = 6, maxval = 60, group = G_DOL)
 maxAgeIn   = input.int(1500, "Max Target Age (bars)", minval = 50, maxval = 10000, group = G_DOL)
@@ -1034,6 +1036,8 @@ var float primScr = na
 var float primPot = na
 var float primTrig = na
 var int   secId   = -1
+var int   candId  = -1
+var int   candCnt = 0
 
 var float lastSH   = na
 var int   lastSHT  = na
@@ -1496,17 +1500,27 @@ if barstate.isconfirmed and masterIn and inWin
     if curIdx >= 0
         Zn cur = array.get(zs, curIdx)
         bool faded = cur.score < minScoreIn - hystIn * 0.5 or cur.pot < minPotIn - 1.0
-        if not cur.elig or faded
-            string why2 = cur.dist > effDist ? "EJECTED" : "FADED"
+        bool lost  = lockIn ? (cur.side == 0 or cur.side != primSide) : (not cur.elig or faded)
+        if lost
+            string why2 = lockIn ? "INVALID" : cur.dist > effDist ? "EJECTED" : "FADED"
             f_ghost(ghosts, cur, time, why2, ghostMaxIn)
             lastEvtTxt := f_kindTxt(cur) + " " + why2
             curIdx := -1
-    int newIdx = best
+    // Confirmation: the challenger must rank best for confBarsIn consecutive closed bars
+    int bestId = best >= 0 ? array.get(zs, best).id : -1
+    if bestId >= 0 and bestId == candId
+        candCnt += 1
+    else
+        candId  := bestId
+        candCnt := bestId >= 0 ? 1 : 0
+    bool candOk = bestId >= 0 and candCnt >= confBarsIn
+    int newIdx = -1
     if curIdx >= 0
-        if best < 0
-            newIdx := curIdx
-        else if best != curIdx and array.get(zs, best).prio < array.get(zs, curIdx).prio + hystIn
-            newIdx := curIdx
+        newIdx := curIdx
+        if not lockIn and candOk and best != curIdx and array.get(zs, best).prio >= array.get(zs, curIdx).prio + hystIn
+            newIdx := best
+    else if candOk
+        newIdx := best
     int newId = -1
     if newIdx >= 0
         newId := array.get(zs, newIdx).id
@@ -1754,6 +1768,15 @@ f_reach(int side, float target) =>
             hi := md
     (lo + hi) / 2.0
 
+// Reach bands are computed at bar close only, so they do not move with every tick
+var float rUpV = na
+var float rDnV = na
+var int   rT0  = na
+if reachOnIn and masterIn and barstate.islast and (barstate.isconfirmed or na(rUpV))
+    rUpV := close + f_reach(1, reachPIn / 100.0)
+    rDnV := close - f_reach(-1, reachPIn / 100.0)
+    rT0  := time
+
 var table tbl = table.new(f_pos(tblPosIn), 3, 14, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
 var table dbg = table.new(position.bottom_left, 2, 22, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
@@ -1894,14 +1917,13 @@ if barstate.islast and masterIn
         f_mkLbl(rT, rightT, vtTP, "TP " + str.tostring(rrT, "0.0") + "R", noCol, color.new(tcl, 15), label.style_label_left, size.tiny, "Virtual target: nearest liquidity paying ≥ " + str.tostring(minRRIn, "0.0") + "R")
 
     // ── Reach bands: levels with the chosen probability of being touched within the horizon
-    if reachOnIn and f_room(rB, rL, rT, maxVisIn)
-        float rq  = reachPIn / 100.0
-        float rUp = close + f_reach(1, rq)
-        float rDn = close - f_reach(-1, rq)
-        string rtip = "calibrated model · " + str.tostring(effHor) + " bars"
-        f_mkLine(rL, time, rUp, rightT, rUp, color.new(colTextIn, 55), line.style_dotted, 1)
+    if reachOnIn and not na(rUpV) and f_room(rB, rL, rT, maxVisIn)
+        float rUp = rUpV
+        float rDn = rDnV
+        string rtip = "calibrated model at the last bar close · " + str.tostring(effHor) + " bars"
+        f_mkLine(rL, rT0, rUp, rightT, rUp, color.new(colTextIn, 55), line.style_dotted, 1)
         f_mkLbl(rT, rightT, rUp, str.tostring(reachPIn) + "% ▲", noCol, color.new(colTextIn, 40), label.style_label_left, size.tiny, str.tostring(reachPIn) + "% chance price trades up to here · " + rtip)
-        f_mkLine(rL, time, rDn, rightT, rDn, color.new(colTextIn, 55), line.style_dotted, 1)
+        f_mkLine(rL, rT0, rDn, rightT, rDn, color.new(colTextIn, 55), line.style_dotted, 1)
         f_mkLbl(rT, rightT, rDn, str.tostring(reachPIn) + "% ▼", noCol, color.new(colTextIn, 40), label.style_label_left, size.tiny, str.tostring(reachPIn) + "% chance price trades down to here · " + rtip)
 
     // ── ACTIVE DOL (always drawn): zone + glow key line + origin anchor + terminal label
