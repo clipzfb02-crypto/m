@@ -49,6 +49,25 @@ What the data showed:
   v5's tracker almost never traded because its 15-bar stop made the R:R target unreachable. v6 places the stop
   beyond the swept liquidity and targets the nearest liquidity that pays at least 1R.
 
+### Target Win Rate mode (default 90%)
+The virtual trades use the signal's stop and a take-profit sized for the chosen win rate. After every closed
+trade the take-profit distance is nudged: shorter after a loss, slightly longer after a win. This lets each
+chart's real win rate settle at the target.
+- **Fills:** they follow TradingView's broker emulator. Gaps fill at the open. When the stop and the target are
+  both inside one bar, the side nearer the open is hit first.
+- **Test:** 12 markets (BTC, ETH, ES, NQ, QQQ, SPY, TSLA, Gold, Crude, EURUSD, GBPUSD, USDJPY) on 5m, 15m, 1h and 1D.
+  Each chart ran one trade at a time with no look-ahead.
+
+| Target | Real win rate | Per market |
+|---|---|---|
+| 85% | 84.9% | 84–87% |
+| 90% | 89.6% | 10 of 12 exactly 90%; EURUSD 88% (1-pip data), ETH 92% |
+| 95% | 93.7% | 93–96%; EURUSD 89% (1-pip data) |
+
+A high win rate here comes from a small target (≈0.09R at 90%), not from predicting direction. The average trade
+was about 0R before costs. Enter your real round-trip cost, because small targets are very sensitive to it.
+Judge the setup by EDGE (expectancy), not by WIN alone.
+
 With the v6 logic and TradingView's default 5,000-bar window, the average across the 26 datasets was:
 - SKILL +20.3%
 - DOL HIT 74%
