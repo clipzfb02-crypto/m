@@ -303,8 +303,8 @@ showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "
 stopLbIn   = input.int(20, "Fallback Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD, tooltip = "Used only when no liquidity sweep is recorded inside the sweep window. Normally the stop sits beyond the swept liquidity.")
 stopBufIn  = input.float(0.1, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD, tooltip = "Distance beyond the swept high / low for the virtual stop.")
 tgtModeIn  = input.string("Target Win Rate", "Target Mode", options = ["Target Win Rate", "High Win Rate", "Balanced"], group = G_TRD, tooltip = "Target Win Rate: the take-profit is placed where the calibrated odds of hitting it before the stop equal the chosen win rate (tested: 85% setting → 82.6% real wins across BTC, ES, EURUSD, Gold, SPY). High Win Rate: nearest liquidity paying ≥ 0.5R. Balanced: nearest liquidity paying ≥ Min Reward : Risk. A high win rate uses small targets — profit depends on EDGE and costs, not WIN.")
-tgtWrIn    = input.int(85, "Target Win Rate %", minval = 55, maxval = 95, step = 5, group = G_TRD, tooltip = "80 → TP ≈ 0.22R · 85 → TP ≈ 0.15R · 90 → TP ≈ 0.09R. Enter your real costs below: small targets are very sensitive to spread and commission.")
-wrAdaptIn  = input.bool(true, "Self-Adjust Target to Hit Win Rate", group = G_TRD, tooltip = "After every closed virtual trade the target distance is nudged (shorter after a loss, slightly longer after a win) so this chart's real win rate settles at the chosen %. Uses finished trades only — never repaints.")
+tgtWrIn    = input.int(90, "Target Win Rate %", minval = 55, maxval = 97, step = 1, group = G_TRD, tooltip = "Tested on 12 markets: target 85 → 84.9% real · 90 → 89.6% real (10 of 12 markets exactly 90%). Starting TP: 80 ≈ 0.22R · 85 ≈ 0.15R · 90 ≈ 0.09R · 95 ≈ 0.04R, then self-adjusted. Enter your real costs below: small targets are very sensitive to spread and commission.")
+wrAdaptIn  = input.bool(true, "Self-Adjust Target to Hit Win Rate", group = G_TRD, tooltip = "After every closed virtual trade the target distance is nudged (shorter after a loss, slightly longer after a win) so this chart's real win rate settles at the chosen %. Uses finished trades only — never repaints. Fills follow TradingView's broker emulator: gaps fill at the open, and when stop and target are both inside one bar the side nearer the open is hit first.")
 minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "The virtual target is the nearest liquidity on the signal side that pays at least this multiple of the risk. No such target = no trade.")
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
 costIn     = input.float(0.0, "Round-Trip Cost (ticks)", minval = 0.0, maxval = 100000.0, step = 1.0, group = G_TRD, tooltip = "Spread + commission + slippage per trade, in ticks. Subtracted from every virtual trade so WIN / EDGE stay realistic.")
@@ -1610,7 +1610,7 @@ if barstate.isconfirmed and masterIn and inWin
         lastSigB := bar_index
 
 // =====================================================================================================
-// WIN-RATE TRACKER — virtual trades, resolved on later bars only (stop checked first = conservative)
+// WIN-RATE TRACKER — virtual trades, resolved on later bars only (gaps fill at the open · intrabar order = TradingView broker emulator)
 // =====================================================================================================
 float swLo = ta.lowest(low, effStop)
 float swHi = ta.highest(high, effStop)
@@ -1634,22 +1634,31 @@ var float wrNegR = 0.0
 if barstate.isconfirmed and masterIn and inWin
     if vtDir != 0 and bar_index > vtBar
         float risk  = math.max(vtRisk, syminfo.mintick)
+        bool  gapSL = vtDir == 1 ? open <= vtSL : open >= vtSL
+        bool  gapTP = vtDir == 1 ? open >= vtTP : open <= vtTP
         bool  hitSL = vtDir == 1 ? low <= vtSL : high >= vtSL
         bool  hitTP = vtDir == 1 ? high >= vtTP : low <= vtTP
+        bool  hiFst = high - open < open - low
+        bool  tpFst = vtDir == 1 ? hiFst : not hiFst
         float rr    = na
-        if hitSL
-            rr := (vtSL - vtEn) * vtDir / risk
+        bool  beEx  = false
+        if gapSL or gapTP
+            rr := (open - vtEn) * vtDir / risk
+        else if hitSL and not (hitTP and tpFst)
+            rr   := (vtSL - vtEn) * vtDir / risk
+            beEx := vtBE
         else if hitTP
             rr := (vtTP - vtEn) * vtDir / risk
         else if effHold > 0 and bar_index - vtBar >= effHold
             rr := (close - vtEn) * vtDir / risk
         if not na(rr)
             rr  := rr - costIn * syminfo.mintick / risk
+            bool won = not beEx and rr > 0
             wrN += 1
-            wrW  += rr > 0.02 ? 1 : 0
-            wrBE += math.abs(rr) <= 0.02 ? 1 : 0
+            wrW  += won ? 1 : 0
+            wrBE += beEx ? 1 : 0
             if tgtModeIn == "Target Win Rate" and wrAdaptIn
-                kAdj := math.max(0.25, math.min(4.0, kAdj * math.exp(0.15 * ((rr > 0.02 ? 1.0 : 0.0) - tgtWrIn / 100.0))))
+                kAdj := math.max(0.02, math.min(4.0, kAdj * math.exp(0.15 * ((won ? 1.0 : 0.0) - tgtWrIn / 100.0))))
             wrPosR += math.max(rr, 0.0)
             wrNegR += math.max(-rr, 0.0)
             eqR    += rr
@@ -1669,8 +1678,8 @@ if barstate.isconfirmed and masterIn and inWin
             if tgtModeIn == "Target Win Rate"
                 float lq = math.log(tgtWrIn / (100.0 - tgtWrIn)) / 0.908
                 float qq = 1.0 / (1.0 + math.exp(-lq))
-                float dT = rkN * (1.0 - qq) / qq * (wrAdaptIn ? kAdj : 1.0)
-                tpN := dT >= syminfo.mintick ? close + dN * dT : na
+                float dT = math.max(rkN * (1.0 - qq) / qq * (wrAdaptIn ? kAdj : 1.0), (costIn + 1.0) * syminfo.mintick)
+                tpN := close + dN * dT
             else
                 tpN := f_tpPick(zs, dN, close, (tgtModeIn == "High Win Rate" ? 0.5 : minRRIn) * rkN)
             if not na(tpN)
