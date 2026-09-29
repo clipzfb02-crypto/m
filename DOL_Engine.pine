@@ -1629,9 +1629,9 @@ f_shFinal(array<float> ms, array<float> sm, array<float> sq, float mfe, float ex
 f_lcb(array<float> sm, array<float> sq, float n, int k, float z) =>
     float res = na
     if n > 1
-        float mu = array.get(sm, k) / n
-        float vr = math.max(array.get(sq, k) / n - mu * mu, 0.0)
-        res := mu - z * math.sqrt(vr / n)
+        float av = array.get(sm, k) / n
+        float vr = math.max(array.get(sq, k) / n - av * av, 0.0)
+        res := av - z * math.sqrt(vr / n)
     res
 
 // Index of the ledger target nearest to a target of m R (log distance)
