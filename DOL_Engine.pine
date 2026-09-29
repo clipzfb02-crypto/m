@@ -302,12 +302,15 @@ G_TRD      = "◆ WIN-RATE TRACKER"
 showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target set by the Target Mode below). One trade at a time. Works even when signal markers are hidden.")
 stopLbIn   = input.int(20, "Fallback Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD, tooltip = "Used only when no liquidity sweep is recorded inside the sweep window. Normally the stop sits beyond the swept liquidity.")
 stopBufIn  = input.float(0.1, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD, tooltip = "Distance beyond the swept high / low for the virtual stop.")
-tgtModeIn  = input.string("Target Win Rate", "Target Mode", options = ["Target Win Rate", "High Win Rate", "Balanced"], group = G_TRD, tooltip = "Target Win Rate: the take-profit is placed where the calibrated odds of hitting it before the stop equal the chosen win rate and self-adjusts until this chart's real win rate matches it (tested on 12 markets: 90% setting → 89.6% real wins). High Win Rate: nearest liquidity paying ≥ 0.5R. Balanced: nearest liquidity paying ≥ Min Reward : Risk. A high win rate uses small targets — profit depends on EDGE and costs, not WIN.")
+tgtModeIn  = input.string("Target Win Rate", "Target Mode", options = ["Target Win Rate", "Best Expectancy", "High Win Rate", "Balanced"], group = G_TRD, tooltip = "Best Expectancy: every past signal on this chart is replayed with 10 target sizes (0.05R-3R) after costs; the target that has actually paid the most is used. Target Win Rate: the take-profit is placed where the calibrated odds of hitting it before the stop equal the chosen win rate and self-adjusts until this chart's real win rate matches it (tested on 12 markets: 90% setting → 89.6% real wins). High Win Rate: nearest liquidity paying ≥ 0.5R. Balanced: nearest liquidity paying ≥ Min Reward : Risk. A high win rate uses small targets — profit depends on EDGE and costs, not WIN.")
 tgtWrIn    = input.int(90, "Target Win Rate %", minval = 55, maxval = 97, step = 1, group = G_TRD, tooltip = "Tested on 12 markets: target 85 → 84.9% real · 90 → 89.6% real (10 of 12 markets exactly 90%). Starting TP: 80 ≈ 0.22R · 85 ≈ 0.15R · 90 ≈ 0.09R · 95 ≈ 0.04R, then self-adjusted. Enter your real costs below: small targets are very sensitive to spread and commission.")
 wrAdaptIn  = input.bool(true, "Self-Adjust Target to Hit Win Rate", group = G_TRD, tooltip = "After every closed virtual trade the target distance is nudged (shorter after a loss, slightly longer after a win) so this chart's real win rate settles at the chosen %. Uses finished trades only — never repaints. Fills follow TradingView's broker emulator: gaps fill at the open, and when stop and target are both inside one bar the side nearer the open is hit first.")
 minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "The virtual target is the nearest liquidity on the signal side that pays at least this multiple of the risk. No such target = no trade.")
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
 costIn     = input.float(0.0, "Round-Trip Cost (ticks)", minval = 0.0, maxval = 100000.0, step = 1.0, group = G_TRD, tooltip = "Spread + commission + slippage per trade, in ticks. Subtracted from every virtual trade so WIN / EDGE stay realistic.")
+gateIn     = input.bool(true, "Edge Gate: Only Trade With Proven Profit", group = G_TRD, tooltip = "Every signal on this chart is replayed (never repaints) with 10 target sizes, after your costs. A signal is only taken (marker, alert, virtual trade) when the chosen target size has made money on this chart's past signals, with a safety margin. Charts with no edge simply stop trading instead of losing. A filter, not a guarantee: past edge can fade.")
+gateNIn    = input.int(30, "Edge Gate: Min Past Signals", minval = 10, maxval = 1000, group = G_TRD, tooltip = "Signals that must be replayed before the gate can open. Until then no trades are taken (shown as LEARNING).")
+gateZIn    = input.float(0.5, "Edge Gate: Safety Margin (σ)", minval = 0.0, maxval = 3.0, step = 0.25, group = G_TRD, tooltip = "The average profit must exceed this many standard errors above zero. Higher = fewer but more reliable trades.")
 beAtRIn    = input.float(0.0, "Breakeven at R (0 = off)", minval = 0.0, maxval = 10.0, step = 0.25, group = G_TRD, tooltip = "Moves the virtual stop to entry once price has moved this many R in favour.")
 
 // ── CALIBRATION / ACCURACY
@@ -1612,6 +1615,52 @@ if barstate.isconfirmed and masterIn and inWin
 // =====================================================================================================
 // WIN-RATE TRACKER — virtual trades, resolved on later bars only (gaps fill at the open · intrabar order = TradingView broker emulator)
 // =====================================================================================================
+// Shadow ledger: every signal is replayed with fixed target sizes until its stop or time stop, so each chart
+// learns which target size really pays after costs. Same fill rules as the tracker. Closed bars only.
+f_shFinal(array<float> ms, array<float> sm, array<float> sq, float mfe, float exR, float cR) =>
+    for k = 0 to array.size(ms) - 1
+        float m = array.get(ms, k)
+        float r = (mfe >= m ? m : exR) - cR
+        array.set(sm, k, array.get(sm, k) + r)
+        array.set(sq, k, array.get(sq, k) + r * r)
+    true
+
+// Lower confidence bound of the average R of target k
+f_lcb(array<float> sm, array<float> sq, float n, int k, float z) =>
+    float res = na
+    if n > 1
+        float mu = array.get(sm, k) / n
+        float vr = math.max(array.get(sq, k) / n - mu * mu, 0.0)
+        res := mu - z * math.sqrt(vr / n)
+    res
+
+// Index of the ledger target nearest to a target of m R (log distance)
+f_near(array<float> ms, float m) =>
+    int   bi = 0
+    float bd = 1e20
+    for k = 0 to array.size(ms) - 1
+        float d = math.abs(math.log(math.max(m, 0.001) / array.get(ms, k)))
+        if d < bd
+            bd := d
+            bi := k
+    bi
+
+var array<float> shM   = array.from(0.05, 0.1, 0.15, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0)
+var array<float> shSm  = array.new<float>(10, 0.0)
+var array<float> shSq  = array.new<float>(10, 0.0)
+var float        shN   = 0.0
+var array<int>   sdD   = array.new<int>()
+var array<float> sdEn  = array.new<float>()
+var array<float> sdSL  = array.new<float>()
+var array<float> sdRk  = array.new<float>()
+var array<int>   sdB   = array.new<int>()
+var array<float> sdMfe = array.new<float>()
+var int          gState = 0
+var float        gEdge  = na
+var float        gTgt   = na
+bool takeBull = false
+bool takeBear = false
+
 float swLo = ta.lowest(low, effStop)
 float swHi = ta.highest(high, effStop)
 var int   vtDir  = 0
@@ -1632,6 +1681,41 @@ var float wrBE   = 0.0
 var float kAdj   = 1.0
 var float wrNegR = 0.0
 if barstate.isconfirmed and masterIn and inWin
+    int shHold = effHold > 0 ? effHold : 200
+    int nSd    = array.size(sdD)
+    if nSd > 0
+        bool hiF = high - open < open - low
+        for i = nSd - 1 to 0
+            int   sd  = array.get(sdD, i)
+            float sEn = array.get(sdEn, i)
+            float sSl = array.get(sdSL, i)
+            float sRk = array.get(sdRk, i)
+            int   sB0 = array.get(sdB, i)
+            if bar_index > sB0
+                float fav = (sd == 1 ? high - sEn : sEn - low) / sRk
+                float mfe = array.get(sdMfe, i)
+                float exR = na
+                if sd == 1 ? open <= sSl : open >= sSl
+                    exR := (open - sEn) * sd / sRk
+                else if sd == 1 ? low <= sSl : high >= sSl
+                    if sd == 1 ? hiF : not hiF
+                        mfe := math.max(mfe, fav)
+                    exR := (sSl - sEn) * sd / sRk
+                else
+                    mfe := math.max(mfe, fav)
+                    if bar_index - sB0 >= shHold
+                        exR := (close - sEn) * sd / sRk
+                if na(exR)
+                    array.set(sdMfe, i, mfe)
+                else
+                    f_shFinal(shM, shSm, shSq, mfe, exR, costIn * syminfo.mintick / sRk)
+                    shN += 1
+                    array.remove(sdD, i)
+                    array.remove(sdEn, i)
+                    array.remove(sdSL, i)
+                    array.remove(sdRk, i)
+                    array.remove(sdB, i)
+                    array.remove(sdMfe, i)
     if vtDir != 0 and bar_index > vtBar
         float risk  = math.max(vtRisk, syminfo.mintick)
         bool  gapSL = vtDir == 1 ? open <= vtSL : open >= vtSL
@@ -1668,29 +1752,56 @@ if barstate.isconfirmed and masterIn and inWin
         else if beAtRIn > 0 and not vtBE and (vtDir == 1 ? high >= vtEn + beAtRIn * risk : low <= vtEn - beAtRIn * risk)
             vtSL := vtEn
             vtBE := true
-    // Entry at the signal close · stop beyond the swept liquidity · target = nearest liquidity paying ≥ min R:R
-    if vtDir == 0 and (sigBull or sigBear)
+    // Entry at the signal close · stop beyond the swept liquidity · target by Target Mode · Edge Gate
+    if sigBull or sigBear
         int   dN  = sigBull ? 1 : -1
         float slN = dN == 1 ? (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS : (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
         float rkN = (close - slN) * dN
         if rkN > 0
-            float tpN = na
+            float tpN   = na
+            float minTp = (costIn + 1.0) * syminfo.mintick
+            int   bestK = 0
+            float bestL = na
+            for k = 0 to 9
+                float lk = f_lcb(shSm, shSq, shN, k, gateZIn)
+                if not na(lk) and (na(bestL) or lk > bestL)
+                    bestL := lk
+                    bestK := k
             if tgtModeIn == "Target Win Rate"
                 float lq = math.log(tgtWrIn / (100.0 - tgtWrIn)) / 0.908
                 float qq = 1.0 / (1.0 + math.exp(-lq))
-                float dT = math.max(rkN * (1.0 - qq) / qq * (wrAdaptIn ? kAdj : 1.0), (costIn + 1.0) * syminfo.mintick)
-                tpN := close + dN * dT
+                tpN := close + dN * math.max(rkN * (1.0 - qq) / qq * (wrAdaptIn ? kAdj : 1.0), minTp)
+            else if tgtModeIn == "Best Expectancy"
+                tpN := close + dN * math.max(rkN * (shN >= gateNIn ? array.get(shM, bestK) : 1.0), minTp)
             else
                 tpN := f_tpPick(zs, dN, close, (tgtModeIn == "High Win Rate" ? 0.5 : minRRIn) * rkN)
+            bool gOk = true
             if not na(tpN)
-                vtDir  := dN
-                vtEn   := close
-                vtSL   := slN
-                vtTP   := tpN
-                vtBar  := bar_index
-                vtT    := time
-                vtRisk := rkN
-                vtBE   := false
+                int   kN = f_near(shM, (tpN - close) * dN / rkN)
+                float lN = f_lcb(shSm, shSq, shN, kN, gateZIn)
+                gTgt   := array.get(shM, kN)
+                gEdge  := shN > 1 ? array.get(shSm, kN) / shN : na
+                gState := shN < gateNIn ? 0 : not na(lN) and lN > 0 ? 1 : -1
+                gOk    := not gateIn or gState == 1
+            if not na(tpN) and gOk
+                takeBull := dN == 1
+                takeBear := dN == -1
+                if vtDir == 0
+                    vtDir  := dN
+                    vtEn   := close
+                    vtSL   := slN
+                    vtTP   := tpN
+                    vtBar  := bar_index
+                    vtT    := time
+                    vtRisk := rkN
+                    vtBE   := false
+            if array.size(sdD) < 80
+                array.push(sdD, dN)
+                array.push(sdEn, close)
+                array.push(sdSL, slN)
+                array.push(sdRk, rkN)
+                array.push(sdB, bar_index)
+                array.push(sdMfe, 0.0)
 
 // =====================================================================================================
 // VISUAL ENGINE — rebuilt from state on the last bar only (bounded, no historical clutter)
@@ -1801,12 +1912,12 @@ if reachOnIn and masterIn and barstate.islast and (barstate.isconfirmed or na(rU
     rDnV := close - f_reach(-1, reachPIn / 100.0)
     rT0  := time
 
-var table tbl = table.new(f_pos(tblPosIn), 3, 14, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
+var table tbl = table.new(f_pos(tblPosIn), 3, 15, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
 var table dbg = table.new(position.bottom_left, 2, 22, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
     f_clearAll(rB, rL, rT)
-    table.clear(tbl, 0, 0, 2, 13)
+    table.clear(tbl, 0, 0, 2, 14)
     table.clear(dbg, 0, 0, 1, 21)
 
 if barstate.islast and masterIn
@@ -2060,6 +2171,11 @@ if barstate.islast and masterIn
             table.cell(tbl, 0, 13, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
             table.cell(tbl, 1, 13, "", text_size = tsz)
             table.cell(tbl, 2, 13, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+            string gtTxt = not gateIn ? "OFF" : gState == 0 ? "LEARNING · " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : (gState == 1 ? "OPEN · " : "PAUSED · ") + (na(gEdge) ? "—" : (gEdge >= 0 ? "+" : "") + str.tostring(gEdge, "0.00") + "R @ " + str.tostring(gTgt, "0.##") + "R")
+            color  gtCol = not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colBullIn : colBearIn
+            table.cell(tbl, 0, 14, "GATE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Edge Gate: average profit per signal (after costs) of the current target size, replayed on " + str.tostring(shN, "0") + " past signals of this chart. OPEN = proven positive → signals are taken. PAUSED = no proven edge → signals are skipped. Status updates at each signal.")
+            table.cell(tbl, 1, 14, "", text_size = tsz)
+            table.cell(tbl, 2, 14, gtTxt, text_color = gtCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
     // ── Debug panel
     if debugIn
@@ -2086,8 +2202,10 @@ if barstate.islast and masterIn
 // =====================================================================================================
 // SIGNAL MARKERS + DATA WINDOW
 // =====================================================================================================
-plotshape(sigOnIn and sigBull, "Long Setup", shape.triangleup, location.belowbar, colBullIn, size = size.tiny)
-plotshape(sigOnIn and sigBear, "Short Setup", shape.triangledown, location.abovebar, colBearIn, size = size.tiny)
+plotshape(sigOnIn and takeBull, "Long Setup", shape.triangleup, location.belowbar, colBullIn, size = size.tiny)
+plotshape(sigOnIn and takeBear, "Short Setup", shape.triangledown, location.abovebar, colBearIn, size = size.tiny)
+plotshape(sigOnIn and sigBull and not takeBull, "Skipped Long (no proven edge)", shape.xcross, location.belowbar, color.new(colNeuIn, 40), size = size.tiny)
+plotshape(sigOnIn and sigBear and not takeBear, "Skipped Short (no proven edge)", shape.xcross, location.abovebar, color.new(colNeuIn, 40), size = size.tiny)
 bgcolor(masterIn and newsBgIn and newsBlock ? color.new(colBearIn, 93) : na, title = "News Blackout")
 plot(primScr, "DOL Score", color = colNeuIn, display = display.data_window)
 plot(primPot, "DOL PoT % (bar close)", color = colNeuIn, display = display.data_window)
@@ -2103,8 +2221,8 @@ alertcondition(evNewFvg,  "DOL · New FVG",           "DOL: new FVG on {{ticker}
 alertcondition(evSideAct, "DOL · Side Activated",    "DOL: draw side changed on {{ticker}} {{interval}}")
 alertcondition(evScoreX,  "DOL · Score Threshold",   "DOL: score crossed threshold on {{ticker}} {{interval}}")
 alertcondition(evPotX,    "DOL · PoT Threshold",     "DOL: PoT crossed threshold on {{ticker}} {{interval}}")
-alertcondition(sigOnIn and sigBull, "DOL · Long Setup",  "DOL: long setup on {{ticker}} {{interval}}")
-alertcondition(sigOnIn and sigBear, "DOL · Short Setup", "DOL: short setup on {{ticker}} {{interval}}")
+alertcondition(sigOnIn and takeBull, "DOL · Long Setup",  "DOL: long setup on {{ticker}} {{interval}}")
+alertcondition(sigOnIn and takeBear, "DOL · Short Setup", "DOL: short setup on {{ticker}} {{interval}}")
 alertcondition(evBiasChg, "DOL · HTF Bias Change",   "DOL: HTF bias changed on {{ticker}} {{interval}}")
 alertcondition(evAlign,   "DOL · Exec/HTF Aligned",  "DOL: execution bias aligned with HTF on {{ticker}} {{interval}}")
 alertcondition(evNewsOn,  "DOL · News Blackout",     "DOL: news blackout started on {{ticker}} {{interval}}")
@@ -2128,9 +2246,9 @@ if barstate.isconfirmed and masterIn and inWin
         alert("DOL Score ≥ " + str.tostring(alScoreTh) + aTail, alert.freq_once_per_bar_close)
     if alPotIn and evPotX
         alert("DOL PoT ≥ " + str.tostring(alPotTh, "0.0") + "%" + aTail, alert.freq_once_per_bar_close)
-    if alSigIn and sigOnIn and sigBull
+    if alSigIn and sigOnIn and takeBull
         alert("Long Setup" + aTail, alert.freq_once_per_bar_close)
-    if alSigIn and sigOnIn and sigBear
+    if alSigIn and sigOnIn and takeBear
         alert("Short Setup" + aTail, alert.freq_once_per_bar_close)
     if alBiasIn and evBiasChg
         alert("HTF Bias " + f_biasTxt(bH1) + " | " + h1Lbl + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
