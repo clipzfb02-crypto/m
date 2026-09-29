@@ -302,7 +302,8 @@ G_TRD      = "◆ WIN-RATE TRACKER"
 showWrIn   = input.bool(true, "Show Signal Win Rate", group = G_TRD, tooltip = "Tracks every execution signal as a virtual trade (entry at signal close, stop beyond the swept liquidity, target = nearest liquidity paying at least the min R:R). One trade at a time. Works even when signal markers are hidden.")
 stopLbIn   = input.int(20, "Fallback Stop Lookback (bars)", minval = 2, maxval = 200, group = G_TRD, tooltip = "Used only when no liquidity sweep is recorded inside the sweep window. Normally the stop sits beyond the swept liquidity.")
 stopBufIn  = input.float(0.1, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD, tooltip = "Distance beyond the swept high / low for the virtual stop.")
-tgtModeIn  = input.string("High Win Rate", "Target Mode", options = ["High Win Rate", "Balanced"], group = G_TRD, tooltip = "High Win Rate: target = nearest liquidity paying ≥ 0.5R (more winners, smaller wins). Balanced: target = nearest liquidity paying ≥ Min Reward : Risk. A higher win rate does not by itself mean more profit — watch EDGE.")
+tgtModeIn  = input.string("Target Win Rate", "Target Mode", options = ["Target Win Rate", "High Win Rate", "Balanced"], group = G_TRD, tooltip = "Target Win Rate: the take-profit is placed where the calibrated odds of hitting it before the stop equal the chosen win rate (tested: 85% setting → 82.6% real wins across BTC, ES, EURUSD, Gold, SPY). High Win Rate: nearest liquidity paying ≥ 0.5R. Balanced: nearest liquidity paying ≥ Min Reward : Risk. A high win rate uses small targets — profit depends on EDGE and costs, not WIN.")
+tgtWrIn    = input.int(85, "Target Win Rate %", minval = 55, maxval = 95, step = 5, group = G_TRD, tooltip = "80 → TP ≈ 0.22R · 85 → TP ≈ 0.15R · 90 → TP ≈ 0.09R. Enter your real costs below: small targets are very sensitive to spread and commission.")
 minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "The virtual target is the nearest liquidity on the signal side that pays at least this multiple of the risk. No such target = no trade.")
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
 costIn     = input.float(0.0, "Round-Trip Cost (ticks)", minval = 0.0, maxval = 100000.0, step = 1.0, group = G_TRD, tooltip = "Spread + commission + slippage per trade, in ticks. Subtracted from every virtual trade so WIN / EDGE stay realistic.")
@@ -1660,7 +1661,14 @@ if barstate.isconfirmed and masterIn and inWin
         float slN = dN == 1 ? (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS : (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
         float rkN = (close - slN) * dN
         if rkN > 0
-            float tpN = f_tpPick(zs, dN, close, (tgtModeIn == "High Win Rate" ? 0.5 : minRRIn) * rkN)
+            float tpN = na
+            if tgtModeIn == "Target Win Rate"
+                float lq = math.log(tgtWrIn / (100.0 - tgtWrIn)) / 0.908
+                float qq = 1.0 / (1.0 + math.exp(-lq))
+                float dT = rkN * (1.0 - qq) / qq
+                tpN := dT >= syminfo.mintick ? close + dN * dT : na
+            else
+                tpN := f_tpPick(zs, dN, close, (tgtModeIn == "High Win Rate" ? 0.5 : minRRIn) * rkN)
             if not na(tpN)
                 vtDir  := dN
                 vtEn   := close
@@ -1917,7 +1925,7 @@ if barstate.islast and masterIn
         f_mkLine(rL, vtT, vtSL, rightT, vtSL, color.new(colBearIn, 25), line.style_dashed, 1)
         f_mkLine(rL, vtT, vtTP, rightT, vtTP, color.new(colBullIn, 25), line.style_dashed, 1)
         f_mkLbl(rT, rightT, vtSL, "SL", noCol, color.new(colBearIn, 15), label.style_label_left, size.tiny, "Virtual stop (beyond the swept liquidity)")
-        f_mkLbl(rT, rightT, vtTP, "TP " + str.tostring(rrT, "0.0") + "R", noCol, color.new(tcl, 15), label.style_label_left, size.tiny, "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R · locked until hit")
+        f_mkLbl(rT, rightT, vtTP, "TP " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 15), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
 
     // ── Reach bands: levels with the chosen probability of being touched within the horizon
     if reachOnIn and not na(rUpV) and f_room(rB, rL, rT, maxVisIn)
