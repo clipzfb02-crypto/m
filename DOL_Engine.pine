@@ -304,6 +304,7 @@ stopLbIn   = input.int(20, "Fallback Stop Lookback (bars)", minval = 2, maxval =
 stopBufIn  = input.float(0.1, "Stop Buffer (ATR)", minval = 0.0, maxval = 5.0, step = 0.05, group = G_TRD, tooltip = "Distance beyond the swept high / low for the virtual stop.")
 tgtModeIn  = input.string("Target Win Rate", "Target Mode", options = ["Target Win Rate", "High Win Rate", "Balanced"], group = G_TRD, tooltip = "Target Win Rate: the take-profit is placed where the calibrated odds of hitting it before the stop equal the chosen win rate (tested: 85% setting → 82.6% real wins across BTC, ES, EURUSD, Gold, SPY). High Win Rate: nearest liquidity paying ≥ 0.5R. Balanced: nearest liquidity paying ≥ Min Reward : Risk. A high win rate uses small targets — profit depends on EDGE and costs, not WIN.")
 tgtWrIn    = input.int(85, "Target Win Rate %", minval = 55, maxval = 95, step = 5, group = G_TRD, tooltip = "80 → TP ≈ 0.22R · 85 → TP ≈ 0.15R · 90 → TP ≈ 0.09R. Enter your real costs below: small targets are very sensitive to spread and commission.")
+wrAdaptIn  = input.bool(true, "Self-Adjust Target to Hit Win Rate", group = G_TRD, tooltip = "After every closed virtual trade the target distance is nudged (shorter after a loss, slightly longer after a win) so this chart's real win rate settles at the chosen %. Uses finished trades only — never repaints.")
 minRRIn    = input.float(1.0, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "The virtual target is the nearest liquidity on the signal side that pays at least this multiple of the risk. No such target = no trade.")
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
 costIn     = input.float(0.0, "Round-Trip Cost (ticks)", minval = 0.0, maxval = 100000.0, step = 1.0, group = G_TRD, tooltip = "Spread + commission + slippage per trade, in ticks. Subtracted from every virtual trade so WIN / EDGE stay realistic.")
@@ -1628,6 +1629,7 @@ var float wrN    = 0.0
 var float wrW    = 0.0
 var float wrPosR = 0.0
 var float wrBE   = 0.0
+var float kAdj   = 1.0
 var float wrNegR = 0.0
 if barstate.isconfirmed and masterIn and inWin
     if vtDir != 0 and bar_index > vtBar
@@ -1646,6 +1648,8 @@ if barstate.isconfirmed and masterIn and inWin
             wrN += 1
             wrW  += rr > 0.02 ? 1 : 0
             wrBE += math.abs(rr) <= 0.02 ? 1 : 0
+            if tgtModeIn == "Target Win Rate" and wrAdaptIn
+                kAdj := math.max(0.25, math.min(4.0, kAdj * math.exp(0.15 * ((rr > 0.02 ? 1.0 : 0.0) - tgtWrIn / 100.0))))
             wrPosR += math.max(rr, 0.0)
             wrNegR += math.max(-rr, 0.0)
             eqR    += rr
@@ -1665,7 +1669,7 @@ if barstate.isconfirmed and masterIn and inWin
             if tgtModeIn == "Target Win Rate"
                 float lq = math.log(tgtWrIn / (100.0 - tgtWrIn)) / 0.908
                 float qq = 1.0 / (1.0 + math.exp(-lq))
-                float dT = rkN * (1.0 - qq) / qq
+                float dT = rkN * (1.0 - qq) / qq * (wrAdaptIn ? kAdj : 1.0)
                 tpN := dT >= syminfo.mintick ? close + dN * dT : na
             else
                 tpN := f_tpPick(zs, dN, close, (tgtModeIn == "High Win Rate" ? 0.5 : minRRIn) * rkN)
@@ -2041,7 +2045,7 @@ if barstate.islast and masterIn
             color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colBullIn : colBearIn) : colNeuIn
             float  expR  = wrN >= 1 ? (wrPosR - wrNegR) / wrN : 0.0
             string edTxt = wrN >= 1 ? (expR >= 0 ? "+" : "") + str.tostring(expR, "0.00") + "R/trade · DD " + str.tostring(maxDD, "0.0") + "R" : "—"
-            table.cell(tbl, 0, 12, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Stop beyond the swept liquidity, target = nearest liquidity paying ≥ min R:R " + str.tostring(minRRIn, "0.0") + ", cost " + str.tostring(costIn, "0") + " ticks. Research across 13 markets found no reliable edge in these setups; judge them only by this chart's own numbers.")
+            table.cell(tbl, 0, 12, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Mode: " + tgtModeIn + (tgtModeIn == "Target Win Rate" ? " " + str.tostring(tgtWrIn) + "% (target scale " + str.tostring(kAdj, "0.00") + ")" : "") + ". Stop beyond the swept liquidity, cost " + str.tostring(costIn, "0") + " ticks. Research across 13 markets found no reliable edge in these setups; judge them only by this chart's own numbers.")
             table.cell(tbl, 1, 12, "", text_size = tsz)
             table.cell(tbl, 2, 12, wrTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
             table.cell(tbl, 0, 13, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
