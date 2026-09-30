@@ -1,0 +1,234 @@
+//@version=6
+// ============================================================================
+//  MNQ 5m ORB Signals
+//  Opening-range breakout BUY / SELL signals for MNQ1! (or NQ1!) on a 5-minute chart.
+//
+//  Rules (all times New York):
+//    1. Opening range (OR) = high / low of the first 15 minutes after the 09:30 open.
+//    2. BUY  = first 5m candle between 09:45 and 12:00 that CLOSES above the OR high
+//              and closes in the top 20% of its own range (strong-conviction breakout).
+//       SELL = mirror image below the OR low.  Maximum one signal per day.
+//    3. Stop   = opposite side of the opening range.
+//       Target = entry +/- 0.5 x risk (0.5R).  Anything still open is closed at 15:50.
+//
+//  Signals are only evaluated on confirmed (closed) bars and use no higher-timeframe
+//  requests, so they do not repaint.  The stats table replays the rules over the bars
+//  loaded on your chart, per 1 contract, after the round-trip cost you set.
+//
+//  Backtest on NQ 5m data 2023-2025 (729 trades, 1.5 pts cost per trade): 69.1% win rate,
+//  profit factor 1.22, every year profitable.  A separate Feb-May 2026 test was slightly
+//  negative.  Past results do not guarantee future results.  Not financial advice.
+// ============================================================================
+indicator("MNQ 5m ORB Signals", shorttitle = "MNQ ORB", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+string G_SETUP = "Setup (defaults = backtested settings)"
+int   orMinutes  = input.int(15, "Opening range length (minutes)", minval = 5, maxval = 60, step = 5, group = G_SETUP, tooltip = "The range is built from the first N minutes after the 09:30 New York open.")
+float bodyMin    = input.float(0.8, "Breakout candle strength", minval = 0.0, maxval = 1.0, step = 0.05, group = G_SETUP, tooltip = "Where the breakout candle must close inside its own high-low range. 0.8 = close in the top 20% of the candle for a BUY (bottom 20% for a SELL).")
+float tpR        = input.float(0.5, "Take profit (R multiple)", minval = 0.1, maxval = 5.0, step = 0.05, group = G_SETUP, tooltip = "Target = entry +/- R x risk, where risk = distance from entry to the opposite side of the opening range. 0.5 gave the highest win rate that was still profitable in testing. 0.75 - 1.0 = bigger wins, lower win rate.")
+int   lastEntryH = input.int(12, "Last entry time (NY)", minval = 9, maxval = 15, inline = "le", group = G_SETUP)
+int   lastEntryM = input.int(0, "", minval = 0, maxval = 55, step = 5, inline = "le", group = G_SETUP)
+int   flatH      = input.int(15, "Flatten time (NY)", minval = 10, maxval = 16, inline = "fl", group = G_SETUP)
+int   flatM      = input.int(50, "", minval = 0, maxval = 55, step = 5, inline = "fl", group = G_SETUP)
+bool  allowLong  = input.bool(true, "Buys", inline = "dir", group = G_SETUP)
+bool  allowShort = input.bool(true, "Sells", inline = "dir", group = G_SETUP)
+float maxRiskPts = input.float(0.0, "Skip signal if risk is above (points, 0 = off)", minval = 0.0, step = 5.0, group = G_SETUP, tooltip = "Optional account-protection filter. Example: 100 skips days where the stop would be more than 100 points ($200 per MNQ contract) away. Off in the backtest.")
+bool  enforceMkt = input.bool(true, "Signal only on MNQ / NQ 5-minute charts", group = G_SETUP)
+
+string G_VIS = "Display"
+bool   showOR    = input.bool(true, "Show opening range", group = G_VIS)
+bool   showTrade = input.bool(true, "Show entry / stop / target lines", group = G_VIS)
+bool   showTable = input.bool(true, "Show stats table", group = G_VIS)
+string tablePos  = input.string("Top right", "Table position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = G_VIS)
+float  costPts   = input.float(1.5, "Round-trip cost used in stats (points)", minval = 0.0, step = 0.25, group = G_VIS, tooltip = "Commission + slippage per round trip, in index points. 1.5 points = $3 per MNQ contract.")
+color  colBuy    = input.color(#089981, "Buy", inline = "col", group = G_VIS)
+color  colSell   = input.color(#f23645, "Sell", inline = "col", group = G_VIS)
+color  colOR     = input.color(#2962ff, "Range", inline = "col", group = G_VIS)
+
+// ───────────────────────────── Session clock (New York) ─────────────────────────────
+string TZ         = "America/New_York"
+int    nyMin      = hour(time, TZ) * 60 + minute(time, TZ)
+int    orStartMin = 9 * 60 + 30
+int    orEndMin   = orStartMin + orMinutes
+int    entryEnd   = lastEntryH * 60 + lastEntryM
+int    flatMin    = flatH * 60 + flatM
+
+bool isNasdaq = syminfo.root == "MNQ" or syminfo.root == "NQ"
+bool is5m     = timeframe.in_seconds(timeframe.period) == 300
+bool marketOk = not enforceMkt or (isNasdaq and is5m)
+bool newDay   = timeframe.change("D")
+bool inOR     = nyMin >= orStartMin and nyMin < orEndMin
+bool outOfDay = nyMin >= flatMin or nyMin < orStartMin
+
+// ───────────────────────────── Opening range ─────────────────────────────
+var float orHi      = na
+var float orLo      = na
+var bool  doneToday = false
+
+if newDay
+    orHi      := na
+    orLo      := na
+    doneToday := false
+
+if inOR
+    orHi := na(orHi) ? high : math.max(orHi, high)
+    orLo := na(orLo) ? low : math.min(orLo, low)
+
+// ───────────────────────────── Trade tracking & stats ─────────────────────────────
+var int   tDir    = 0
+var float tEntry  = na
+var float tStop   = na
+var float tTarget = na
+var int   tBar    = na
+var line  lnEntry = na
+var line  lnStop  = na
+var line  lnTgt   = na
+
+var int   nTrades   = 0
+var int   nWins     = 0
+var float grossWin  = 0.0
+var float grossLoss = 0.0
+var float netPts    = 0.0
+var float peakPts   = 0.0
+var float maxDDPts  = 0.0
+
+// Manage the open trade first (bars after the signal bar). Stop is checked before target,
+// so a bar that touches both counts as a loss (conservative).
+if barstate.isconfirmed and tDir != 0 and bar_index > tBar
+    float  exitPx  = na
+    string exitWhy = ""
+    if tDir == 1
+        if low <= tStop
+            exitPx  := math.min(open, tStop)
+            exitWhy := "SL"
+        else if high >= tTarget
+            exitPx  := math.max(open, tTarget)
+            exitWhy := "TP"
+    else
+        if high >= tStop
+            exitPx  := math.max(open, tStop)
+            exitWhy := "SL"
+        else if low <= tTarget
+            exitPx  := math.min(open, tTarget)
+            exitWhy := "TP"
+    if na(exitPx) and outOfDay
+        exitPx  := close
+        exitWhy := "EOD"
+
+    if not na(lnEntry)
+        line.set_x2(lnEntry, bar_index)
+        line.set_x2(lnStop, bar_index)
+        line.set_x2(lnTgt, bar_index)
+
+    if not na(exitPx)
+        float pnl = (exitPx - tEntry) * tDir - costPts
+        nTrades += 1
+        if pnl > 0
+            nWins    += 1
+            grossWin += pnl
+        else
+            grossLoss -= pnl
+        netPts   += pnl
+        peakPts  := math.max(peakPts, netPts)
+        maxDDPts := math.max(maxDDPts, peakPts - netPts)
+        string pnlTxt = (pnl >= 0 ? "+" : "") + str.tostring(pnl, "#.##")
+        if showTrade
+            bool above = (tDir == 1) == (exitWhy == "TP")
+            label.new(bar_index, exitPx, exitWhy + " " + pnlTxt, style = above ? label.style_label_down : label.style_label_up, color = color.new(pnl > 0 ? colBuy : colSell, 20), textcolor = color.white, size = size.tiny)
+        alert("MNQ ORB " + (tDir == 1 ? "LONG" : "SHORT") + " closed: " + exitWhy + " @ " + str.tostring(exitPx, format.mintick) + " (" + pnlTxt + " pts)", alert.freq_once_per_bar_close)
+        tDir    := 0
+        lnEntry := na
+        lnStop  := na
+        lnTgt   := na
+
+// ───────────────────────────── Signal ─────────────────────────────
+float barRange  = math.max(high - low, syminfo.mintick)
+bool  canSignal = barstate.isconfirmed and marketOk and not doneToday and tDir == 0 and not na(orHi) and nyMin >= orEndMin and nyMin <= entryEnd
+bool  bullBreak = canSignal and close > orHi and (close - low) / barRange >= bodyMin
+bool  bearBreak = canSignal and close < orLo and (high - close) / barRange >= bodyMin
+float riskPts   = bullBreak ? close - orLo : bearBreak ? orHi - close : na
+bool  riskOk    = maxRiskPts <= 0 or riskPts <= maxRiskPts
+bool  buySig    = bullBreak and allowLong and riskOk
+bool  sellSig   = bearBreak and allowShort and riskOk
+
+if bullBreak or bearBreak
+    doneToday := true   // only the first qualifying breakout of the day counts
+
+if buySig or sellSig
+    tDir    := buySig ? 1 : -1
+    tEntry  := close
+    tStop   := buySig ? orLo : orHi
+    tTarget := close + tDir * math.max(1, math.floor(tpR * riskPts / syminfo.mintick + 1e-6)) * syminfo.mintick   // target rounded DOWN to a whole tick
+    tBar    := bar_index
+    if showTrade
+        lnEntry := line.new(bar_index, tEntry, bar_index + 1, tEntry, color = color.gray, width = 2)
+        lnStop  := line.new(bar_index, tStop, bar_index + 1, tStop, color = colSell, style = line.style_dashed, width = 2)
+        lnTgt   := line.new(bar_index, tTarget, bar_index + 1, tTarget, color = colBuy, style = line.style_dashed, width = 2)
+    alert("MNQ ORB " + (buySig ? "BUY" : "SELL") + " | entry " + str.tostring(tEntry, format.mintick) + " | stop " + str.tostring(tStop, format.mintick) + " | target " + str.tostring(tTarget, format.mintick) + " | risk " + str.tostring(riskPts, format.mintick) + " pts", alert.freq_once_per_bar_close)
+
+// ───────────────────────────── Plots ─────────────────────────────
+bool  orVisible = showOR and nyMin >= orEndMin and nyMin <= flatMin
+pOrHi = plot(orVisible ? orHi : na, "OR high", color = colOR, linewidth = 1, style = plot.style_linebr)
+pOrLo = plot(orVisible ? orLo : na, "OR low", color = colOR, linewidth = 1, style = plot.style_linebr)
+fill(pOrHi, pOrLo, color = color.new(colOR, 92), title = "OR fill")
+bgcolor(showOR and inOR ? color.new(colOR, 90) : na, title = "OR window")
+
+plotshape(buySig, title = "BUY", style = shape.labelup, location = location.belowbar, color = colBuy, text = "BUY", textcolor = color.white, size = size.small)
+plotshape(sellSig, title = "SELL", style = shape.labeldown, location = location.abovebar, color = colSell, text = "SELL", textcolor = color.white, size = size.small)
+
+alertcondition(buySig, "ORB BUY", "MNQ ORB BUY on {{ticker}} at {{close}}")
+alertcondition(sellSig, "ORB SELL", "MNQ ORB SELL on {{ticker}} at {{close}}")
+alertcondition(buySig or sellSig, "ORB any signal", "MNQ ORB signal on {{ticker}} at {{close}}")
+
+// ───────────────────────────── Stats table ─────────────────────────────
+fmtUsd(float x) =>
+    (x < 0 ? "-$" : "$") + str.tostring(math.abs(x), "#,###")
+
+string tblPosStr = tablePos == "Top left" ? position.top_left : tablePos == "Bottom right" ? position.bottom_right : tablePos == "Bottom left" ? position.bottom_left : position.top_right
+var table dash = table.new(tblPosStr, 2, 10, bgcolor = color.new(#131722, 10), frame_color = color.new(color.gray, 60), frame_width = 1, border_color = color.new(color.gray, 80), border_width = 1)
+
+if showTable and barstate.islast
+    color  txt     = color.white
+    float  pv      = syminfo.pointvalue
+    float  winRate = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
+    string pfTxt   = grossLoss > 0 ? str.tostring(grossWin / grossLoss, "#.##") : nTrades > 0 ? "∞" : "-"
+    string status  = ""
+    if tDir == 1
+        status := "LONG  SL " + str.tostring(tStop, format.mintick) + "  TP " + str.tostring(tTarget, format.mintick)
+    else if tDir == -1
+        status := "SHORT  SL " + str.tostring(tStop, format.mintick) + "  TP " + str.tostring(tTarget, format.mintick)
+    else if not marketOk
+        status := "Off - open MNQ1! on 5m"
+    else if outOfDay
+        status := "Waiting for 09:30 NY open"
+    else if inOR
+        status := "Building opening range"
+    else if doneToday
+        status := "Done for today"
+    else if nyMin <= entryEnd
+        status := "Watching for breakout"
+    else
+        status := "No setup today"
+    string orTxt = na(orHi) or nyMin < orEndMin ? "-" : str.tostring(orHi, format.mintick) + " / " + str.tostring(orLo, format.mintick) + "  (" + str.tostring(orHi - orLo, format.mintick) + ")"
+    string chartTxt = isNasdaq and is5m ? syminfo.ticker + " 5m  OK" : "Use MNQ1! on 5m"
+
+    table.cell(dash, 0, 0, "MNQ 5m ORB", text_color = txt, text_size = size.small, bgcolor = color.new(colOR, 40))
+    table.cell(dash, 1, 0, "TP " + str.tostring(tpR) + "R", text_color = txt, text_size = size.small, bgcolor = color.new(colOR, 40))
+    table.cell(dash, 0, 1, "Chart", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 1, chartTxt, text_color = isNasdaq and is5m ? colBuy : colSell, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 2, "Opening range", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 2, orTxt, text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 3, "Status", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 3, status, text_color = tDir == 1 ? colBuy : tDir == -1 ? colSell : txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 4, "Trades (chart)", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 4, str.tostring(nTrades), text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 5, "Win rate", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 5, str.tostring(winRate, "#.#") + "%", text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 6, "Profit factor", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 6, pfTxt, text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 7, "Net (1 contract)", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 7, str.tostring(netPts, "#.##") + " pts  (" + fmtUsd(netPts * pv) + ")", text_color = netPts >= 0 ? colBuy : colSell, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 8, "Max drawdown", text_color = txt, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 8, str.tostring(maxDDPts, "#.##") + " pts  (" + fmtUsd(maxDDPts * pv) + ")", text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 9, "Cost " + str.tostring(costPts) + " pts/trade", text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+    table.cell(dash, 1, 9, "Not financial advice", text_color = color.gray, text_size = size.tiny, text_halign = text.align_right)

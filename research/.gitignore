@@ -1,0 +1,5 @@
+data/
+data_src/
+__pycache__/
+verify_pinets/node_modules/
+verify_pinets/*.json
