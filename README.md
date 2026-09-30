@@ -68,6 +68,37 @@ A high win rate here comes from a small target (≈0.09R at 90%), not from predi
 was about 0R before costs. Enter your real round-trip cost, because small targets are very sensitive to it.
 Judge the setup by EDGE (expectancy), not by WIN alone.
 
+### MNQ / MES 1-minute research (real-money settings)
+- **Data:** about 3.7 years of 1-minute Nasdaq-100 and S&P 500 index data (Dukascopy). About 420 full New York
+  sessions per market were available.
+- **Costs:** 1.0 point round trip on NQ, which is 4 MNQ ticks, and 0.5 point on the S&P, which is 2 MES ticks.
+
+**What we tested:**
+- **Strategy families:** each was tuned on 2023 through March 2025 and scored on April 2025 through September 2026.
+  - Opening-range breakout.
+  - Noise-boundary intraday momentum.
+  - First-half-hour intraday momentum.
+  - ICT-style sweep reversals of the prior-day and overnight highs/lows.
+- **Models:** linear and gradient-boosted models on about 20 price features, walk-forward over 2024, 2025 and 2026.
+- **Result:** none gave a reliable profit after costs.
+
+**Where the losses come from:**
+- The execution signal is about break-even before costs. Costs cause most of the loss: −0.08R per trade on NQ
+  and −0.17R on the S&P.
+- Overnight and after-hours signals, and signals with tight stops, lose 3–5× more.
+- v6.1 adds two filters: Core New York hours, and skipping signals whose cost is over 3% of the stop.
+
+| Replay, simplified signal | NQ trades | NQ total | S&P trades | S&P total |
+|---|---|---|---|---|
+| Old: no filters, 90% target | 20,031 (89.8% win) | −1,655R | 19,038 (84.7% win) | −3,245R |
+| New filters, 90% target | 2,460 (90.0% win) | −75R | 537 (89.4% win) | −26R |
+| New filters, 1R target | 1,903 | −36R | 457 | +7.5R |
+| Filters + Edge Gate + daily limit | 10 | −2R | 70 | −8R |
+
+The filters remove most of the cost damage. The Edge Gate stays closed when a chart has no proven edge, so it
+barely trades. **Nothing tested here is reliably profitable on its own.** The Risk group adds tools that limit
+damage: position size for a fixed $ risk, a daily loss limit and a maximum number of signals per day.
+
 With the v6 logic and TradingView's default 5,000-bar window, the average across the 26 datasets was:
 - SKILL +20.3%
 - DOL HIT 74%
