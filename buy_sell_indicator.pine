@@ -1,0 +1,117 @@
+//@version=5
+indicator("Buy/Sell Indicator", overlay=true, timeframe="")
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// RSI Settings
+rsi_length = input(14, title="RSI Length", group="RSI Settings")
+rsi_overbought = input(70, title="RSI Overbought Level", group="RSI Settings")
+rsi_oversold = input(30, title="RSI Oversold Level", group="RSI Settings")
+
+// Moving Average Settings
+ma_fast_length = input(9, title="Fast MA Length", group="Moving Averages")
+ma_slow_length = input(21, title="Slow MA Length", group="Moving Averages")
+ma_type = input.string("EMA", title="MA Type", options=["SMA", "EMA"], group="Moving Averages")
+
+// MACD Settings
+macd_fast = input(12, title="MACD Fast Length", group="MACD Settings")
+macd_slow = input(26, title="MACD Slow Length", group="MACD Settings")
+macd_signal = input(9, title="MACD Signal Length", group="MACD Settings")
+
+// Signal Strength (how many indicators need to align)
+min_signals = input(2, title="Minimum Signals for Trade", minval=1, maxval=3, group="Signal Settings")
+
+// Visual Settings
+show_rsi = input(true, title="Show RSI Signals", group="Visual Settings")
+show_ma = input(true, title="Show MA Signals", group="Visual Settings")
+show_macd = input(true, title="Show MACD Signals", group="Visual Settings")
+show_ma_lines = input(true, title="Show MA Lines", group="Visual Settings")
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// RSI Calculation
+rsi = ta.rsi(close, rsi_length)
+
+// Moving Averages
+ma_fast = ma_type == "EMA" ? ta.ema(close, ma_fast_length) : ta.sma(close, ma_fast_length)
+ma_slow = ma_type == "EMA" ? ta.ema(close, ma_slow_length) : ta.sma(close, ma_slow_length)
+ma_crossover = ta.crossover(ma_fast, ma_slow)
+ma_crossunder = ta.crossunder(ma_fast, ma_slow)
+
+// MACD Calculation
+[macd_line, signal_line, hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+macd_crossover = ta.crossover(macd_line, signal_line)
+macd_crossunder = ta.crossunder(macd_line, signal_line)
+
+// ============================================================================
+// SIGNAL GENERATION
+// ============================================================================
+
+// Individual Signal Conditions
+rsi_buy = rsi < rsi_oversold
+rsi_sell = rsi > rsi_overbought
+
+ma_buy = ma_crossover
+ma_sell = ma_crossunder
+
+macd_buy = macd_crossover
+macd_sell = macd_crossunder
+
+// Count active signals for buys
+buy_signals = (rsi_buy ? 1 : 0) + (ma_buy ? 1 : 0) + (macd_buy ? 1 : 0)
+sell_signals = (rsi_sell ? 1 : 0) + (ma_sell ? 1 : 0) + (macd_sell ? 1 : 0)
+
+// Final Buy/Sell Signals
+buy_signal = buy_signals >= min_signals
+sell_signal = sell_signals >= min_signals
+
+// ============================================================================
+// VISUALIZATION
+// ============================================================================
+
+// Moving Average Lines
+plot(show_ma_lines ? ma_fast : na, color=color.blue, linewidth=2, title="Fast MA")
+plot(show_ma_lines ? ma_slow : na, color=color.red, linewidth=2, title="Slow MA")
+
+// Buy Signals (Green triangles pointing up)
+plotshape(buy_signal and show_rsi, style=shape.triangleup, location=location.belowbar,
+          color=color.new(color.green, 0), size=size.small, title="Buy Signal")
+
+// Sell Signals (Red triangles pointing down)
+plotshape(sell_signal and show_rsi, style=shape.triangledown, location=location.abovebar,
+          color=color.new(color.red, 0), size=size.small, title="Sell Signal")
+
+// Background color for buy/sell zones
+buy_background = buy_signal ? color.new(color.green, 90) : na
+sell_background = sell_signal ? color.new(color.red, 90) : na
+
+bgcolor(buy_background, title="Buy Zone")
+bgcolor(sell_background, title="Sell Zone")
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(buy_signal, title="Buy Signal Alert", message="Buy signal detected!")
+alertcondition(sell_signal, title="Sell Signal Alert", message="Sell signal detected!")
+
+// ============================================================================
+// DEBUGGING (Comment to prevent too much info)
+// ============================================================================
+
+// Display signal count (useful for tuning min_signals parameter)
+f_textSize() =>
+    if timeframe.isintraday
+        size.small
+    else
+        size.tiny
+
+var debug_text = ""
+if barstate.islast
+    debug_text := "Buy: " + str.tostring(buy_signals) + " | Sell: " + str.tostring(sell_signals)
+    label.new(bar_index, high * 1.005, text=debug_text, style=label.style_label_lower,
+              textcolor=color.white, size=f_textSize(), color=color.new(color.gray, 30))
