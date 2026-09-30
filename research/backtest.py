@@ -54,7 +54,7 @@ def main():
 
     print('\n=== Take-profit setting trade-off (Strategy-Tester semantics) ===')
     rows = []
-    for r in (0.4, 0.5, 0.75, 1.0):
+    for r in (0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 0.75, 1.0):
         a, _, _ = orb_strategy(nq, tp_r=r); b, _, _ = orb_strategy(nq26, tp_r=r)
         pa = (a[:, 4] - a[:, 3]) * a[:, 2] - COST; pb = (b[:, 4] - b[:, 3]) * b[:, 2] - COST
         pa = pa[nq.index.year.values[a[:, 0].astype(int)] >= 2023]
@@ -67,7 +67,7 @@ def main():
     grid = []
     for orm in (10, 15, 20):
         for body in (0.7, 0.8, 0.9):
-            for r in (0.5, 0.75, 1.0):
+            for r in (0.2, 0.25, 0.5, 1.0):
                 tr, _, _ = orb_strategy(nq, or_minutes=orm, body_min=body, tp_r=r)
                 pnl = (tr[:, 4] - tr[:, 3]) * tr[:, 2] - COST; y = yrs[tr[:, 0].astype(int)]
                 f = lambda p: round(p[p > 0].sum() / -p[p < 0].sum(), 2)

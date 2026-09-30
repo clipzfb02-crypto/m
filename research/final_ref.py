@@ -3,7 +3,7 @@ Mirrors pine/MNQ_5m_ORB_Strategy.pine. Returns (trades, signal per bar, stop dis
 import numpy as np, pandas as pd
 from bt import simulate, stats
 
-def orb_strategy(df, or_minutes=15, body_min=0.8, last_entry=(12, 0), tp_r=0.5, flat_at=(15, 50),
+def orb_strategy(df, or_minutes=15, body_min=0.8, last_entry=(12, 0), tp_r=0.2, flat_at=(15, 50),
                  max_risk_pts=0.0, cost_pts=1.5, long_ok=True, short_ok=True):
     o, h, l, c = [df[k].values.astype(float) for k in ('open', 'high', 'low', 'close')]
     t = df.index; mins = np.asarray(t.hour * 60 + t.minute)

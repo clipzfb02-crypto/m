@@ -1,7 +1,7 @@
 """Reference implementation with indicator semantics (mirrors pine/MNQ_5m_ORB_Signals.pine): entry at signal-bar close, stop = OR opposite side,
 target = entry +/- tpR*risk, managed from the next bar (stop checked first), EOD exit at close."""
 import numpy as np, pandas as pd
-def indicator_ref(df, or_minutes=15, body_min=0.8, entry_end=720, tp_r=0.5, flat_min=950, cost=1.5):
+def indicator_ref(df, or_minutes=15, body_min=0.8, entry_end=720, tp_r=0.2, flat_min=950, cost=1.5):
     o, h, l, c = [df[k].values.astype(float) for k in ('open','high','low','close')]
     t = df.index; mins = np.asarray(t.hour*60 + t.minute); day = np.asarray(t.normalize())
     n = len(c); orh = orl = np.nan; done = False; cur = None
