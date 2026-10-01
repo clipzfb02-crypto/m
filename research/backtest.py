@@ -46,6 +46,17 @@ def main():
     t, _, _ = orb_strategy(mnq26); rows.append(row('2026 holdout (MNQ, Mar 5 - May 1)', (t[:, 4] - t[:, 3]) * t[:, 2] - COST))
     print(pd.DataFrame(rows).to_string(index=False))
 
+    print('\n=== Optional liquidity-sweep filter ("Only signal after a liquidity sweep") ===')
+    rows = []
+    for on in (False, True):
+        tr, _, _ = orb_strategy(nq, require_sweep=on)
+        pnl = (tr[:, 4] - tr[:, 3]) * tr[:, 2] - COST; y = nq.index.year.values[tr[:, 0].astype(int)]
+        tag = 'filter ON ' if on else 'filter OFF'
+        rows += [row(f'{tag} 2023-24', pnl[(y >= 2023) & (y <= 2024)]), row(f'{tag} 2025', pnl[y == 2025]), row(f'{tag} 2023-25', pnl[y >= 2023])]
+        for name, d in (('2026 NQ', nq26), ('2026 MNQ', mnq26)):
+            t, _, _ = orb_strategy(d, require_sweep=on); rows.append(row(f'{tag} {name}', (t[:, 4] - t[:, 3]) * t[:, 2] - COST))
+    print(pd.DataFrame(rows).to_string(index=False))
+
     print('\n=== Indicator semantics (entry at signal close) - what the stats table shows ===')
     _, T = indicator_ref(nq)
     ty = nq.index[T.sig_i.values].year

@@ -10,7 +10,7 @@ The rules were picked by backtesting 3 years of real Nasdaq futures data, and se
 
 | File | What it is |
 |---|---|
-| [`pine/MNQ_5m_ORB_Signals.pine`](pine/MNQ_5m_ORB_Signals.pine) | **Indicator.** BUY/SELL labels, entry/stop/target lines, alerts, and a live stats table (win rate, profit factor, net P&L). |
+| [`pine/MNQ_5m_ORB_Signals.pine`](pine/MNQ_5m_ORB_Signals.pine) | **Indicator.** BUY/SELL labels, entry/stop/target lines, liquidity levels (prior-day and overnight highs/lows), alerts, and a live stats table (win rate, profit factor, net P&L). |
 | [`pine/MNQ_5m_ORB_Strategy.pine`](pine/MNQ_5m_ORB_Strategy.pine) | **Strategy.** The same rules for TradingView's Strategy Tester, with commission and slippage. |
 | [`research/`](research/) | The Python backtest, data download script, and verification harness. Every number below can be reproduced from it. |
 
@@ -39,6 +39,35 @@ All times are New York time. You don't need to change anything if your chart use
 | Stop | The opposite side of the opening range. |
 | Target | **0.2 × the stop distance** (0.2R), rounded down to a whole tick. Change it in the settings (see the trade-off table below). |
 | End of day | Anything still open is closed at the 15:50 bar. |
+
+## Liquidity levels
+
+The indicator also draws the four liquidity levels most traders watch on NQ. These are the places where stop orders tend to cluster:
+
+| Line | Colour | Meaning |
+|---|---|---|
+| **PDH / PDL** | orange | Previous day's high / low (regular session, 09:30–16:00 NY) |
+| **ONH / ONL** | purple | Overnight high / low (18:00–09:30 NY) |
+
+* **Swept levels:** once today's price trades through a level, the line fades and a small **×** marks the bar where it was swept. The table shows a ✓ next to it.
+* **"LIQ" signals:** a BUY is labelled **"BUY LIQ"** when sell-side liquidity (the overnight or prior-day low) was already swept earlier that morning. A SELL is labelled **"SELL LIQ"** when buy-side liquidity (the overnight or prior-day high) was. This is the classic "grab the stops, then go the other way" pattern.
+* **Optional filter:** **"Only signal after a liquidity sweep"** shows only the LIQ signals. It's **off by default** because the results are mixed:
+
+| Period | Filter | Trades | Win rate | Profit factor | Net (1 MNQ) | Max drawdown |
+|---|---|---:|---:|---:|---:|---:|
+| 2023–2025 | off | 729 | 85.7% | 1.24 | +$4,548 | $1,722 |
+| 2023–2025 | **on** | 290 | **86.6%** | **1.62** | +$3,956 | **$530** |
+| 2026 NQ | off | 50 | 88.0% | 1.23 | +$477 | $1,295 |
+| 2026 NQ | on | 23 | 82.6% | 0.83 | −$238 | $1,027 |
+| 2026 MNQ | off | 41 | 80.5% | 0.74 | −$600 | $1,284 |
+| 2026 MNQ | on | 18 | 77.8% | 0.51 | −$672 | $1,040 |
+
+In 2023–2025 the filter cut the number of trades by 60%, raised the profit factor from 1.24 to 1.62, and cut the worst drawdown by two-thirds.
+On 2026 data it did worse than no filter, and the win rate barely changes in any period. So treat LIQ as extra confirmation, not a guarantee.
+
+Two other liquidity ideas were tested and rejected:
+* **Fading sweeps** (selling when price pokes above the prior-day or overnight high and closes back below): lost money in most versions.
+* **Avoiding trades with untouched liquidity just ahead:** no consistent effect.
 
 Signals only fire on **closed** candles, and the script uses no higher-timeframe data, so **signals do not repaint**.
 The stop is often wide: the median is about 90 points ($180 per MNQ contract), and 10% of days are wider than about 170 points ($340).
@@ -93,6 +122,7 @@ The rules were chosen on 2023–2024 data and checked on 2025. Only ideas that h
 * **30-minute opening range:** worked in 2023–24 but failed in 2025. The 10-, 15- and 20-minute ranges all worked. 15 minutes sits in the middle of that stable zone.
 * **Filters that didn't help consistently:** higher-timeframe trend, VWAP side, ADX, volume, gap direction, and opening-range size.
 * **Extra trades per day and limit-order retest entries:** both lowered the profit factor.
+* **Liquidity-sweep reversal entries** (fading a run above or below the prior-day or overnight high/low): lost money in most versions.
 * **The "close in the top/bottom 20%" filter** was the one addition that helped in both periods. At 0.5R, every nearby setting (10/15/20-minute range × 0.7/0.8/0.9 strength) was profitable in 2023–24, and all but one in 2025.
   See `research/backtest.py` for the full grid.
 
@@ -103,7 +133,8 @@ I couldn't run TradingView's own compiler from here, so both scripts were checke
 1. **`pinescript-v6-validator`** (static Pine v6 checks for function names, parameter names, argument counts and scope rules): **0 errors, 0 warnings** on both files.
 2. **`pynescript`** (a Pine grammar parser): both files parse.
 3. **PineTS** (a Pine v6 runtime): the **unmodified** scripts ran on 2023–2025 NQ data with MNQ contract specs.
-   * **Indicator:** it produced the same 729 signals, on the same bars, with the same wins and the same net points as the Python backtest.
+   * **Indicator:** it produced the same 729 signals, on the same bars, with the same wins and the same net points as the Python backtest. This holds with the liquidity filter both off and on.
+   * **Liquidity levels:** PDH, PDL, ONH, ONL and the sweep flags are identical to the Python reference on every bar.
    * **Strategy:** it produced identical entries, win counts within one trade per year, and was profitable every year after commission and slippage ($832 / $1,975 / $2,005).
      A handful of exits land one bar apart. That's mostly because PineTS requires price to trade *through* a limit order, while TradingView's default fills on a touch. Slippage shifting the bracket by one tick, and early-close holidays, account for the rest.
 

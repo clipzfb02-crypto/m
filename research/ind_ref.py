@@ -1,12 +1,14 @@
 """Reference implementation with indicator semantics (mirrors pine/MNQ_5m_ORB_Signals.pine): entry at signal-bar close, stop = OR opposite side,
 target = entry +/- tpR*risk, managed from the next bar (stop checked first), EOD exit at close."""
 import numpy as np, pandas as pd
-def indicator_ref(df, or_minutes=15, body_min=0.8, entry_end=720, tp_r=0.2, flat_min=950, cost=1.5):
+from final_ref import liquidity_levels
+def indicator_ref(df, or_minutes=15, body_min=0.8, entry_end=720, tp_r=0.2, flat_min=950, cost=1.5, require_sweep=False):
     o, h, l, c = [df[k].values.astype(float) for k in ('open','high','low','close')]
     t = df.index; mins = np.asarray(t.hour*60 + t.minute); day = np.asarray(t.normalize())
     n = len(c); orh = orl = np.nan; done = False; cur = None
     tdir = 0; te = ts = tt = np.nan; tb = -1
     sig = np.zeros(n, int); trades = []
+    liq = liquidity_levels(df)
     for i in range(n):
         if day[i] != cur:  # calendar-day reset (OR only uses 09:30+ bars, so equivalent to 18:00 reset)
             cur = day[i]; orh = orl = np.nan; done = False
@@ -30,6 +32,8 @@ def indicator_ref(df, or_minutes=15, body_min=0.8, entry_end=720, tp_r=0.2, flat
         bear = can and c[i] < orl and (h[i]-c[i])/rngb >= body_min
         if bull or bear:
             done = True; d = 1 if bull else -1
+            if require_sweep and not (liq['SSL_SWEPT'][i] if d == 1 else liq['BSL_SWEPT'][i]):
+                continue
             risk = c[i]-orl if bull else orh-c[i]
             tdir = d; te = c[i]; ts = orl if bull else orh; tt = c[i] + d*max(1, np.floor(tp_r*risk/0.25 + 1e-6))*0.25; tb = i; sig[i] = d
     return sig, pd.DataFrame(trades, columns=['sig_i','exit_i','dir','entry','exit','why','pnl'])

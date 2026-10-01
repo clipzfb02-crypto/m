@@ -11,6 +11,11 @@
 //    3. Stop   = opposite side of the opening range.
 //       Target = entry +/- 0.2 x risk (0.2R).  Anything still open is closed at 15:50.
 //
+//  Liquidity: previous-day high/low (PDH/PDL) and overnight high/low (ONH/ONL) are drawn on
+//  the chart.  A signal is tagged "LIQ" when the opposite-side liquidity was swept earlier that
+//  morning (e.g. price ran below the overnight or prior-day low before the BUY).  Optional
+//  filter: "Only signal after a liquidity sweep" (off by default - see the tooltip).
+//
 //  Signals are only evaluated on confirmed (closed) bars and use no higher-timeframe
 //  requests, so they do not repaint.  The stats table replays the rules over the bars
 //  loaded on your chart, per 1 contract, after the round-trip cost you set.
@@ -34,6 +39,7 @@ bool  allowLong  = input.bool(true, "Buys", inline = "dir", group = G_SETUP)
 bool  allowShort = input.bool(true, "Sells", inline = "dir", group = G_SETUP)
 float maxRiskPts = input.float(0.0, "Skip signal if risk is above (points, 0 = off)", minval = 0.0, step = 5.0, group = G_SETUP, tooltip = "Optional account-protection filter. Example: 100 skips days where the stop would be more than 100 points ($200 per MNQ contract) away. Off in the backtest.")
 bool  enforceMkt = input.bool(true, "Signal only on MNQ / NQ 5-minute charts", group = G_SETUP)
+bool  reqSweep   = input.bool(false, "Only signal after a liquidity sweep", group = G_SETUP, tooltip = "BUY only if price already ran below the overnight low or prior-day low earlier in the session (SELL: above the overnight or prior-day high). 2023-2025: 290 instead of 729 trades, 86.6% win rate, profit factor 1.62 vs 1.24, max drawdown $530 vs $1,722. 2026 data: it lost money (profit factor 0.83), so it is off by default.")
 
 string G_VIS = "Display"
 bool   showOR    = input.bool(true, "Show opening range", group = G_VIS)
@@ -44,6 +50,9 @@ float  costPts   = input.float(1.5, "Round-trip cost used in stats (points)", mi
 color  colBuy    = input.color(#089981, "Buy", inline = "col", group = G_VIS)
 color  colSell   = input.color(#f23645, "Sell", inline = "col", group = G_VIS)
 color  colOR     = input.color(#2962ff, "Range", inline = "col", group = G_VIS)
+bool   showLiq   = input.bool(true, "Show liquidity levels (PDH/PDL, ONH/ONL)", group = G_VIS)
+color  colPD     = input.color(#ff9800, "Prev day", inline = "liq", group = G_VIS)
+color  colON     = input.color(#ab47bc, "Overnight", inline = "liq", group = G_VIS)
 
 // ───────────────────────────── Session clock (New York) ─────────────────────────────
 string TZ         = "America/New_York"
@@ -73,6 +82,52 @@ if newDay
 if inOR
     orHi := na(orHi) ? high : math.max(orHi, high)
     orLo := na(orLo) ? low : math.min(orLo, low)
+
+// ───────────────────────────── Liquidity levels ─────────────────────────────
+// PDH / PDL = previous regular session (09:30-16:00 NY) high / low.
+// ONH / ONL = overnight session (18:00-09:30 NY) high / low.
+// A level is "swept" once today's regular-session price trades through it.
+bool isRTH    = nyMin >= orStartMin and nyMin < 16 * 60
+bool isON     = nyMin >= 18 * 60 or nyMin < orStartMin
+bool rthStart = isRTH and not isRTH[1]
+bool onStart  = nyMin >= 18 * 60 and nz(nyMin[1], 0) < 18 * 60
+
+var float rthHi = na
+var float rthLo = na
+var float pdh   = na
+var float pdl   = na
+var float onHi  = na
+var float onLo  = na
+
+if rthStart
+    if not na(rthHi)
+        pdh := rthHi
+        pdl := rthLo
+    rthHi := na
+    rthLo := na
+if onStart
+    onHi := na
+    onLo := na
+if isON
+    onHi := na(onHi) ? high : math.max(onHi, high)
+    onLo := na(onLo) ? low : math.min(onLo, low)
+
+float rthHiBefore = rthHi
+float rthLoBefore = rthLo
+if isRTH
+    rthHi := na(rthHi) ? high : math.max(rthHi, high)
+    rthLo := na(rthLo) ? low : math.min(rthLo, low)
+
+bool pdhTaken = not na(pdh) and not na(rthHi) and rthHi > pdh
+bool pdlTaken = not na(pdl) and not na(rthLo) and rthLo < pdl
+bool onhTaken = not na(onHi) and not na(rthHi) and rthHi > onHi
+bool onlTaken = not na(onLo) and not na(rthLo) and rthLo < onLo
+bool sslSwept = pdlTaken or onlTaken   // sell-side liquidity (below lows) taken today
+bool bslSwept = pdhTaken or onhTaken   // buy-side liquidity (above highs) taken today
+
+// bar on which a level is first taken (for the small markers)
+bool bslSweepBar = isRTH and ((not na(pdh) and high > pdh and (na(rthHiBefore) or rthHiBefore <= pdh)) or (not na(onHi) and high > onHi and (na(rthHiBefore) or rthHiBefore <= onHi)))
+bool sslSweepBar = isRTH and ((not na(pdl) and low < pdl and (na(rthLoBefore) or rthLoBefore >= pdl)) or (not na(onLo) and low < onLo and (na(rthLoBefore) or rthLoBefore >= onLo)))
 
 // ───────────────────────────── Trade tracking & stats ─────────────────────────────
 var int   tDir    = 0
@@ -148,8 +203,9 @@ bool  bullBreak = canSignal and close > orHi and (close - low) / barRange >= bod
 bool  bearBreak = canSignal and close < orLo and (high - close) / barRange >= bodyMin
 float riskPts   = bullBreak ? close - orLo : bearBreak ? orHi - close : na
 bool  riskOk    = maxRiskPts <= 0 or riskPts <= maxRiskPts
-bool  buySig    = bullBreak and allowLong and riskOk
-bool  sellSig   = bearBreak and allowShort and riskOk
+bool  buySig    = bullBreak and allowLong and riskOk and (not reqSweep or sslSwept)
+bool  sellSig   = bearBreak and allowShort and riskOk and (not reqSweep or bslSwept)
+bool  sigLiq    = (buySig and sslSwept) or (sellSig and bslSwept)   // liquidity was swept before the signal
 
 if bullBreak or bearBreak
     doneToday := true   // only the first qualifying breakout of the day counts
@@ -164,7 +220,7 @@ if buySig or sellSig
         lnEntry := line.new(bar_index, tEntry, bar_index + 1, tEntry, color = color.gray, width = 2)
         lnStop  := line.new(bar_index, tStop, bar_index + 1, tStop, color = colSell, style = line.style_dashed, width = 2)
         lnTgt   := line.new(bar_index, tTarget, bar_index + 1, tTarget, color = colBuy, style = line.style_dashed, width = 2)
-    alert("MNQ ORB " + (buySig ? "BUY" : "SELL") + " | entry " + str.tostring(tEntry, format.mintick) + " | stop " + str.tostring(tStop, format.mintick) + " | target " + str.tostring(tTarget, format.mintick) + " | risk " + str.tostring(riskPts, format.mintick) + " pts", alert.freq_once_per_bar_close)
+    alert("MNQ ORB " + (buySig ? "BUY" : "SELL") + " | entry " + str.tostring(tEntry, format.mintick) + " | stop " + str.tostring(tStop, format.mintick) + " | target " + str.tostring(tTarget, format.mintick) + " | risk " + str.tostring(riskPts, format.mintick) + " pts" + (sigLiq ? " | liquidity swept first" : ""), alert.freq_once_per_bar_close)
 
 // ───────────────────────────── Plots ─────────────────────────────
 bool  orVisible = showOR and nyMin >= orEndMin and nyMin <= flatMin
@@ -173,8 +229,18 @@ pOrLo = plot(orVisible ? orLo : na, "OR low", color = colOR, linewidth = 1, styl
 fill(pOrHi, pOrLo, color = color.new(colOR, 92), title = "OR fill")
 bgcolor(showOR and inOR ? color.new(colOR, 90) : na, title = "OR window")
 
-plotshape(buySig, title = "BUY", style = shape.labelup, location = location.belowbar, color = colBuy, text = "BUY", textcolor = color.white, size = size.small)
-plotshape(sellSig, title = "SELL", style = shape.labeldown, location = location.abovebar, color = colSell, text = "SELL", textcolor = color.white, size = size.small)
+bool liqVisible = showLiq and isRTH
+plot(liqVisible ? pdh : na, "PDH (prev day high)", color = pdhTaken ? color.new(colPD, 70) : colPD, linewidth = 1, style = plot.style_linebr)
+plot(liqVisible ? pdl : na, "PDL (prev day low)", color = pdlTaken ? color.new(colPD, 70) : colPD, linewidth = 1, style = plot.style_linebr)
+plot(liqVisible ? onHi : na, "ONH (overnight high)", color = onhTaken ? color.new(colON, 70) : colON, linewidth = 1, style = plot.style_linebr)
+plot(liqVisible ? onLo : na, "ONL (overnight low)", color = onlTaken ? color.new(colON, 70) : colON, linewidth = 1, style = plot.style_linebr)
+plotshape(showLiq and bslSweepBar, title = "Buy-side liquidity swept", style = shape.xcross, location = location.abovebar, color = colPD, size = size.tiny)
+plotshape(showLiq and sslSweepBar, title = "Sell-side liquidity swept", style = shape.xcross, location = location.belowbar, color = colPD, size = size.tiny)
+
+plotshape(buySig and not sslSwept, title = "BUY", style = shape.labelup, location = location.belowbar, color = colBuy, text = "BUY", textcolor = color.white, size = size.small)
+plotshape(buySig and sslSwept, title = "BUY after liquidity sweep", style = shape.labelup, location = location.belowbar, color = colBuy, text = "BUY\nLIQ", textcolor = color.white, size = size.small)
+plotshape(sellSig and not bslSwept, title = "SELL", style = shape.labeldown, location = location.abovebar, color = colSell, text = "SELL", textcolor = color.white, size = size.small)
+plotshape(sellSig and bslSwept, title = "SELL after liquidity sweep", style = shape.labeldown, location = location.abovebar, color = colSell, text = "SELL\nLIQ", textcolor = color.white, size = size.small)
 
 alertcondition(buySig, "ORB BUY", "MNQ ORB BUY on {{ticker}} at {{close}}")
 alertcondition(sellSig, "ORB SELL", "MNQ ORB SELL on {{ticker}} at {{close}}")
@@ -185,7 +251,7 @@ fmtUsd(float x) =>
     (x < 0 ? "-$" : "$") + str.tostring(math.abs(x), "#,###")
 
 string tblPosStr = tablePos == "Top left" ? position.top_left : tablePos == "Bottom right" ? position.bottom_right : tablePos == "Bottom left" ? position.bottom_left : position.top_right
-var table dash = table.new(tblPosStr, 2, 10, bgcolor = color.new(#131722, 10), frame_color = color.new(color.gray, 60), frame_width = 1, border_color = color.new(color.gray, 80), border_width = 1)
+var table dash = table.new(tblPosStr, 2, 12, bgcolor = color.new(#131722, 10), frame_color = color.new(color.gray, 60), frame_width = 1, border_color = color.new(color.gray, 80), border_width = 1)
 
 if showTable and barstate.islast
     color  txt     = color.white
@@ -211,6 +277,8 @@ if showTable and barstate.islast
         status := "No setup today"
     string orTxt = na(orHi) or nyMin < orEndMin ? "-" : str.tostring(orHi, format.mintick) + " / " + str.tostring(orLo, format.mintick) + "  (" + str.tostring(orHi - orLo, format.mintick) + ")"
     string chartTxt = isNasdaq and is5m ? syminfo.ticker + " 5m  OK" : "Use MNQ1! on 5m"
+    string pdTxt = na(pdh) ? "-" : str.tostring(pdh, format.mintick) + (pdhTaken ? " ✓" : "") + " / " + str.tostring(pdl, format.mintick) + (pdlTaken ? " ✓" : "")
+    string onTxt = na(onHi) ? "-" : str.tostring(onHi, format.mintick) + (onhTaken ? " ✓" : "") + " / " + str.tostring(onLo, format.mintick) + (onlTaken ? " ✓" : "")
 
     table.cell(dash, 0, 0, "MNQ 5m ORB", text_color = txt, text_size = size.small, bgcolor = color.new(colOR, 40))
     table.cell(dash, 1, 0, "TP " + str.tostring(tpR) + "R", text_color = txt, text_size = size.small, bgcolor = color.new(colOR, 40))
@@ -230,5 +298,9 @@ if showTable and barstate.islast
     table.cell(dash, 1, 7, str.tostring(netPts, "#.##") + " pts  (" + fmtUsd(netPts * pv) + ")", text_color = netPts >= 0 ? colBuy : colSell, text_size = size.small, text_halign = text.align_right)
     table.cell(dash, 0, 8, "Max drawdown", text_color = txt, text_size = size.small, text_halign = text.align_left)
     table.cell(dash, 1, 8, str.tostring(maxDDPts, "#.##") + " pts  (" + fmtUsd(maxDDPts * pv) + ")", text_color = txt, text_size = size.small, text_halign = text.align_right)
-    table.cell(dash, 0, 9, "Cost " + str.tostring(costPts) + " pts/trade", text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
-    table.cell(dash, 1, 9, "Not financial advice", text_color = color.gray, text_size = size.tiny, text_halign = text.align_right)
+    table.cell(dash, 0, 9, "Prev day H / L", text_color = colPD, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 9, pdTxt, text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 10, "Overnight H / L", text_color = colON, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, 10, onTxt, text_color = txt, text_size = size.small, text_halign = text.align_right)
+    table.cell(dash, 0, 11, "Cost " + str.tostring(costPts) + " pts/trade" + (reqSweep ? " · sweep filter ON" : ""), text_color = color.gray, text_size = size.tiny, text_halign = text.align_left)
+    table.cell(dash, 1, 11, "✓ = swept today · not advice", text_color = color.gray, text_size = size.tiny, text_halign = text.align_right)

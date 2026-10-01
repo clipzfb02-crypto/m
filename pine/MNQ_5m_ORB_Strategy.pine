@@ -10,6 +10,9 @@
 //    3. Stop = distance to the opposite side of the OR.  Target = 0.2 x that distance.
 //       Anything still open is closed at the 15:50 bar close (fills at 15:55 open).
 //
+//  Liquidity: optional "Only trade after a liquidity sweep" filter (off by default) using the
+//  previous-day high/low and overnight high/low, same as the indicator.
+//
 //  Orders fill at the next bar's open (TradingView default).  Costs: $1.00 per contract
 //  per side + 1 tick slippage on market/stop fills.  Fixed size: 1 contract.
 //  Backtest 2023-2025 (1.5 pts cost per trade): 85.7% win rate, profit factor 1.24.
@@ -35,8 +38,10 @@ bool  allowLong  = input.bool(true, "Longs", inline = "dir", group = G_SETUP)
 bool  allowShort = input.bool(true, "Shorts", inline = "dir", group = G_SETUP)
 float maxRiskPts = input.float(0.0, "Skip trade if risk is above (points, 0 = off)", minval = 0.0, step = 5.0, group = G_SETUP)
 bool  enforceMkt = input.bool(true, "Trade only on MNQ / NQ 5-minute charts", group = G_SETUP)
+bool  reqSweep   = input.bool(false, "Only trade after a liquidity sweep", group = G_SETUP, tooltip = "Long only if price already ran below the overnight low or prior-day low earlier in the session (short: above the overnight or prior-day high). Better in 2023-2025, lost money on 2026 data, so off by default.")
 bool  showOR     = input.bool(true, "Show opening range", group = "Display")
 color colOR      = input.color(#2962ff, "Range color", group = "Display")
+bool  showLiq    = input.bool(true, "Show liquidity levels (PDH/PDL, ONH/ONL)", group = "Display")
 
 // ───────────────────────────── Session clock (New York) ─────────────────────────────
 string TZ         = "America/New_York"
@@ -67,6 +72,40 @@ if inOR
     orHi := na(orHi) ? high : math.max(orHi, high)
     orLo := na(orLo) ? low : math.min(orLo, low)
 
+// ───────────────────────────── Liquidity levels ─────────────────────────────
+// PDH / PDL = previous regular session (09:30-16:00 NY) high / low.
+// ONH / ONL = overnight session (18:00-09:30 NY) high / low.
+bool isRTH    = nyMin >= orStartMin and nyMin < 16 * 60
+bool isON     = nyMin >= 18 * 60 or nyMin < orStartMin
+bool rthStart = isRTH and not isRTH[1]
+bool onStart  = nyMin >= 18 * 60 and nz(nyMin[1], 0) < 18 * 60
+
+var float rthHi = na
+var float rthLo = na
+var float pdh   = na
+var float pdl   = na
+var float onHi  = na
+var float onLo  = na
+
+if rthStart
+    if not na(rthHi)
+        pdh := rthHi
+        pdl := rthLo
+    rthHi := na
+    rthLo := na
+if onStart
+    onHi := na
+    onLo := na
+if isON
+    onHi := na(onHi) ? high : math.max(onHi, high)
+    onLo := na(onLo) ? low : math.min(onLo, low)
+if isRTH
+    rthHi := na(rthHi) ? high : math.max(rthHi, high)
+    rthLo := na(rthLo) ? low : math.min(rthLo, low)
+
+bool sslSwept = (not na(pdl) and not na(rthLo) and rthLo < pdl) or (not na(onLo) and not na(rthLo) and rthLo < onLo)
+bool bslSwept = (not na(pdh) and not na(rthHi) and rthHi > pdh) or (not na(onHi) and not na(rthHi) and rthHi > onHi)
+
 // ───────────────────────────── Signal ─────────────────────────────
 float barRange  = math.max(high - low, syminfo.mintick)
 bool  canSignal = marketOk and not doneToday and strategy.position_size == 0 and not na(orHi) and nyMin >= orEndMin and nyMin <= entryEnd
@@ -74,8 +113,8 @@ bool  bullBreak = canSignal and close > orHi and (close - low) / barRange >= bod
 bool  bearBreak = canSignal and close < orLo and (high - close) / barRange >= bodyMin
 float riskPts   = bullBreak ? close - orLo : bearBreak ? orHi - close : na
 bool  riskOk    = maxRiskPts <= 0 or riskPts <= maxRiskPts
-bool  goLong    = bullBreak and allowLong and riskOk
-bool  goShort   = bearBreak and allowShort and riskOk
+bool  goLong    = bullBreak and allowLong and riskOk and (not reqSweep or sslSwept)
+bool  goShort   = bearBreak and allowShort and riskOk and (not reqSweep or bslSwept)
 
 if bullBreak or bearBreak
     doneToday := true   // only the first qualifying breakout of the day counts
@@ -101,5 +140,10 @@ pOrHi = plot(orVisible ? orHi : na, "OR high", color = colOR, linewidth = 1, sty
 pOrLo = plot(orVisible ? orLo : na, "OR low", color = colOR, linewidth = 1, style = plot.style_linebr)
 fill(pOrHi, pOrLo, color = color.new(colOR, 92), title = "OR fill")
 bgcolor(showOR and inOR ? color.new(colOR, 90) : na, title = "OR window")
+bool liqVisible = showLiq and isRTH
+plot(liqVisible ? pdh : na, "PDH (prev day high)", color = #ff9800, linewidth = 1, style = plot.style_linebr)
+plot(liqVisible ? pdl : na, "PDL (prev day low)", color = #ff9800, linewidth = 1, style = plot.style_linebr)
+plot(liqVisible ? onHi : na, "ONH (overnight high)", color = #ab47bc, linewidth = 1, style = plot.style_linebr)
+plot(liqVisible ? onLo : na, "ONL (overnight low)", color = #ab47bc, linewidth = 1, style = plot.style_linebr)
 plotshape(goLong, title = "Long signal", style = shape.triangleup, location = location.belowbar, color = #089981, size = size.small)
 plotshape(goShort, title = "Short signal", style = shape.triangledown, location = location.abovebar, color = #f23645, size = size.small)
