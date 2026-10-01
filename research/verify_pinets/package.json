@@ -1,0 +1,9 @@
+{
+  "name": "verify-pinets",
+  "private": true,
+  "description": "Checks the Pine scripts with an independent v6 validator and executes them in the PineTS runtime",
+  "dependencies": {
+    "pinescript-v6-validator": "0.4.3",
+    "pinets": "0.10.0"
+  }
+}
