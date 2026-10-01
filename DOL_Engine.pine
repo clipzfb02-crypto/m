@@ -167,6 +167,7 @@ htfPivIn = input.int(3, "HTF Pivot Length", minval = 1, maxval = 20, group = G_T
 
 // ── DOL
 showDolIn  = input.bool(true, "Show DOL", group = G_DOL)
+unlikelyIn = input.float(20.0, "Grey Out DOL Below PoT %", minval = 0.0, maxval = 90.0, step = 1.0, group = G_DOL, tooltip = "The DOL is a liquidity TARGET, not a buy / sell signal. Below this probability it turns grey and reads UNLIKELY. If its probability falls under the Minimum PoT it is removed, even when Lock DOL is on.")
 minPotIn   = input.float(5.0, "Minimum PoT to Show DOL (%)", minval = 0.0, maxval = 95.0, step = 0.5, group = G_DOL)
 minScoreIn = input.int(40, "Minimum Target Score", minval = 0, maxval = 100, group = G_DOL)
 maxDistIn  = input.float(6.0, "Max ATR Distance", minval = 0.5, maxval = 50.0, step = 0.5, group = G_DOL, tooltip = "Targets farther than this are not eligible. The active DOL is ejected (Ghost Trail) when price moves too far away.")
@@ -342,6 +343,8 @@ colObIn    = input.color(#60A5FA, "OB", inline = "c2", group = G_VIS)
 colLvnIn   = input.color(#E6C35C, "LVN", inline = "c2", group = G_VIS)
 colTextIn  = input.color(#E6EAF2, "Text", inline = "c3", group = G_VIS)
 colPanelIn = input.color(#0B0E14, "Panel", inline = "c3", group = G_VIS)
+colDolIn   = input.color(#7E57C2, "DOL Target", inline = "c4", group = G_VIS, tooltip = "Neutral colour for the DOL target line. Green and red are reserved for real BUY / SELL trades only.")
+bannerIn   = input.bool(true, "Trade Banner (BUY / SELL / NO TRADE)", inline = "c4", group = G_VIS)
 dolOpIn    = input.int(84, "DOL Zone Transparency", minval = 0, maxval = 100, group = G_VIS)
 glowIn     = input.bool(true, "Glow Line", group = G_VIS)
 lblSizeIn  = input.string("Small", "Label Size", options = ["Tiny", "Small", "Normal"], group = G_VIS)
@@ -1528,9 +1531,9 @@ if barstate.isconfirmed and masterIn and inWin
     if curIdx >= 0
         Zn cur = array.get(zs, curIdx)
         bool faded = cur.score < minScoreIn - hystIn * 0.5 or cur.pot < minPotIn - 1.0
-        bool lost  = lockIn ? (cur.side == 0 or cur.side != primSide) : (not cur.elig or faded)
+        bool lost  = lockIn ? (cur.side == 0 or cur.side != primSide or cur.pot < minPotIn) : (not cur.elig or faded)
         if lost
-            string why2 = lockIn ? "INVALID" : cur.dist > effDist ? "EJECTED" : "FADED"
+            string why2 = lockIn ? (cur.pot < minPotIn ? "FADED" : "INVALID") : cur.dist > effDist ? "EJECTED" : "FADED"
             f_ghost(ghosts, cur, time, why2, ghostMaxIn)
             lastEvtTxt := f_kindTxt(cur) + " " + why2
             curIdx := -1
@@ -1951,12 +1954,14 @@ if reachOnIn and masterIn and barstate.islast and (barstate.isconfirmed or na(rU
     rT0  := time
 
 var table tbl = table.new(f_pos(tblPosIn), 3, 17, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
+var table ban = table.new(position.top_center, 1, 1, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 70), frame_width = 1)
 var table dbg = table.new(position.bottom_left, 2, 22, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
     f_clearAll(rB, rL, rT)
     table.clear(tbl, 0, 0, 2, 16)
     table.clear(dbg, 0, 0, 1, 21)
+    table.clear(ban, 0, 0, 0, 0)
 
 if barstate.islast and masterIn
     int    rightT = time + extIn * barMs
@@ -2049,7 +2054,7 @@ if barstate.islast and masterIn
     if ghostOnIn and nG > 0
         for k = 0 to nG - 1
             Ghost g  = array.get(ghosts, k)
-            color gc = g.side == 1 ? colBullIn : g.side == -1 ? colBearIn : colNeuIn
+            color gc = colNeuIn
             int   tE = math.max(g.t1, g.t0 + barMs)
             if f_room(rB, rL, rT, maxVisIn)
                 f_mkLine(rL, g.t0, g.lvl, tE, g.lvl, color.new(gc, 72), line.style_dotted, 1)
@@ -2072,7 +2077,7 @@ if barstate.islast and masterIn
     int sIdx = f_findId(zs, secId)
     if showDolIn and showSecIn and sIdx >= 0
         Zn    s  = array.get(zs, sIdx)
-        color sc = s.side == 1 ? colBullIn : colBearIn
+        color sc = colNeuIn
         float y  = f_isPool(s) ? s.lvl : s.side == 1 ? s.bot : s.top
         float sp = f_potLive(f_liveDist(s, close), s.side)
         f_mkBox(rB, s.t0, s.top, rightT, s.bot, color.new(sc, 93), color.new(sc, 100), line.style_solid, "", sc)
@@ -2083,11 +2088,12 @@ if barstate.islast and masterIn
     if sigOnIn and vtDir != 0 and not na(vtT)
         color tcl = vtDir == 1 ? colBullIn : colBearIn
         float rrT = math.abs(vtTP - vtEn) / math.max(vtRisk, syminfo.mintick)
-        f_mkLine(rL, vtT, vtEn, rightT, vtEn, color.new(colTextIn, 45), line.style_solid, 1)
-        f_mkLine(rL, vtT, vtSL, rightT, vtSL, color.new(colBearIn, 25), line.style_dashed, 1)
-        f_mkLine(rL, vtT, vtTP, rightT, vtTP, color.new(colBullIn, 25), line.style_dashed, 1)
-        f_mkLbl(rT, rightT, vtSL, "SL", noCol, color.new(colBearIn, 15), label.style_label_left, size.tiny, "Virtual stop (beyond the swept liquidity)")
-        f_mkLbl(rT, rightT, vtTP, "TP " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 15), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : tgtModeIn == "Best Expectancy" ? "Virtual target: the size that has paid most on this chart's past signals" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
+        f_mkLine(rL, vtT, vtEn, rightT, vtEn, color.new(tcl, 0), line.style_solid, 2)
+        f_mkLine(rL, vtT, vtSL, rightT, vtSL, color.new(colNeuIn, 10), line.style_dashed, 1)
+        f_mkLine(rL, vtT, vtTP, rightT, vtTP, color.new(tcl, 20), line.style_dotted, 2)
+        f_mkLbl(rT, rightT, vtEn, (vtDir == 1 ? "BUY " : "SELL ") + str.tostring(vtEn, format.mintick), color.new(tcl, 0), color.white, label.style_label_left, size.small, "Active trade signal (entry at the signal candle close). Green = buy · red = sell.")
+        f_mkLbl(rT, rightT, vtSL, "STOP " + str.tostring(vtSL, format.mintick), noCol, color.new(colNeuIn, 0), label.style_label_left, size.tiny, "Stop beyond the swept liquidity")
+        f_mkLbl(rT, rightT, vtTP, "TARGET " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 0), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : tgtModeIn == "Best Expectancy" ? "Virtual target: the size that has paid most on this chart's past signals" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
 
     // ── Reach bands: levels with the chosen probability of being touched within the horizon
     if reachOnIn and not na(rUpV) and f_room(rB, rL, rT, maxVisIn)
@@ -2103,10 +2109,11 @@ if barstate.islast and masterIn
     if pIdx >= 0
         Zn     p    = array.get(zs, pIdx)
         int    sd   = p.side
-        color  dc   = sd == 1 ? colBullIn : colBearIn
         float  potL = f_potLive(f_liveDist(p, close), sd)
-        string arw  = sd == 1 ? "▲" : "▼"
-        dolTxt := arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
+        bool   unl  = potL < unlikelyIn
+        color  dc   = unl ? colNeuIn : colDolIn
+        string arw  = sd == 1 ? "above" : "below"
+        dolTxt := (unl ? "UNLIKELY " : "") + f_kindTxt(p) + " " + arw
         potTxt := str.tostring(potL, "0.0") + "%"
         dolCol := dc
         if showDolIn
@@ -2116,10 +2123,10 @@ if barstate.islast and masterIn
                 f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 84), line.style_solid, 6)
             f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 0), line.style_solid, 1)
             f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
-            string l1  = "DOL " + arw + " " + f_kindTxt(p) + "  " + str.tostring(math.round(p.score))
-            string l2  = "PoT " + str.tostring(potL, "0.0") + "%"
+            string l1  = (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
+            string l2  = "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
             string l3  = detailIn ? "\n" + f_srcList(p) + " · " + p.tf + " · " + str.tostring(p.dist, "0.0") + " ATR" : ""
-            string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee."
+            string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee.\nThis is a liquidity target, NOT a buy / sell signal. Trade only the green BUY / red SELL banner."
             f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
 
     // ── Bias table
@@ -2228,6 +2235,22 @@ if barstate.islast and masterIn
             table.cell(tbl, 0, 16, "DAY", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Today: result of virtual trades in R · signals taken / daily maximum. STOPPED = daily loss limit or max signals reached; new signals show as grey crosses until the next trading day.")
             table.cell(tbl, 1, 16, "", text_size = tsz)
             table.cell(tbl, 2, 16, dyTxt, text_color = dyCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+
+    // ── Trade banner: the ONLY place that says BUY / SELL (green / red). Everything else is information.
+    if bannerIn
+        string bTxt = ""
+        color  bBg  = color.new(colNeuIn, 25)
+        if vtDir != 0
+            float  perB = (vtRisk + effCost * syminfo.mintick) * syminfo.pointvalue
+            int    qB   = perB > 0 ? int(math.floor(riskUsdIn / perB)) : 0
+            string uB   = syminfo.type == "futures" ? syminfo.root : syminfo.type == "crypto" or syminfo.type == "forex" ? "units" : "sh"
+            bTxt := (vtDir == 1 ? "BUY" : "SELL") + (qB >= 1 ? " " + str.tostring(qB) + " " + uB : "") + "  ·  Entry " + str.tostring(vtEn, format.mintick) + "  ·  Stop " + str.tostring(vtSL, format.mintick) + "  ·  Target " + str.tostring(vtTP, format.mintick)
+            bBg  := vtDir == 1 ? colBullIn : colBearIn
+        else
+            bool bDay = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
+            bTxt := not sigOnIn ? "SIGNALS OFF" : bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : intra and not hrsOk ? "NO TRADE  ·  outside signal hours" : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
+            bBg  := str.startswith(bTxt, "WAIT") ? color.new(colPanelIn, 6) : color.new(colNeuIn, 25)
+        table.cell(ban, 0, 0, bTxt, text_color = color.white, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Green BUY / red SELL = an active trade signal (taken by every filter, the Edge Gate and the daily limit). NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
 
     // ── Debug panel
     if debugIn
