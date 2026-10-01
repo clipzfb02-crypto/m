@@ -335,15 +335,15 @@ firstOnIn = input.bool(true, "Show First-Touch Odds", group = G_CAL, tooltip = "
 showAccIn = input.bool(true, "Show Measured DOL Hit Rate", group = G_CAL, tooltip = "Share of DOL targets that price actually reached within the PoT horizon after they were selected.")
 
 // ── STYLE
-colBullIn  = input.color(#22D3A6, "Bull", inline = "c1", group = G_VIS)
+colBullIn  = input.color(#2962FF, "Bull / BUY", inline = "c1", group = G_VIS)
 colBearIn  = input.color(#FF4D6D, "Bear", inline = "c1", group = G_VIS)
 colNeuIn   = input.color(#7C8699, "Neutral", inline = "c1", group = G_VIS)
 colIfvgIn  = input.color(#A78BFA, "iFVG", inline = "c2", group = G_VIS)
-colObIn    = input.color(#60A5FA, "OB", inline = "c2", group = G_VIS)
+colObIn    = input.color(#B0A089, "OB", inline = "c2", group = G_VIS)
 colLvnIn   = input.color(#E6C35C, "LVN", inline = "c2", group = G_VIS)
 colTextIn  = input.color(#E6EAF2, "Text", inline = "c3", group = G_VIS)
 colPanelIn = input.color(#0B0E14, "Panel", inline = "c3", group = G_VIS)
-colDolIn   = input.color(#7E57C2, "DOL Target", inline = "c4", group = G_VIS, tooltip = "Neutral colour for the DOL target line. Green and red are reserved for real BUY / SELL trades only.")
+colDolIn   = input.color(#546E7A, "DOL Target", inline = "c4", group = G_VIS, tooltip = "Neutral colour for the DOL target line. Blue and red are reserved for real BUY / SELL trades only.")
 bannerIn   = input.bool(true, "Trade Banner (BUY / SELL / NO TRADE)", inline = "c4", group = G_VIS)
 dolOpIn    = input.int(84, "DOL Zone Transparency", minval = 0, maxval = 100, group = G_VIS)
 glowIn     = input.bool(true, "Glow Line", group = G_VIS)
@@ -2091,7 +2091,7 @@ if barstate.islast and masterIn
         f_mkLine(rL, vtT, vtEn, rightT, vtEn, color.new(tcl, 0), line.style_solid, 2)
         f_mkLine(rL, vtT, vtSL, rightT, vtSL, color.new(colNeuIn, 10), line.style_dashed, 1)
         f_mkLine(rL, vtT, vtTP, rightT, vtTP, color.new(tcl, 20), line.style_dotted, 2)
-        f_mkLbl(rT, rightT, vtEn, (vtDir == 1 ? "BUY " : "SELL ") + str.tostring(vtEn, format.mintick), color.new(tcl, 0), color.white, label.style_label_left, size.small, "Active trade signal (entry at the signal candle close). Green = buy · red = sell.")
+        f_mkLbl(rT, rightT, vtEn, (vtDir == 1 ? "BUY " : "SELL ") + str.tostring(vtEn, format.mintick), color.new(tcl, 0), color.white, label.style_label_left, size.small, "Active trade signal (entry at the signal candle close). Blue = buy · red = sell.")
         f_mkLbl(rT, rightT, vtSL, "STOP " + str.tostring(vtSL, format.mintick), noCol, color.new(colNeuIn, 0), label.style_label_left, size.tiny, "Stop beyond the swept liquidity")
         f_mkLbl(rT, rightT, vtTP, "TARGET " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 0), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : tgtModeIn == "Best Expectancy" ? "Virtual target: the size that has paid most on this chart's past signals" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
 
@@ -2126,7 +2126,7 @@ if barstate.islast and masterIn
             string l1  = (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
             string l2  = "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
             string l3  = detailIn ? "\n" + f_srcList(p) + " · " + p.tf + " · " + str.tostring(p.dist, "0.0") + " ATR" : ""
-            string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee.\nThis is a liquidity target, NOT a buy / sell signal. Trade only the green BUY / red SELL banner."
+            string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee.\nThis is a liquidity target, NOT a buy / sell signal. Trade only the blue BUY / red SELL banner."
             f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
 
     // ── Bias table
@@ -2236,7 +2236,7 @@ if barstate.islast and masterIn
             table.cell(tbl, 1, 16, "", text_size = tsz)
             table.cell(tbl, 2, 16, dyTxt, text_color = dyCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
-    // ── Trade banner: the ONLY place that says BUY / SELL (green / red). Everything else is information.
+    // ── Trade banner: the ONLY place that says BUY / SELL (blue / red). Everything else is information.
     if bannerIn
         string bTxt = ""
         color  bBg  = color.new(colNeuIn, 25)
@@ -2250,7 +2250,7 @@ if barstate.islast and masterIn
             bool bDay = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
             bTxt := not sigOnIn ? "SIGNALS OFF" : bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : intra and not hrsOk ? "NO TRADE  ·  outside signal hours" : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
             bBg  := str.startswith(bTxt, "WAIT") ? color.new(colPanelIn, 6) : color.new(colNeuIn, 25)
-        table.cell(ban, 0, 0, bTxt, text_color = color.white, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Green BUY / red SELL = an active trade signal (taken by every filter, the Edge Gate and the daily limit). NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
+        table.cell(ban, 0, 0, bTxt, text_color = color.white, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Blue BUY / red SELL = an active trade signal (taken by every filter, the Edge Gate and the daily limit). NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
 
     // ── Debug panel
     if debugIn
