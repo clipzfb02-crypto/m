@@ -55,6 +55,7 @@ LN2     = 0.6931471805599453
 NEG_BIG = -1000000
 INT_BIG = 2147483647
 EMP_NB  = 80
+C_WARN  = #E8A33D
 
 G_GEN = "◆ GENERAL"
 G_TF  = "◆ TIMEFRAMES (MANUAL MODE)"
@@ -322,6 +323,7 @@ riskUsdIn  = input.float(100.0, "Risk per Trade ($)", minval = 1.0, maxval = 100
 dayGuardIn = input.bool(true, "Daily Loss Limit", inline = "dg", group = G_RSK)
 dayLossIn  = input.float(2.0, "Max Loss (R)", minval = 0.5, maxval = 50.0, step = 0.5, inline = "dg", group = G_RSK, tooltip = "Once today's virtual trades have lost this many R, no more signals are taken today (they show as grey crosses). Resets on the new trading day.")
 dayMaxIn   = input.int(3, "Max Signals per Day", minval = 1, maxval = 100, group = G_RSK, tooltip = "Stops taking signals for the day after this many. Overtrading on 1-minute charts multiplies costs.")
+flatIn     = input.bool(true, "Close Open Trade at 15:55 New York", group = G_RSK, tooltip = "Day-trading rule: a trade still open at 15:55 New York is closed at that bar's close and no new trade is taken after it, so nothing is carried overnight. Applies when Signal Hours are not Any Time (futures, indices, stocks).")
 
 // ── CALIBRATION / ACCURACY
 calOnIn   = input.bool(true, "Self-Learning PoT", group = G_CAL, tooltip = "Final PoT = logistic model on [base PoT, volatility regime, momentum toward target, distance]. Starts from weights fitted on 13 markets and keeps learning from this chart's resolved outcomes (closed data only, no repainting). Off = research weights only.")
@@ -335,8 +337,8 @@ firstOnIn = input.bool(true, "Show First-Touch Odds", group = G_CAL, tooltip = "
 showAccIn = input.bool(true, "Show Measured DOL Hit Rate", group = G_CAL, tooltip = "Share of DOL targets that price actually reached within the PoT horizon after they were selected.")
 
 // ── STYLE
-colBullIn  = input.color(#2962FF, "Bull / BUY", inline = "c1", group = G_VIS)
-colBearIn  = input.color(#FF4D6D, "Bear", inline = "c1", group = G_VIS)
+colBullIn  = input.color(#2962FF, "BUY", inline = "c1", group = G_VIS, tooltip = "Blue and red are used ONLY for real trades: the BUY / SELL banner, the entry lines and the signal triangles. The table and every other drawing use white, grey and amber.")
+colBearIn  = input.color(#FF4D6D, "SELL", inline = "c1", group = G_VIS)
 colNeuIn   = input.color(#7C8699, "Neutral", inline = "c1", group = G_VIS)
 colIfvgIn  = input.color(#A78BFA, "iFVG", inline = "c2", group = G_VIS)
 colObIn    = input.color(#B0A089, "OB", inline = "c2", group = G_VIS)
@@ -1015,6 +1017,14 @@ f_autoCost() =>
         t := syminfo.type == "crypto" ? 0.0008 * close / syminfo.mintick : syminfo.type == "forex" ? 12.0 : 2.0
     t
 float effCost = costIn > 0 ? costIn : f_autoCost()
+bool  flatNow = flatIn and intra and hrsMode != "Any Time" and nyMod + int(chartSec / 60) >= 955 and nyMod < 1080
+
+// Contracts / units unit name and the $ lost per contract if the stop is hit (stop distance + costs)
+f_unit() =>
+    syminfo.type == "futures" ? syminfo.root : syminfo.type == "crypto" or syminfo.type == "forex" ? "units" : "sh"
+
+f_perC(float rk) =>
+    (rk + effCost * syminfo.mintick) * syminfo.pointvalue
 
 bool newDay   = timeframe.change("D")
 bool newWeek  = timeframe.change("W")
@@ -1696,6 +1706,7 @@ var float        gEdge  = na
 var float        gTgt   = na
 bool takeBull = false
 bool takeBear = false
+bool evExit   = false
 
 var int   vtDir  = 0
 var float vtEn   = na
@@ -1714,6 +1725,10 @@ var float wrPosR = 0.0
 var float wrBE   = 0.0
 var float kAdj   = 1.0
 var float wrNegR = 0.0
+var int    vtXBar = NEG_BIG
+var int    vtXDir = 0
+var float  vtXR   = na
+var string vtXWhy = ""
 if barstate.isconfirmed and masterIn and inWin
     if newDay
         dayR := 0.0
@@ -1740,7 +1755,7 @@ if barstate.isconfirmed and masterIn and inWin
                     exR := (sSl - sEn) * sd / sRk
                 else
                     mfe := math.max(mfe, fav)
-                    if bar_index - sB0 >= shHold
+                    if bar_index - sB0 >= shHold or flatNow
                         exR := (close - sEn) * sd / sRk
                 if na(exR)
                     array.set(sdMfe, i, mfe)
@@ -1761,17 +1776,25 @@ if barstate.isconfirmed and masterIn and inWin
         bool  hitTP = vtDir == 1 ? high >= vtTP : low <= vtTP
         bool  hiFst = high - open < open - low
         bool  tpFst = vtDir == 1 ? hiFst : not hiFst
-        float rr    = na
-        bool  beEx  = false
+        float  rr    = na
+        bool   beEx  = false
+        string xWhy  = ""
         if gapSL or gapTP
-            rr := (open - vtEn) * vtDir / risk
+            rr   := (open - vtEn) * vtDir / risk
+            xWhy := gapTP ? "TARGET hit" : "STOP hit"
         else if hitSL and not (hitTP and tpFst)
             rr   := (vtSL - vtEn) * vtDir / risk
             beEx := vtBE
+            xWhy := vtBE ? "BREAKEVEN stop" : "STOP hit"
         else if hitTP
-            rr := (vtTP - vtEn) * vtDir / risk
+            rr   := (vtTP - vtEn) * vtDir / risk
+            xWhy := "TARGET hit"
+        else if flatNow
+            rr   := (close - vtEn) * vtDir / risk
+            xWhy := "15:55 day close"
         else if effHold > 0 and bar_index - vtBar >= effHold
-            rr := (close - vtEn) * vtDir / risk
+            rr   := (close - vtEn) * vtDir / risk
+            xWhy := "TIME stop"
         if not na(rr)
             rr  := rr - effCost * syminfo.mintick / risk
             dayR += rr
@@ -1786,7 +1809,12 @@ if barstate.isconfirmed and masterIn and inWin
             eqR    += rr
             peakR  := math.max(peakR, eqR)
             maxDD  := math.max(maxDD, peakR - eqR)
-            vtDir := 0
+            vtXBar := bar_index
+            vtXDir := vtDir
+            vtXR   := rr
+            vtXWhy := xWhy
+            evExit := true
+            vtDir  := 0
         else if beAtRIn > 0 and not vtBE and (vtDir == 1 ? high >= vtEn + beAtRIn * risk : low <= vtEn - beAtRIn * risk)
             vtSL := vtEn
             vtBE := true
@@ -1822,20 +1850,20 @@ if barstate.isconfirmed and masterIn and inWin
                 gState := shN < gateNIn ? 0 : not na(lN) and lN > 0 ? 1 : -1
                 gOk    := not gateIn or gState == 1
             bool dayOk = not dayGuardIn or (dayR > -dayLossIn and dayT < dayMaxIn)
-            if not na(tpN) and gOk and dayOk
+            // One trade at a time: a signal is only taken when flat, so the marker, alert and banner always match
+            if not na(tpN) and gOk and dayOk and vtDir == 0 and not flatNow
                 takeBull := dN == 1
                 takeBear := dN == -1
                 dayT     += 1
                 lastRk   := rkN
-                if vtDir == 0
-                    vtDir  := dN
-                    vtEn   := close
-                    vtSL   := slN
-                    vtTP   := tpN
-                    vtBar  := bar_index
-                    vtT    := time
-                    vtRisk := rkN
-                    vtBE   := false
+                vtDir    := dN
+                vtEn     := close
+                vtSL     := slN
+                vtTP     := tpN
+                vtBar    := bar_index
+                vtT      := time
+                vtRisk   := rkN
+                vtBE     := false
             if array.size(sdD) < 80
                 array.push(sdD, dN)
                 array.push(sdEn, close)
@@ -2033,7 +2061,7 @@ if barstate.islast and masterIn
                     for j in idx
                         Zn z = array.get(zs, j)
                         if f_room(rB, rL, rT, maxVisIn)
-                            color  c  = kind == K_IFVG ? colIfvgIn : kind == K_OB ? colObIn : kind == K_BRK ? colNeuIn : (z.pol == 1 ? colBullIn : colBearIn)
+                            color  c  = kind == K_IFVG ? colIfvgIn : kind == K_OB ? colObIn : kind == K_BRK ? colNeuIn : colTextIn
                             string bs = kind == K_IFVG ? line.style_dashed : kind == K_BRK ? line.style_dotted : line.style_solid
                             f_mkBox(rB, z.t0, z.top, rightT, z.bot, color.new(c, 91), color.new(c, 72), bs, f_kindTxt(z), color.new(c, 35))
 
@@ -2044,7 +2072,7 @@ if barstate.islast and masterIn
         for k = nE - 1 to 0
             SEvt e = array.get(sEvts, k)
             if drawn < strMaxIn and f_room(rB, rL, rT, maxVisIn)
-                color ec = e.dir == 1 ? colBullIn : colBearIn
+                color ec = colTextIn
                 f_mkLine(rL, e.t0, e.lvl, e.t1, e.lvl, color.new(ec, 45), line.style_dashed, 1)
                 f_mkLbl(rT, int((e.t0 + e.t1) / 2), e.lvl, e.choch ? "CHoCH" : "BOS", noCol, color.new(ec, 25), e.dir == 1 ? label.style_label_down : label.style_label_up, size.tiny, "")
                 drawn += 1
@@ -2067,7 +2095,7 @@ if barstate.islast and masterIn
             array<int> idx = f_pickNext(zs, side, 2, primId, secId)
             for j in idx
                 Zn    z  = array.get(zs, j)
-                color lc = side == 1 ? colBullIn : colBearIn
+                color lc = colNeuIn
                 float y  = f_isPool(z) ? z.lvl : side == 1 ? z.bot : z.top
                 if f_room(rB, rL, rT, maxVisIn)
                     f_mkLine(rL, z.t0, y, rightT, y, color.new(lc, 70), line.style_dotted, 1)
@@ -2140,25 +2168,25 @@ if barstate.islast and masterIn
         for r = 0 to 2
             int    st = r == 0 ? bH1 : r == 1 ? bSt : bEx
             string nm = r == 0 ? "HTF " + h1Lbl : r == 1 ? "STF " + stfLbl : "EXE " + exLbl
-            color  bc = st > 0 ? colBullIn : st < 0 ? colBearIn : colNeuIn
+            color  bc = st != 0 ? colTextIn : colNeuIn
             table.cell(tbl, 0, r + 1, nm, text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace)
             table.cell(tbl, 1, r + 1, f_biasArrow(st), text_color = bc, text_size = tsz, text_font_family = font.family_monospace)
             table.cell(tbl, 2, r + 1, f_biasTxt(st), text_color = bc, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-        color ac = aligned ? (exSign == 1 ? colBullIn : colBearIn) : colNeuIn
+        color ac = aligned ? colTextIn : colNeuIn
         table.cell(tbl, 0, 4, "ALIGN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Execution-TF structure agrees with the HTF structure. Context, not a signal.")
         table.cell(tbl, 1, 4, aligned ? "✓" : "·", text_color = ac, text_size = tsz, text_font_family = font.family_monospace)
-        table.cell(tbl, 2, 4, aligned ? (exSign == 1 ? "LONG" : "SHORT") : "WAIT", text_color = ac, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
+        table.cell(tbl, 2, 4, aligned ? (exSign == 1 ? "BULL" : "BEAR") : "MIXED", text_color = ac, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
         string nxTxt = ""
         if not na(evNext)
             int mins = int((evNext - time) / 60000)
             if mins < 10080
                 nxTxt := " · next " + (mins < 60 ? str.tostring(mins) + "m" : mins < 1440 ? str.tostring(math.round(mins / 60.0)) + "h" : str.tostring(math.round(mins / 1440.0)) + "d")
         string nwTxt = not newsOnIn ? "OFF" : evBlock ? "EVENT" : newsWin ? "BLACKOUT" : shockPause ? "SPIKE · " + str.tostring(shockBarsIn - (bar_index - lastShockB)) + " bars" : "CLEAR" + nxTxt
-        color  nwCol = not newsOnIn ? colNeuIn : newsBlock ? colBearIn : colBullIn
+        color  nwCol = not newsOnIn ? colNeuIn : newsBlock ? C_WARN : colTextIn
         table.cell(tbl, 0, 5, "NEWS", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "News Guard: event calendar + daily release windows + automatic spike detection. Signals are paused while not CLEAR. 'next' = time to the next calendar event (within 7 days).")
         table.cell(tbl, 1, 5, newsBlock ? "!" : "·", text_color = nwCol, text_size = tsz, text_font_family = font.family_monospace)
         table.cell(tbl, 2, 5, nwTxt, text_color = nwCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-        color  vrCol = volReg == "NORMAL" ? colBullIn : volReg == "HIGH" ? colObIn : colBearIn
+        color  vrCol = volReg == "NORMAL" ? colTextIn : C_WARN
         table.cell(tbl, 0, 6, "VOL", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Volatility regime: ATR percentile over the last 200 bars.")
         table.cell(tbl, 1, 6, "", text_size = tsz)
         table.cell(tbl, 2, 6, volReg + " · " + str.tostring(atrPct, "0") + "%", text_color = vrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
@@ -2184,7 +2212,7 @@ if barstate.islast and masterIn
                 float p0  = math.max(0.001, math.min(0.999, dD / (dU + dD)))
                 float pUp = f_sig(0.908 * math.log(p0 / (1.0 - p0)))
                 fTxt := "▲ " + str.tostring(100.0 * pUp, "0") + "% · ▼ " + str.tostring(100.0 - 100.0 * pUp, "0") + "%"
-                fCol := pUp >= 0.5 ? colBullIn : colBearIn
+                fCol := colTextIn
             table.cell(tbl, 0, 9, "FIRST", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Odds that the nearest target above is touched before the nearest target below (calibrated in testing). Distance drives these odds; bias, structure and liquidity type added no measurable edge.")
             table.cell(tbl, 1, 9, "", text_size = tsz)
             table.cell(tbl, 2, 9, fTxt, text_color = fCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
@@ -2196,7 +2224,7 @@ if barstate.islast and masterIn
             float  sklM  = bN > 0 and bRef > 0 ? 1.0 - (array.get(brS, 3) / bN) / bRef : na
             bool   skOk  = bN >= 10 and not na(skl)
             string skTxt = skOk ? (skl >= 0 ? "+" : "") + str.tostring(100.0 * skl, "0") + "% · n " + str.tostring(bN, "0") : "learning · n " + str.tostring(bN, "0")
-            color  skCol = skOk ? (skl > 0 ? colBullIn : colBearIn) : colNeuIn
+            color  skCol = skOk ? (skl > 0 ? colTextIn : C_WARN) : colNeuIn
             table.cell(tbl, 0, 10, "SKILL", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Brier skill score of the shown PoT on this chart's resolved predictions vs. always guessing the base rate (" + str.tostring(100.0 * oBar, "0") + "%). Above 0 = PoT has real predictive skill here (research average ≈ +20%). Base model without the learning layer: " + (na(sklM) ? "—" : str.tostring(100.0 * sklM, "0") + "%") + ". n = independent samples.")
             table.cell(tbl, 1, 10, "", text_size = tsz)
             table.cell(tbl, 2, 10, skTxt, text_color = skCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
@@ -2207,7 +2235,7 @@ if barstate.islast and masterIn
         if showWrIn
             string pfTxt = wrNegR > 0 ? str.tostring(wrPosR / wrNegR, "0.00") : wrPosR > 0 ? "∞" : "—"
             string wrTxt = wrN >= 1 ? str.tostring(100.0 * wrW / wrN, "0") + "% · PF " + pfTxt + " · " + str.tostring(wrN, "0") + (wrBE > 0 ? " · BE " + str.tostring(wrBE, "0") : "") : "no trades yet"
-            color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colBullIn : colBearIn) : colNeuIn
+            color  wrCol = wrN >= 1 ? (wrPosR >= wrNegR ? colTextIn : C_WARN) : colNeuIn
             float  expR  = wrN >= 1 ? (wrPosR - wrNegR) / wrN : 0.0
             string edTxt = wrN >= 1 ? (expR >= 0 ? "+" : "") + str.tostring(expR, "0.00") + "R/trade · DD " + str.tostring(maxDD, "0.0") + "R" : "—"
             table.cell(tbl, 0, 12, "WIN", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Virtual trades on filtered execution signals: win rate · profit factor (in R) · number of trades. Mode: " + tgtModeIn + (tgtModeIn == "Target Win Rate" ? " " + str.tostring(tgtWrIn) + "% (target scale " + str.tostring(kAdj, "0.00") + ")" : "") + ". Stop beyond the swept liquidity, cost " + str.tostring(effCost, "0.#") + " ticks. Research across 13 markets found no reliable edge in these setups; judge them only by this chart's own numbers.")
@@ -2217,40 +2245,58 @@ if barstate.islast and masterIn
             table.cell(tbl, 1, 13, "", text_size = tsz)
             table.cell(tbl, 2, 13, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
             string gtTxt = not gateIn ? "OFF" : gState == 0 ? "LEARNING · " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : (gState == 1 ? "OPEN · " : "PAUSED · ") + (na(gEdge) ? "—" : (gEdge >= 0 ? "+" : "") + str.tostring(gEdge, "0.00") + "R @ " + str.tostring(gTgt, "0.##") + "R")
-            color  gtCol = not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colBullIn : colBearIn
+            color  gtCol = not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colTextIn : C_WARN
             table.cell(tbl, 0, 14, "GATE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Edge Gate: average profit per signal (after costs) of the current target size, replayed on " + str.tostring(shN, "0") + " past signals of this chart. OPEN = proven positive → signals are taken. PAUSED = no proven edge → signals are skipped. Status updates at each signal.")
             table.cell(tbl, 1, 14, "", text_size = tsz)
             table.cell(tbl, 2, 14, gtTxt, text_color = gtCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
             float  pv    = syminfo.pointvalue
-            float  perC  = na(lastRk) ? na : (lastRk + effCost * syminfo.mintick) * pv
+            float  perC  = na(lastRk) ? na : f_perC(lastRk)
             int    qty   = na(perC) or perC <= 0 ? 0 : int(math.floor(riskUsdIn / perC))
-            string unit  = syminfo.type == "futures" ? syminfo.root : syminfo.type == "crypto" or syminfo.type == "forex" ? "units" : "sh"
+            string unit  = f_unit()
             string szTxt = na(perC) ? "no signal yet" : qty >= 1 ? str.tostring(qty) + " × " + unit + " · $" + str.tostring(qty * perC, "0") + " risk" : "0 · 1 " + unit + " risks $" + str.tostring(perC, "0")
             table.cell(tbl, 0, 15, "SIZE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Position size for the latest taken signal so that the stop plus costs lose at most $" + str.tostring(riskUsdIn, "0") + " (Risk per Trade). Point value " + str.tostring(pv) + " $/pt · cost " + str.tostring(effCost, "0.#") + " ticks.")
             table.cell(tbl, 1, 15, "", text_size = tsz)
             table.cell(tbl, 2, 15, szTxt, text_color = color.new(colTextIn, 25), text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
             bool   dStop = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
             string dyTxt = not dayGuardIn ? "OFF · " + str.tostring(dayT) + " signals" : (dStop ? "STOPPED · " : "") + (dayR >= 0 ? "+" : "") + str.tostring(dayR, "0.00") + "R · " + str.tostring(dayT) + "/" + str.tostring(dayMaxIn)
-            color  dyCol = dStop ? colBearIn : dayR > 0 ? colBullIn : colNeuIn
+            color  dyCol = dStop ? C_WARN : dayR > 0 ? colTextIn : colNeuIn
             table.cell(tbl, 0, 16, "DAY", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Today: result of virtual trades in R · signals taken / daily maximum. STOPPED = daily loss limit or max signals reached; new signals show as grey crosses until the next trading day.")
             table.cell(tbl, 1, 16, "", text_size = tsz)
             table.cell(tbl, 2, 16, dyTxt, text_color = dyCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
 
-    // ── Trade banner: the ONLY place that says BUY / SELL (blue / red). Everything else is information.
+    // ── Trade banner: the ONLY place that says BUY / SELL (solid blue / red). Everything else is information.
     if bannerIn
         string bTxt = ""
         color  bBg  = color.new(colNeuIn, 25)
-        if vtDir != 0
-            float  perB = (vtRisk + effCost * syminfo.mintick) * syminfo.pointvalue
-            int    qB   = perB > 0 ? int(math.floor(riskUsdIn / perB)) : 0
-            string uB   = syminfo.type == "futures" ? syminfo.root : syminfo.type == "crypto" or syminfo.type == "forex" ? "units" : "sh"
-            bTxt := (vtDir == 1 ? "BUY" : "SELL") + (qB >= 1 ? " " + str.tostring(qB) + " " + uB : "") + "  ·  Entry " + str.tostring(vtEn, format.mintick) + "  ·  Stop " + str.tostring(vtSL, format.mintick) + "  ·  Target " + str.tostring(vtTP, format.mintick)
-            bBg  := vtDir == 1 ? colBullIn : colBearIn
+        color  bTc  = color.white
+        int    vAge = bar_index - nz(vtBar, bar_index)
+        if not sigOnIn
+            bTxt := "SIGNALS OFF"
+        else if vtDir != 0
+            float  perB  = f_perC(vtRisk)
+            int    qB    = perB > 0 ? int(math.floor(riskUsdIn / perB)) : 0
+            string uB    = f_unit()
+            string sTxt  = vtDir == 1 ? "BUY" : "SELL"
+            float  prog  = (close - vtEn) * vtDir / math.max(math.abs(vtTP - vtEn), syminfo.mintick)
+            bool   fresh = vAge <= 2 and prog < 0.35
+            string qTxt  = qB >= 1 ? str.tostring(qB) + " " + uB + " ($" + str.tostring(qB * perB, "0") + " risk)" : "1 " + uB + " risks $" + str.tostring(perB, "0") + " > your $" + str.tostring(riskUsdIn, "0") + " · skip or size down"
+            string lvlTxt = "Entry " + str.tostring(vtEn, format.mintick) + "  ·  Stop " + str.tostring(vtSL, format.mintick) + "  ·  Target " + str.tostring(vtTP, format.mintick)
+            if fresh
+                bTxt := sTxt + " NOW  ·  " + qTxt + "\n" + lvlTxt
+                bBg  := vtDir == 1 ? colBullIn : colBearIn
+            else
+                bTxt := sTxt + " RUNNING since " + str.format_time(vtT, "HH:mm", "America/New_York") + " NY  ·  too late to enter\nIf you are in: Stop " + str.tostring(vtSL, format.mintick) + "  ·  Target " + str.tostring(vtTP, format.mintick)
+                bBg  := color.new(colPanelIn, 6)
+                bTc  := vtDir == 1 ? colBullIn : colBearIn
+        else if bar_index - vtXBar <= 3
+            bTxt := "EXIT " + (vtXDir == 1 ? "BUY" : "SELL") + "  ·  " + vtXWhy + "  ·  " + (vtXR >= 0 ? "+" : "") + str.tostring(vtXR, "0.00") + "R\nClose the position if it is still open"
+            bBg  := C_WARN
+            bTc  := colPanelIn
         else
             bool bDay = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
-            bTxt := not sigOnIn ? "SIGNALS OFF" : bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : intra and not hrsOk ? "NO TRADE  ·  outside signal hours" : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
+            bTxt := bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : flatNow or (intra and not hrsOk) ? "NO TRADE  ·  outside signal hours" : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
             bBg  := str.startswith(bTxt, "WAIT") ? color.new(colPanelIn, 6) : color.new(colNeuIn, 25)
-        table.cell(ban, 0, 0, bTxt, text_color = color.white, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Blue BUY / red SELL = an active trade signal (taken by every filter, the Edge Gate and the daily limit). NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
+        table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
 
     // ── Debug panel
     if debugIn
@@ -2277,11 +2323,12 @@ if barstate.islast and masterIn
 // =====================================================================================================
 // SIGNAL MARKERS + DATA WINDOW
 // =====================================================================================================
-plotshape(sigOnIn and takeBull, "Long Setup", shape.triangleup, location.belowbar, colBullIn, size = size.tiny)
-plotshape(sigOnIn and takeBear, "Short Setup", shape.triangledown, location.abovebar, colBearIn, size = size.tiny)
-plotshape(sigOnIn and sigBull and not takeBull, "Skipped Long (no edge / daily limit)", shape.xcross, location.belowbar, color.new(colNeuIn, 40), size = size.tiny)
-plotshape(sigOnIn and sigBear and not takeBear, "Skipped Short (no edge / daily limit)", shape.xcross, location.abovebar, color.new(colNeuIn, 40), size = size.tiny)
-bgcolor(masterIn and newsBgIn and newsBlock ? color.new(colBearIn, 93) : na, title = "News Blackout")
+plotshape(sigOnIn and takeBull, "BUY Signal", shape.triangleup, location.belowbar, colBullIn, size = size.small)
+plotshape(sigOnIn and takeBear, "SELL Signal", shape.triangledown, location.abovebar, colBearIn, size = size.small)
+plotshape(sigOnIn and sigBull and not takeBull, "Skipped Long (no edge / daily limit / in trade)", shape.xcross, location.belowbar, color.new(colNeuIn, 40), size = size.tiny)
+plotshape(sigOnIn and sigBear and not takeBear, "Skipped Short (no edge / daily limit / in trade)", shape.xcross, location.abovebar, color.new(colNeuIn, 40), size = size.tiny)
+plotshape(sigOnIn and evExit, "Trade Exit", shape.diamond, location.abovebar, color.new(C_WARN, 0), size = size.tiny)
+bgcolor(masterIn and newsBgIn and newsBlock ? color.new(C_WARN, 93) : na, title = "News Blackout")
 plot(primScr, "DOL Score", color = colNeuIn, display = display.data_window)
 plot(primPot, "DOL PoT % (bar close)", color = colNeuIn, display = display.data_window)
 
@@ -2301,6 +2348,7 @@ alertcondition(sigOnIn and takeBear, "DOL · Short Setup", "DOL: short setup on 
 alertcondition(evBiasChg, "DOL · HTF Bias Change",   "DOL: HTF bias changed on {{ticker}} {{interval}}")
 alertcondition(evAlign,   "DOL · Exec/HTF Aligned",  "DOL: execution bias aligned with HTF on {{ticker}} {{interval}}")
 alertcondition(evNewsOn,  "DOL · News Blackout",     "DOL: news blackout started on {{ticker}} {{interval}}")
+alertcondition(sigOnIn and evExit, "DOL · Trade Exit", "DOL: trade closed on {{ticker}} {{interval}}, exit now if still open")
 
 // Dynamic messages — create one alert with "Any alert() function call"
 string aSide = primSide == 1 ? "BSL-side ▲" : primSide == -1 ? "SSL-side ▼" : "—"
@@ -2321,13 +2369,15 @@ if barstate.isconfirmed and masterIn and inWin
         alert("DOL Score ≥ " + str.tostring(alScoreTh) + aTail, alert.freq_once_per_bar_close)
     if alPotIn and evPotX
         alert("DOL PoT ≥ " + str.tostring(alPotTh, "0.0") + "%" + aTail, alert.freq_once_per_bar_close)
-    if alSigIn and sigOnIn and takeBull
-        alert("Long Setup" + aTail, alert.freq_once_per_bar_close)
-    if alSigIn and sigOnIn and takeBear
-        alert("Short Setup" + aTail, alert.freq_once_per_bar_close)
+    if alSigIn and sigOnIn and (takeBull or takeBear)
+        float  aPer = f_perC(vtRisk)
+        int    aQ   = aPer > 0 ? int(math.floor(riskUsdIn / aPer)) : 0
+        alert((takeBull ? "BUY " : "SELL ") + syminfo.ticker + " " + chLbl + " | Entry " + str.tostring(vtEn, format.mintick) + " | Stop " + str.tostring(vtSL, format.mintick) + " | Target " + str.tostring(vtTP, format.mintick) + " | " + (aQ >= 1 ? str.tostring(aQ) + " " + f_unit() + " ($" + str.tostring(aQ * aPer, "0") + " risk)" : "1 " + f_unit() + " risks $" + str.tostring(aPer, "0") + ", above your limit"), alert.freq_once_per_bar_close)
+    if alSigIn and sigOnIn and evExit
+        alert("EXIT " + (vtXDir == 1 ? "BUY" : "SELL") + " " + syminfo.ticker + " " + chLbl + " | " + vtXWhy + " | " + (vtXR >= 0 ? "+" : "") + str.tostring(vtXR, "0.00") + "R", alert.freq_once_per_bar_close)
     if alBiasIn and evBiasChg
         alert("HTF Bias " + f_biasTxt(bH1) + " | " + h1Lbl + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
     if alNewsIn and evNewsOn
         alert("News blackout started (" + (evBlock ? "calendar event" : newsWin ? "scheduled window" : "volatility spike") + ") | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
     if alAlignIn and evAlign
-        alert("Exec/HTF Aligned " + (exSign == 1 ? "LONG" : "SHORT") + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)
+        alert("Exec/HTF Aligned " + (exSign == 1 ? "BULL" : "BEAR") + " | " + syminfo.ticker + " " + chLbl, alert.freq_once_per_bar_close)

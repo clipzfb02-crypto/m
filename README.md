@@ -22,6 +22,20 @@ confirmed, every `request.security` call uses `[1]` + `lookahead_on`, and learni
   - Detection of news spikes that show both an abnormal range and abnormal volume.
 - **Auto mode:** reads the chart timeframe and sets Scalping, Day Trading or Swing timeframes, distances and horizons.
 
+## Reading the chart (v6.2)
+Blue and red appear only on real trades. Everything else is white, grey or amber.
+
+| Banner | Meaning |
+|---|---|
+| Solid blue **BUY NOW** / solid red **SELL NOW** | A new trade passed every filter, the Edge Gate and the daily limit. It shows contracts for your $ risk, entry, stop and target. |
+| Blue / red text, **RUNNING · too late to enter** | A trade is already open. Do not chase it. Stop and target are shown for anyone already in. |
+| Amber **EXIT** | The trade just closed (target, stop, time stop or the 15:55 New York close). Close it if you are still in. |
+| Grey **NO TRADE** / **WAIT** | Do not trade. The banner says why. |
+
+- **One trade at a time.** A signal is only taken when no trade is open, so a triangle, an alert and the banner always describe the same trade.
+- **Day close.** An open trade is closed at 15:55 New York and nothing is carried overnight. This applies when Signal Hours are not Any Time.
+- **Alerts.** Entry alerts include entry, stop, target and size. There is also an exit alert.
+
 ## Research behind v6
 A Python replica of the engine was run on 26 datasets: 13 markets on 5m and 1h, about 1.1M bars.
 - **Markets:** BTC, ETH, SOL, ES, NQ, GC, CL, EURUSD, GBPUSD, USDJPY, SPY, QQQ and TSLA.
