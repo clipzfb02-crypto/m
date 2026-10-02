@@ -23,6 +23,10 @@ confirmed, every `request.security` call uses `[1]` + `lookahead_on`, and learni
 - **Auto mode:** reads the chart timeframe and sets Scalping, Day Trading or Swing timeframes, distances and horizons.
 
 ## Reading the chart (v6.2)
+**Simple View (default):** the chart shows only the liquidity target (`LIQUIDITY ▲ ABOVE` / `▼ BELOW` with its price and
+chance), the BUY / SELL signals toward it, and the banner. Turn Simple View off in General to bring back the bias table,
+reach bands and ghost trail.
+
 Blue and red appear only on real trades. Everything else is white, grey or amber.
 
 | Banner | Meaning |

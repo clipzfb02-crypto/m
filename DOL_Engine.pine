@@ -158,6 +158,7 @@ tfSelIn  = input.string("Auto", "Timeframe Selection", options = ["Auto", "Manua
 histIn   = input.int(20000, "History Depth (bars)", minval = 500, maxval = 20000, step = 500, group = G_GEN, tooltip = "Bars processed by the engine. Keeps the script fast and inside TradingView limits.")
 masterIn = input.bool(true, "Master Enable", group = G_GEN)
 debugIn  = input.bool(false, "Debug Panel", group = G_GEN)
+simpleIn = input.bool(true, "Simple View (liquidity + signals only)", group = G_GEN, tooltip = "On: the chart shows only where liquidity is (the DOL line with an arrow), the BUY / SELL signals toward it with entry, stop and target, and the top banner. Off: also shows the bias table, reach bands, ghost trail and the optional PD-array / structure drawings.")
 
 // ── MANUAL TIMEFRAMES
 mHtf2In  = input.timeframe("D",   "Macro TF",     group = G_TF)
@@ -371,6 +372,16 @@ alSigIn   = input.bool(true, "Execution Signals", group = G_ALR)
 alBiasIn  = input.bool(false, "HTF Bias Change", group = G_ALR)
 alAlignIn = input.bool(false, "Exec / HTF Alignment", group = G_ALR)
 alNewsIn  = input.bool(false, "News Blackout Started", group = G_ALR)
+
+// Simple View hides everything except the liquidity target, the signals and the banner
+bool vTbl   = showTblIn and not simpleIn
+bool vReach = reachOnIn and not simpleIn
+bool vGhost = ghostOnIn and not simpleIn
+bool vSec   = showSecIn and not simpleIn
+bool vLvl   = showLvlIn and not simpleIn
+bool vLvn   = showLvnIn and not simpleIn
+bool vStr   = showStrIn and not simpleIn
+bool vArr   = (showFvgIn or showIfvgIn or showObIn or showBrkIn) and not simpleIn
 
 // =====================================================================================================
 // UTILITY FUNCTIONS
@@ -2022,7 +2033,7 @@ f_reach(int side, float target) =>
 var float rUpV = na
 var float rDnV = na
 var int   rT0  = na
-if reachOnIn and masterIn and barstate.islast and (barstate.isconfirmed or na(rUpV))
+if vReach and masterIn and barstate.islast and (barstate.isconfirmed or na(rUpV))
     rUpV := close + f_reach(1, reachPIn / 100.0)
     rDnV := close - f_reach(-1, reachPIn / 100.0)
     rT0  := time
@@ -2049,7 +2060,7 @@ if barstate.islast and masterIn
     color  dolCol = colNeuIn
 
     // ── LVN zones (optional)
-    if showLvnIn and array.size(lvHs) >= 10
+    if vLvn and array.size(lvHs) >= 10
         float pLo = array.min(lvLs)
         float pHi = array.max(lvHs)
         if pHi > pLo
@@ -2095,7 +2106,7 @@ if barstate.islast and masterIn
                             dnC += 1
 
     // ── PD arrays (optional)
-    if showFvgIn or showIfvgIn or showObIn or showBrkIn
+    if vArr
         float aD = effDist * atrS
         for sd = 0 to 1
             int side = sd == 0 ? 1 : -1
@@ -2113,7 +2124,7 @@ if barstate.islast and masterIn
 
     // ── Structure (optional)
     int nE = array.size(sEvts)
-    if showStrIn and nE > 0
+    if vStr and nE > 0
         int drawn = 0
         for k = nE - 1 to 0
             SEvt e = array.get(sEvts, k)
@@ -2125,7 +2136,7 @@ if barstate.islast and masterIn
 
     // ── Ghost Trail: faint dotted trace of former DOLs + a tiny ✕ where they ended
     int nG = array.size(ghosts)
-    if ghostOnIn and nG > 0
+    if vGhost and nG > 0
         for k = 0 to nG - 1
             Ghost g  = array.get(ghosts, k)
             color gc = colNeuIn
@@ -2135,7 +2146,7 @@ if barstate.islast and masterIn
                 f_mkLbl(rT, tE, g.lvl, "✕", noCol, color.new(gc, 45), label.style_label_center, size.tiny, "Former DOL · " + f_kindTxtK(g.kind) + " · " + g.why)
 
     // ── Next ranked targets (optional)
-    if showLvlIn
+    if vLvl
         for sd = 0 to 1
             int side = sd == 0 ? 1 : -1
             array<int> idx = f_pickNext(zs, side, 2, primId, secId)
@@ -2149,7 +2160,7 @@ if barstate.islast and masterIn
 
     // ── Opposite-side target (optional)
     int sIdx = f_findId(zs, secId)
-    if showDolIn and showSecIn and sIdx >= 0
+    if showDolIn and vSec and sIdx >= 0
         Zn    s  = array.get(zs, sIdx)
         color sc = colNeuIn
         float y  = f_isPool(s) ? s.lvl : s.side == 1 ? s.bot : s.top
@@ -2170,7 +2181,7 @@ if barstate.islast and masterIn
         f_mkLbl(rT, rightT, vtTP, "TARGET " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 0), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : tgtModeIn == "Best Expectancy" ? "Virtual target: the size that has paid most on this chart's past signals" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
 
     // ── Reach bands: levels with the chosen probability of being touched within the horizon
-    if reachOnIn and not na(rUpV) and f_room(rB, rL, rT, maxVisIn)
+    if vReach and not na(rUpV) and f_room(rB, rL, rT, maxVisIn)
         float rUp = rUpV
         float rDn = rDnV
         string rtip = "calibrated model at the last bar close · " + str.tostring(effHor) + " bars"
@@ -2197,14 +2208,15 @@ if barstate.islast and masterIn
                 f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 84), line.style_solid, 6)
             f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 0), line.style_solid, 1)
             f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
-            string l1  = (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
-            string l2  = "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
+            string l1  = simpleIn ? "LIQUIDITY " + (sd == 1 ? "▲ ABOVE" : "▼ BELOW") + (unl ? " · UNLIKELY" : "") : (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
+            string l2  = simpleIn ? str.tostring(keyY, format.mintick) + " · " + str.tostring(potL, "0") + "% chance" : "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
             string l3  = detailIn ? "\n" + f_srcList(p) + " · " + p.tf + " · " + str.tostring(p.dist, "0.0") + " ATR" : ""
             string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee.\nThis is a liquidity target, NOT a buy / sell signal. Trade only the blue BUY / red SELL banner."
-            f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
+            if not (simpleIn and sigOnIn and vtDir != 0)
+                f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
 
     // ── Bias table
-    if showTblIn
+    if vTbl
         string tsz = f_sz(tblSizeIn)
         color  hdr = color.new(colTextIn, 50)
         color  lbl = color.new(colTextIn, 15)
@@ -2340,7 +2352,7 @@ if barstate.islast and masterIn
             bTc  := colPanelIn
         else
             bool bDay = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
-            bTxt := bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : flatNow or (intra and not hrsOk) ? "NO TRADE  ·  outside signal hours" : tradeModeIn == "DOL Direction" ? (dolWhy != "" ? "WAIT  ·  " + dolWhy : "WAIT  ·  next DOL") : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
+            bTxt := bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : flatNow or (intra and not hrsOk) ? "NO TRADE  ·  outside signal hours" : tradeModeIn == "DOL Direction" ? "WAIT  ·  " + (primSide == 1 ? "liquidity ▲ above · " : primSide == -1 ? "liquidity ▼ below · " : "") + (dolWhy != "" ? dolWhy : "next signal soon") : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
             bBg  := str.startswith(bTxt, "WAIT") ? color.new(colPanelIn, 6) : color.new(colNeuIn, 25)
             if chartSec != 60 and chartSec != 300
                 bTxt := bTxt + "\nTuned for 1m / 5m charts"
