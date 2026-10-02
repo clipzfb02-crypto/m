@@ -35,6 +35,12 @@ Blue and red appear only on real trades. Everything else is white, grey or amber
 - **One trade at a time.** A signal is only taken when no trade is open, so a triangle, an alert and the banner always describe the same trade.
 - **Day close.** An open trade is closed at 15:55 New York and nothing is carried overnight. This applies when Signal Hours are not Any Time.
 - **Alerts.** Entry alerts include entry, stop, target and size. There is also an exit alert.
+- **Trade Mode: DOL Direction (default).** BUY when the DOL is above price, SELL when it is below, target = the DOL,
+  one trade per DOL. Built for MNQ and ES / MES on 1-minute and 5-minute charts.
+- **Minimum stop.** In DOL Direction mode a stop that is too tight for the costs is widened instead of skipping the
+  trade, so costs stay under 3% of the risk: about 33 points on MNQ, 17 on MES and 12.5 on ES. The contract count
+  shrinks so the $ risk stays the same. On 1-minute charts this makes stops wide compared with the candles. 5-minute
+  charts fit these stops better.
 
 ## Research behind v6
 A Python replica of the engine was run on 26 datasets: 13 markets on 5m and 1h, about 1.1M bars.

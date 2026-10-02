@@ -312,7 +312,7 @@ tgtWrIn    = input.int(90, "Target Win Rate %", minval = 55, maxval = 97, step =
 wrAdaptIn  = input.bool(true, "Self-Adjust Target to Hit Win Rate", group = G_TRD, tooltip = "After every closed virtual trade the target distance is nudged (shorter after a loss, slightly longer after a win) so this chart's real win rate settles at the chosen %. Uses finished trades only — never repaints. Fills follow TradingView's broker emulator: gaps fill at the open, and when stop and target are both inside one bar the side nearer the open is hit first.")
 minRRIn    = input.float(0.5, "Min Reward : Risk", minval = 0.1, maxval = 20.0, step = 0.1, group = G_TRD, tooltip = "The virtual target is the nearest liquidity on the signal side that pays at least this multiple of the risk. No such target = no trade.")
 maxHoldIn  = input.int(60, "Time Stop (bars, 0 = off)", minval = 0, maxval = 2000, group = G_TRD)
-costIn     = input.float(0.0, "Round-Trip Cost (ticks, 0 = auto)", minval = 0.0, maxval = 100000.0, step = 0.5, group = G_TRD, tooltip = "Spread + commission + slippage per round trip, in ticks. 0 = auto: MNQ 4 · NQ 2 · MES 2 · ES 1.5 · other index / metal / energy futures 2 · crypto 0.08% of price · forex 1.2 pips · others 2 ticks. Enter your own broker's number if you know it. Used by WIN / EDGE, the Edge Gate and the Max Cost filter.")
+costIn     = input.float(0.0, "Round-Trip Cost (ticks, 0 = auto)", minval = 0.0, maxval = 100000.0, step = 0.5, group = G_TRD, tooltip = "Spread + commission + slippage per round trip, in ticks. 0 = auto: MNQ 4 · NQ 2 · MES 2 · ES 1.5 · other index / metal / energy futures 2 · S&P / Nasdaq CFDs and index charts 0.5 bp of price · crypto 0.08% of price · forex 1.2 pips · others 2 ticks. Enter your own broker's number if you know it. Used by WIN / EDGE, the Edge Gate and the Max Cost filter.")
 gateIn     = input.bool(true, "Edge Gate: Only Trade With Proven Profit", group = G_TRD, tooltip = "Every signal on this chart is replayed (never repaints) with 10 target sizes, after your costs. A signal is only taken (marker, alert, virtual trade) when the chosen target size has made money on this chart's past signals, with a safety margin. Charts with no edge simply stop trading instead of losing. A filter, not a guarantee: past edge can fade.")
 gateNIn    = input.int(30, "Edge Gate: Min Past Signals", minval = 10, maxval = 1000, group = G_TRD, tooltip = "Signals that must be replayed before the gate can open. Until then no trades are taken (shown as LEARNING).")
 gateZIn    = input.float(0.5, "Edge Gate: Safety Margin (σ)", minval = 0.0, maxval = 3.0, step = 0.25, group = G_TRD, tooltip = "The average profit must exceed this many standard errors above zero. Higher = fewer but more reliable trades.")
@@ -1015,7 +1015,7 @@ f_autoCost() =>
     string r = syminfo.root
     float  t = r == "MNQ" ? 4.0 : r == "NQ" ? 2.0 : r == "MES" ? 2.0 : r == "ES" ? 1.5 : r == "MYM" or r == "YM" or r == "M2K" or r == "RTY" ? 2.0 : r == "MGC" or r == "GC" or r == "MCL" or r == "CL" ? 2.0 : na
     if na(t)
-        t := syminfo.type == "crypto" ? 0.0008 * close / syminfo.mintick : syminfo.type == "forex" ? 12.0 : 2.0
+        t := syminfo.type == "crypto" ? 0.0008 * close / syminfo.mintick : syminfo.type == "forex" ? 12.0 : syminfo.type == "cfd" or syminfo.type == "index" ? math.max(2.0, 0.00005 * close / syminfo.mintick) : 2.0
     t
 float effCost = costIn > 0 ? costIn : f_autoCost()
 bool  flatNow = flatIn and intra and hrsMode != "Any Time" and nyMod + int(chartSec / 60) >= 955 and nyMod < 1080
@@ -1851,6 +1851,17 @@ if barstate.isconfirmed and masterIn and inWin
         int   dN  = dEnt
         float slN = dN == 1 ? (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS : (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
         float rkN = (close - slN) * dN
+        // DOL mode never skips for a tight stop: the stop is widened until the round-trip cost is at most
+        // Max Cost % of the risk (MNQ ≈ 33 pts · MES ≈ 17 pts · ES ≈ 12.5 pts at 3 %). Size shrinks to keep $ risk fixed.
+        if dolMode
+            if rkN <= 0
+                slN := dN == 1 ? swLo - stopBufIn * atrS : swHi + stopBufIn * atrS
+                rkN := (close - slN) * dN
+            if maxCostIn > 0 and rkN > 0
+                float minRk = effCost * syminfo.mintick / (maxCostIn / 100.0)
+                if rkN < minRk
+                    rkN := minRk
+                    slN := close - dN * minRk
         if rkN > 0
             float tpN   = na
             float minTp = (effCost + 1.0) * syminfo.mintick
@@ -1866,7 +1877,6 @@ if barstate.isconfirmed and masterIn and inWin
                 tpN := rwD >= minRRIn * rkN and rwD >= minTp ? primTrig : na
                 if na(tpN)
                     dolWhy := "DOL too close for the stop (< " + str.tostring(minRRIn, "0.0") + "R)"
-                    dolTrId := primId
             else if tgtModeIn == "Target Win Rate"
                 float lq = math.log(tgtWrIn / (100.0 - tgtWrIn)) / 0.908
                 float qq = 1.0 / (1.0 + math.exp(-lq))
@@ -1884,9 +1894,6 @@ if barstate.isconfirmed and masterIn and inWin
                 gState := shN < gateNIn ? 0 : not na(lN) and lN > 0 ? 1 : -1
                 gOk    := dolMode or not gateIn or gState == 1
             bool dayOk = not dayGuardIn or (dayR > -dayLossIn and dayT < dayMaxIn)
-            if dolMode and maxCostIn > 0 and effCost * syminfo.mintick > maxCostIn / 100.0 * rkN
-                dayOk := false
-                dolWhy := "stop too tight for costs"
             // One trade at a time: a signal is only taken when flat, so the marker, alert and banner always match
             if not na(tpN) and gOk and dayOk and vtDir == 0 and not flatNow
                 takeBull := dN == 1
@@ -2283,8 +2290,8 @@ if barstate.islast and masterIn
             table.cell(tbl, 0, 13, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
             table.cell(tbl, 1, 13, "", text_size = tsz)
             table.cell(tbl, 2, 13, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-            string gtTxt = not gateIn ? "OFF" : gState == 0 ? "LEARNING · " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : (gState == 1 ? "OPEN · " : "PAUSED · ") + (na(gEdge) ? "—" : (gEdge >= 0 ? "+" : "") + str.tostring(gEdge, "0.00") + "R @ " + str.tostring(gTgt, "0.##") + "R")
-            color  gtCol = not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colTextIn : C_WARN
+            string gtTxt = tradeModeIn == "DOL Direction" ? "OFF · DOL mode" : not gateIn ? "OFF" : gState == 0 ? "LEARNING · " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : (gState == 1 ? "OPEN · " : "PAUSED · ") + (na(gEdge) ? "—" : (gEdge >= 0 ? "+" : "") + str.tostring(gEdge, "0.00") + "R @ " + str.tostring(gTgt, "0.##") + "R")
+            color  gtCol = tradeModeIn == "DOL Direction" or not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colTextIn : C_WARN
             table.cell(tbl, 0, 14, "GATE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Edge Gate: average profit per signal (after costs) of the current target size, replayed on " + str.tostring(shN, "0") + " past signals of this chart. OPEN = proven positive → signals are taken. PAUSED = no proven edge → signals are skipped. Status updates at each signal.")
             table.cell(tbl, 1, 14, "", text_size = tsz)
             table.cell(tbl, 2, 14, gtTxt, text_color = gtCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
@@ -2335,6 +2342,8 @@ if barstate.islast and masterIn
             bool bDay = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
             bTxt := bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : flatNow or (intra and not hrsOk) ? "NO TRADE  ·  outside signal hours" : tradeModeIn == "DOL Direction" ? (dolWhy != "" ? "WAIT  ·  " + dolWhy : "WAIT  ·  next DOL") : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
             bBg  := str.startswith(bTxt, "WAIT") ? color.new(colPanelIn, 6) : color.new(colNeuIn, 25)
+            if chartSec != 60 and chartSec != 300
+                bTxt := bTxt + "\nTuned for 1m / 5m charts"
         table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
 
     // ── Debug panel
