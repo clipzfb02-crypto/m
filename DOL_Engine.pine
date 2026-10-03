@@ -347,8 +347,9 @@ colObIn    = input.color(#B0A089, "OB", inline = "c2", group = G_VIS)
 colLvnIn   = input.color(#E6C35C, "LVN", inline = "c2", group = G_VIS)
 colTextIn  = input.color(#E6EAF2, "Text", inline = "c3", group = G_VIS)
 colPanelIn = input.color(#0B0E14, "Panel", inline = "c3", group = G_VIS)
-colDolIn   = input.color(#546E7A, "DOL Target", inline = "c4", group = G_VIS, tooltip = "Neutral colour for the DOL target line. Blue and red are reserved for real BUY / SELL trades only.")
-bannerIn   = input.bool(true, "Trade Banner (BUY / SELL / NO TRADE)", inline = "c4", group = G_VIS)
+colDolIn   = input.color(#E040FB, "DOL Target", inline = "c4", group = G_VIS, tooltip = "Colour of the DOL target line, zone, dashed path and label (magenta, TradeAxis style). Blue and red are reserved for real BUY / SELL trades only.")
+bannerIn   = input.bool(true, "Trade Banner", inline = "c4", group = G_VIS)
+banPosIn   = input.string("Top Right", "Banner Position", options = ["Top Right", "Top Center", "Bottom Right"], group = G_VIS)
 dolOpIn    = input.int(84, "DOL Zone Transparency", minval = 0, maxval = 100, group = G_VIS)
 glowIn     = input.bool(true, "Glow Line", group = G_VIS)
 lblSizeIn  = input.string("Small", "Label Size", options = ["Tiny", "Small", "Normal"], group = G_VIS)
@@ -560,6 +561,16 @@ f_srcList(Zn z) =>
             s := s + " ×" + str.tostring(z.refs)
     else
         s := f_kindTxt(z) + (z.kind == K_OB and z.hasImb ? " +imb" : "")
+    s
+
+// Short name of a target for the label (e.g. PDL, EQH, Asia L, FVG)
+f_tgtName(Zn z) =>
+    string s = ""
+    if f_isPool(z)
+        bool b = z.kind == K_BSL
+        s := z.fPM ? (b ? "PMH" : "PML") : z.fPW ? (b ? "PWH" : "PWL") : z.fPD ? (b ? "PDH" : "PDL") : z.fEq ? (b ? "EQH" : "EQL") : z.fSess ? z.sName : z.fHtf ? "HTF " + (b ? "High" : "Low") : z.fStf ? "STF " + (b ? "High" : "Low") : (b ? "BSL" : "SSL")
+    else
+        s := f_kindTxt(z)
     s
 
 f_findId(array<Zn> a, int id) =>
@@ -2039,7 +2050,7 @@ if vReach and masterIn and barstate.islast and (barstate.isconfirmed or na(rUpV)
     rT0  := time
 
 var table tbl = table.new(f_pos(tblPosIn), 3, 17, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1, border_color = color.new(colPanelIn, 100), border_width = 0)
-var table ban = table.new(position.top_center, 1, 1, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 70), frame_width = 1)
+var table ban = table.new(banPosIn == "Top Center" ? position.top_center : banPosIn == "Bottom Right" ? position.bottom_right : position.top_right, 1, 1, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 70), frame_width = 1)
 var table dbg = table.new(position.bottom_left, 2, 22, bgcolor = color.new(colPanelIn, 6), frame_color = color.new(colNeuIn, 78), frame_width = 1)
 
 if barstate.islast
@@ -2178,7 +2189,8 @@ if barstate.islast and masterIn
         f_mkLine(rL, vtT, vtTP, rightT, vtTP, color.new(tcl, 20), line.style_dotted, 2)
         f_mkLbl(rT, rightT, vtEn, (vtDir == 1 ? "BUY " : "SELL ") + str.tostring(vtEn, format.mintick), color.new(tcl, 0), color.white, label.style_label_left, size.small, "Active trade signal (entry at the signal candle close). Blue = buy · red = sell.")
         f_mkLbl(rT, rightT, vtSL, "STOP " + str.tostring(vtSL, format.mintick), noCol, color.new(colNeuIn, 0), label.style_label_left, size.tiny, "Stop beyond the swept liquidity")
-        f_mkLbl(rT, rightT, vtTP, "TARGET " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 0), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : tgtModeIn == "Best Expectancy" ? "Virtual target: the size that has paid most on this chart's past signals" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
+        if not (simpleIn and not na(primTrig) and math.abs(vtTP - primTrig) <= 0.5 * atrS)
+            f_mkLbl(rT, rightT, vtTP, "TARGET " + str.tostring(rrT, "0.00") + "R", noCol, color.new(tcl, 0), label.style_label_left, size.tiny, (tgtModeIn == "Target Win Rate" ? "Virtual target for a " + str.tostring(tgtWrIn) + "% win rate" : tgtModeIn == "Best Expectancy" ? "Virtual target: the size that has paid most on this chart's past signals" : "Virtual target: nearest liquidity paying ≥ " + str.tostring(tgtModeIn == "High Win Rate" ? 0.5 : minRRIn, "0.0") + "R") + " · locked until hit")
 
     // ── Reach bands: levels with the chosen probability of being touched within the horizon
     if vReach and not na(rUpV) and f_room(rB, rL, rT, maxVisIn)
@@ -2203,19 +2215,19 @@ if barstate.islast and masterIn
         dolCol := dc
         if showDolIn
             float keyY = f_isPool(p) ? p.lvl : sd == 1 ? p.bot : p.top
-            f_mkBox(rB, p.t0, p.top, rightT, p.bot, color.new(dc, dolOpIn), color.new(dc, 100), line.style_solid, "", dc)
+            f_mkBox(rB, p.t0, p.top, rightT, p.bot, color.new(dc, dolOpIn), color.new(dc, simpleIn ? 55 : 100), simpleIn ? line.style_dashed : line.style_solid, "", dc)
             if glowIn
-                f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 84), line.style_solid, 6)
-            f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 0), line.style_solid, 1)
-            // Where price is being drawn: arrow from the current price to the DOL level
-            f_mkLine(rL, time, close, time + math.max(2, int(extIn * 0.6)) * barMs, keyY, color.new(dc, 0), line.style_arrow_right, 2)
-            f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
-            string l1  = simpleIn ? "LIQUIDITY " + (sd == 1 ? "▲ ABOVE" : "▼ BELOW") + (unl ? " · UNLIKELY" : "") : (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
-            string l2  = simpleIn ? str.tostring(keyY, format.mintick) + " · " + str.tostring(potL, "0") + "% chance" : "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
+                f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, simpleIn ? 70 : 84), line.style_solid, 6)
+            f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 0), line.style_solid, simpleIn ? 3 : 1)
+            // Where price is being drawn: dashed path from the current price to the target
+            f_mkLine(rL, time, close, rightT, keyY, color.new(dc, 15), line.style_dashed, 2)
+            if not simpleIn
+                f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
+            string l1  = simpleIn ? "Target: " + f_tgtName(p) + (unl ? " (unlikely)" : "") : (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
+            string l2  = simpleIn ? "PoT: " + str.tostring(potL, "0.0") + "%" : "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
             string l3  = detailIn ? "\n" + f_srcList(p) + " · " + p.tf + " · " + str.tostring(p.dist, "0.0") + " ATR" : ""
             string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee.\nThis is a liquidity target, NOT a buy / sell signal. Trade only the blue BUY / red SELL banner."
-            if not (simpleIn and sigOnIn and vtDir != 0)
-                f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
+            f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, simpleIn ? color.new(#2A2A2E, 12) : color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
 
     // ── Bias table
     if vTbl
@@ -2362,7 +2374,7 @@ if barstate.islast and masterIn
             bBg  := color.new(colPanelIn, 6)
             if chartSec != 60 and chartSec != 300
                 bTxt := bTxt + "\nTuned for 1m / 5m charts"
-        table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
+        table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = simpleIn ? size.small : size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
 
     // ── Debug panel
     if debugIn
