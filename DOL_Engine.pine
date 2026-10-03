@@ -2207,6 +2207,8 @@ if barstate.islast and masterIn
             if glowIn
                 f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 84), line.style_solid, 6)
             f_mkLine(rL, p.t0, keyY, rightT, keyY, color.new(dc, 0), line.style_solid, 1)
+            // Where price is being drawn: arrow from the current price to the DOL level
+            f_mkLine(rL, time, close, time + math.max(2, int(extIn * 0.6)) * barMs, keyY, color.new(dc, 0), line.style_arrow_right, 2)
             f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
             string l1  = simpleIn ? "LIQUIDITY " + (sd == 1 ? "▲ ABOVE" : "▼ BELOW") + (unl ? " · UNLIKELY" : "") : (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
             string l2  = simpleIn ? str.tostring(keyY, format.mintick) + " · " + str.tostring(potL, "0") + "% chance" : "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
@@ -2351,9 +2353,13 @@ if barstate.islast and masterIn
             bBg  := C_WARN
             bTc  := colPanelIn
         else
-            bool bDay = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
-            bTxt := bDay ? "NO TRADE  ·  daily limit reached" : newsBlock ? "NO TRADE  ·  news blackout" : flatNow or (intra and not hrsOk) ? "NO TRADE  ·  outside signal hours" : tradeModeIn == "DOL Direction" ? "WAIT  ·  " + (primSide == 1 ? "liquidity ▲ above · " : primSide == -1 ? "liquidity ▼ below · " : "") + (dolWhy != "" ? dolWhy : "next signal soon") : gateIn and shN < gateNIn ? "NO TRADE  ·  Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "NO TRADE  ·  no proven edge on this chart" : "WAIT  ·  no setup yet"
-            bBg  := str.startswith(bTxt, "WAIT") ? color.new(colPanelIn, 6) : color.new(colNeuIn, 25)
+            // No open trade: always say where the DOL is pulling price, then why there is no entry right now
+            bool   bDay   = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
+            string dirTxt = primSide == 1 ? "DOL SAYS ▲ HIGHER" : primSide == -1 ? "DOL SAYS ▼ LOWER" : "NO DOL IN RANGE"
+            string tgtTxt = primSide != 0 and not na(primTrig) ? "  ·  target " + str.tostring(primTrig, format.mintick) + "  ·  " + potTxt + " chance" : ""
+            string whyTxt = bDay ? "daily limit reached" : newsBlock ? "news blackout" : flatNow or (intra and not hrsOk) ? "outside signal hours (09:30-11:30 · 13:30-15:45 NY)" : tradeModeIn == "DOL Direction" ? (dolWhy != "" ? dolWhy : "waiting for the next DOL") : gateIn and shN < gateNIn ? "Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "no proven edge on this chart" : "no setup yet"
+            bTxt := dirTxt + tgtTxt + "\nNo entry now: " + whyTxt
+            bBg  := color.new(colPanelIn, 6)
             if chartSec != 60 and chartSec != 300
                 bTxt := bTxt + "\nTuned for 1m / 5m charts"
         table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")

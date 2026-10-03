@@ -6,6 +6,8 @@
 - Reads the chart on mobile and acts on colour alone: **solid blue = BUY, solid red = SELL**. Blue and red must appear
   only on real trades (banner, entry lines, triangles). Everything else stays white / grey / amber.
 - Wants to trade toward the DOL without waiting (Trade Mode default = DOL Direction).
+- Wants to always see where price is going: the banner always shows "DOL SAYS ▲ HIGHER / ▼ LOWER" with the target,
+  never just "WAIT". Inspired by the TradeAxis DOL indicator (closed source; do not copy it).
 
 ## Rules for every change
 - Pine Script v6 **indicator** (not a strategy). No repainting: engine on confirmed bars, `request.security` with `[1]` + `lookahead_on`.
