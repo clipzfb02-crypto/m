@@ -1,0 +1,1615 @@
+//@version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  Liquidity Flow Pro [Non-Repaint]
+// ────────────────────────────────────────────────────────────────────────────
+//  WHAT THIS IS
+//  An ESTIMATED liquidity-concentration model built only from data a chart can
+//  observe: OHLC, volume (when available), confirmed swing highs/lows, equal
+//  highs/lows, repeated tests, previous day/week/month highs/lows, higher-
+//  timeframe swings, market structure and sweep state. It does NOT read any
+//  exchange order book.
+//
+//  WHAT THE PERCENTAGE MEANS
+//  BUY-SIDE %  = share of the currently scored ACTIVE liquidity resting ABOVE price
+//  SELL-SIDE % = share of the currently scored ACTIVE liquidity resting BELOW price
+//  "92% SELL-SIDE" means the model estimates that 92% of the active liquidity
+//  it scores sits below price. It is NOT a 92% chance that price falls. A side
+//  holding more liquidity is a likely draw / target, never a guaranteed move.
+//
+//  ARCHITECTURE (structural steps commit once per CONFIRMED bar)
+//   1. Confirmed swings (ta.pivothigh / ta.pivotlow) -> candidate pools;
+//      swings that also hold over a wider window are flagged EXTERNAL
+//   2. Pool store (array<Pool>) -> equal-level clustering inside an ATR tolerance
+//   3. HTF swings, previous D/W/M and Asia/London/NY highs/lows -> merged / added
+//   4. Sweep engine -> swept pools leave the active set, accepted breaks are
+//      removed, approaches that hold count as tests (persistence)
+//   5. Market structure (HH/HL/LH/LL, BOS) -> protected swings become structural
+//   6. Scoring (every tick): intrinsic strength x freshness x ATR-distance decay,
+//      summed per side, then bounded secondary tilts (structure / pressure /
+//      premium-discount), smoothed and normalised with a stability prior.
+//  Only step 6 runs on the developing bar. Everything that marks the chart
+//  historically (pools, sweeps, flips, signals, alerts) commits on bar close.
+// ════════════════════════════════════════════════════════════════════════════
+indicator("Liquidity Flow Pro [Non-Repaint]", shorttitle = "LiqFlow Pro", overlay = true,
+     max_lines_count = 500, max_boxes_count = 500, max_labels_count = 500)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  INPUTS
+// ════════════════════════════════════════════════════════════════════════════
+const string G_STY  = "Style"
+const string G_DET  = "Liquidity Detection"
+const string G_CALC = "Liquidity Calculation"
+const string G_MODE = "Flow Model"
+const string G_HTF  = "Higher Timeframe"
+const string G_SES  = "Sessions"
+const string G_SWP  = "Sweeps"
+const string G_DASH = "Dashboard"
+const string G_VIS  = "Visuals"
+const string G_COL  = "Colors"
+const string G_SIG  = "Signals"
+const string G_ALR  = "Alerts"
+const string G_DBG  = "Debug"
+
+// ─── Style
+string styleMode  = input.string("Video", "Display Style", options = ["Video", "Pro"], group = G_STY,
+     tooltip = "Video: the chart is split at price into two zones, each labelled with its share of the estimated liquidity. Price tends to be drawn toward the side holding more liquidity: ▲ UP 80% = most liquidity above price, ▼ DOWN 80% = most liquidity below.\nPro: dashboard plus every liquidity pool, sweep and target drawn on the chart.")
+bool   vidExtras  = input.bool(false, "Video: also show dashboard & levels", group = G_STY)
+int    zoneLen    = input.int(50, "Video: Zone Lookback (bars)", minval = 10, maxval = 500, group = G_STY,
+     tooltip = "The upper zone runs from price up to the highest high of this many bars, the lower zone from price down to the lowest low.")
+string zoneNames  = input.string("Direction (▲ UP / ▼ DOWN)", "Video: Zone Labels",
+     options = ["Direction (▲ UP / ▼ DOWN)", "Sellers / Buyers", "Buy-side / Sell-side", "Above / Below"], group = G_STY,
+     tooltip = "Direction: the upper zone reads ▲ UP and the lower zone ▼ DOWN, so the larger percentage shows the side price is more likely to be drawn toward. The larger side is also drawn with a bigger label.")
+color  upZoneCol  = input.color(#4caf50, "Video: Upper Zone", group = G_STY, inline = "vz")
+color  dnZoneCol  = input.color(#f23645, "Lower Zone", group = G_STY, inline = "vz")
+int    zoneTransp = input.int(82, "Video: Zone Transparency", minval = 0, maxval = 100, group = G_STY)
+bool   videoMode  = styleMode == "Video"
+
+// ─── Liquidity Detection
+int   swingLen   = input.int(5, "Swing Length", minval = 2, maxval = 20, group = G_DET,
+     tooltip = "Bars on each side needed to confirm a swing high/low. A swing is registered only after confirmation and never moves afterwards.")
+float eqTolATR   = input.float(0.15, "Equal High/Low Tolerance (ATR)", minval = 0.05, maxval = 0.50, step = 0.01, group = G_DET,
+     tooltip = "Swings within this ATR distance of an existing pool are clustered into one equal-high / equal-low pool.")
+int   maxPools   = input.int(30, "Max Liquidity Pools", minval = 10, maxval = 100, group = G_DET)
+float minPoolStr = input.float(1.0, "Minimum Pool Strength", minval = 0.0, maxval = 6.0, step = 0.25, group = G_DET,
+     tooltip = "Pools with a lower intrinsic strength are ignored by the score and hidden. 1.0 = a plain confirmed swing.")
+float maxDistATR = input.float(50.0, "Max Pool Distance (ATR)", minval = 5.0, maxval = 200.0, step = 1.0, group = G_DET,
+     tooltip = "Pools farther than this from price are not scored.")
+int   memoryBars = input.int(200, "Liquidity Memory (bars)", minval = 20, maxval = 2000, group = G_DET,
+     tooltip = "Freshness decay scale. Untouched pools fade toward (never below) 50% of their strength, so persistent liquidity is never erased by age alone.")
+int   atrLen     = input.int(14, "ATR Length", minval = 1, maxval = 100, group = G_DET)
+bool  useExt     = input.bool(true, "Detect External (Major) Swings", group = G_DET, inline = "ext",
+     tooltip = "A swing that is also a pivot over Swing Length × Multiplier bars is external-range liquidity and earns a structural bonus (tag EXT).")
+int   extMult    = input.int(3, "×", minval = 2, maxval = 6, group = G_DET, inline = "ext")
+bool  autoScale  = input.bool(true, "Auto-Scale Lengths To Swing Length", group = G_DET,
+     tooltip = "Liquidity Memory and Dealing Range Length are defined for Swing Length 5 and scale proportionally, so the model keeps the same behaviour when you change swing granularity on any timeframe.")
+
+// ─── Liquidity Calculation
+float distWeight   = input.float(1.0, "Distance Weight", minval = 0.0, maxval = 5.0, step = 0.1, group = G_CALC,
+     tooltip = "Decay of relevance with ATR distance. At 1.0 a pool 4 ATR away carries half the weight of one at price. 0 = distance ignored.")
+float eqWeight     = input.float(1.5, "Equal Level Weight", minval = 0.0, maxval = 3.0, step = 0.1, group = G_CALC,
+     tooltip = "Cluster multiplier per extra equal swing. At 1.5 each extra touch adds 1.25x: 1 touch 1.0x, 2 = 2.25x, 3 = 3.5x, 4+ = 4.75x (capped). A cluster therefore never scores less than the same swings left separate, plus a concentration premium. 0.75 gives a flatter 1.0 / 1.6 / 2.3 / 2.9 curve.")
+float volWeight    = input.float(1.0, "Volume Weight", minval = 0.0, maxval = 2.0, step = 0.1, group = G_CALC,
+     tooltip = "Secondary bonus (max +1.0 at weight 1) for pools formed on above-average volume. Relative volume is clamped at 3x. Ignored automatically when the symbol has no usable volume.")
+float structWeight = input.float(1.0, "Structure Weight", minval = 0.0, maxval = 2.0, step = 0.1, group = G_CALC,
+     tooltip = "Bonus for protected / range-extreme swings, and size of the bounded structure tilt (25% at 1.0).")
+float htfWeight    = input.float(1.0, "HTF Weight", minval = 0.0, maxval = 2.0, step = 0.1, group = G_CALC)
+float sessWeight   = input.float(1.0, "Session Level Weight", minval = 0.0, maxval = 2.0, step = 0.1, group = G_CALC,
+     tooltip = "Bonus for previous day (+0.25), week (+0.50) and month (+0.75) highs/lows at weight 1.")
+int   smoothLen    = input.int(3, "Smoothing", minval = 1, maxval = 10, group = G_CALC,
+     tooltip = "EMA length applied to the side scores. 1 = no smoothing.")
+float stability    = input.float(0.5, "Percentage Stability", minval = 0.0, maxval = 3.0, step = 0.1, group = G_CALC,
+     tooltip = "Neutral liquidity added to both sides before normalising, so tiny absolute differences cannot print 99/1. Overwhelmingly one-sided liquidity can still reach extreme readings.")
+float balanceThr   = input.float(8.0, "Balanced Threshold (pct points)", minval = 0.0, maxval = 30.0, step = 1.0, group = G_CALC,
+     tooltip = "If BUY% and SELL% differ by less than this, the flow is BALANCED and no target side is shown.")
+bool  freezeLive   = input.bool(false, "Freeze Current-Bar Calculation", group = G_CALC,
+     tooltip = "Hold the last confirmed bar's reading on the dashboard instead of updating tick by tick.")
+
+// ─── Flow Model
+string flowMode    = input.string("Liquidity + Structure", "Flow Model Mode",
+     options = ["Liquidity Only", "Liquidity + Pressure", "Liquidity + Structure", "Balanced"], group = G_MODE,
+     tooltip = "Liquidity Only: pure pool map.\nLiquidity + Pressure: bounded tilt from candle/volume pressure.\nLiquidity + Structure: bounded tilt toward the side the current structure is drawing to.\nBalanced: both tilts at half size.\nTilts multiply side relevance by at most 1.25x each, so they can never override the pool map.")
+float pressWeight  = input.float(1.0, "Pressure Weight", minval = 0.0, maxval = 2.0, step = 0.1, group = G_MODE)
+int   pressLen     = input.int(10, "Pressure Length", minval = 2, maxval = 50, group = G_MODE)
+bool  usePD        = input.bool(false, "Premium / Discount Awareness", group = G_MODE,
+     tooltip = "Secondary only. Premium slightly raises sell-side relevance, discount slightly raises buy-side relevance.")
+int   rangeLen     = input.int(100, "Dealing Range Length (bars)", minval = 20, maxval = 1000, group = G_MODE,
+     tooltip = "Range used for premium/discount and for flagging range-extreme swings as structural.")
+float pdWeight     = input.float(0.5, "Premium / Discount Weight", minval = 0.0, maxval = 1.0, step = 0.05, group = G_MODE)
+
+// ─── Higher Timeframe
+bool   useHTF    = input.bool(true, "Enable HTF Liquidity", group = G_HTF)
+string htfChoice = input.string("Auto", "Higher Timeframe", options = ["Auto", "15m", "30m", "1H", "4H", "1D"], group = G_HTF,
+     tooltip = "Auto: 1m→15m, ≤5m→1H, ≤1H→4H, ≤4H→1D, 1D→1W, higher→1M. Ignored when not higher than the chart.")
+int    htfLen    = input.int(3, "HTF Swing Length", minval = 2, maxval = 10, group = G_HTF)
+
+// ─── Sessions
+bool usePDL = input.bool(true, "Previous Day High/Low", group = G_SES)
+bool usePWL = input.bool(true, "Previous Week High/Low", group = G_SES)
+bool usePML = input.bool(false, "Previous Month High/Low", group = G_SES)
+bool useCSL = input.bool(false, "Current Session High/Low", group = G_SES)
+bool   useKZ   = input.bool(false, "Asia / London / New York Highs & Lows", group = G_SES,
+     tooltip = "Intraday charts (1H and below). When a session closes, its high and low become liquidity pools (ASIA H/L, LDN H/L, NY H/L).")
+string asiaSes = input.session("1800-0300", "Asia Session", group = G_SES)
+string ldnSes  = input.session("0300-0830", "London Session", group = G_SES)
+string nySes   = input.session("0830-1600", "New York Session", group = G_SES)
+string sesTz   = input.string("America/New_York", "Session Timezone", group = G_SES)
+
+// ─── Sweeps
+bool   enableSweeps = input.bool(true, "Enable Sweep Detection", group = G_SWP)
+string sweepMode    = input.string("Balanced", "Sweep Confirmation (close-based)", options = ["Strict", "Balanced", "Aggressive"], group = G_SWP,
+     tooltip = "Every mode needs a CONFIRMED close back inside the level.\nAggressive: any trade beyond the level.\nBalanced: penetration beyond the equal-level tolerance (anything inside it is an equal-level test).\nStrict: Balanced AND the candle closes in its rejecting half.\nSmaller penetrations that close back inside count as tests that strengthen the level.")
+bool   keepSwept    = input.bool(true, "Keep Swept Levels (faded)", group = G_SWP)
+bool   removeSwept  = input.bool(true, "Remove Swept Levels From Active Score", group = G_SWP,
+     tooltip = "On: swept pools contribute nothing. Off: swept pools keep 50% of their weight (partially consumed liquidity).")
+int    maxSweeps    = input.int(20, "Max Historical Sweeps", minval = 0, maxval = 50, group = G_SWP)
+
+// ─── Dashboard
+bool   showDashIn    = input.bool(true, "Show Dashboard", group = G_DASH)
+string dashPos       = input.string("Top Right", "Position",
+     options = ["Top Right", "Top Center", "Top Left", "Middle Right", "Middle Left", "Bottom Right", "Bottom Center", "Bottom Left"], group = G_DASH)
+string dashSize      = input.string("Small", "Size", options = ["Tiny", "Small", "Normal", "Large"], group = G_DASH)
+bool   showPct       = input.bool(true, "Show Percentages", group = G_DASH)
+bool   showBar       = input.bool(true, "Show Flow Bars", group = G_DASH)
+bool   showTgtRow    = input.bool(true, "Show Target", group = G_DASH)
+bool   showStrRow    = input.bool(true, "Show Strength", group = G_DASH)
+bool   showConfRow   = input.bool(true, "Show Confidence", group = G_DASH)
+bool   showKeyRow    = input.bool(true, "Show Dominant Pool", group = G_DASH)
+bool   showNearRow   = input.bool(false, "Show Nearest Major Pool", group = G_DASH)
+bool   showSweepRow  = input.bool(true, "Show Last Sweep", group = G_DASH)
+bool   showStructRow = input.bool(false, "Show Market Structure", group = G_DASH)
+bool   showStatusRow = input.bool(true, "Show Flow Label", group = G_DASH,
+     tooltip = "Bottom line: EXTREME / BALANCED / LOW DATA status.")
+bool   showDecimals  = input.bool(false, "Decimal Percentages", group = G_DASH)
+string wording       = input.string("Side", "Target Wording", options = ["Side", "Direction"], group = G_DASH,
+     tooltip = "Side: BUY-SIDE / SELL-SIDE.   Direction: ABOVE / BELOW.")
+float  extremeLvl    = input.float(85.0, "Extreme Reading (%)", minval = 60.0, maxval = 99.0, step = 1.0, group = G_DASH,
+     tooltip = "A side at or above this share is labelled EXTREME. It means the model's liquidity map is heavily one-sided, not that a move is likely.")
+
+// ─── Visuals
+bool  showZonesIn  = input.bool(true, "Show Liquidity Zones", group = G_VIS)
+bool  showLinesIn  = input.bool(true, "Show Liquidity Lines", group = G_VIS)
+bool  showEqIn     = input.bool(true, "Show Equal Levels", group = G_VIS)
+bool  showSessIn   = input.bool(true, "Show Session Level Tags", group = G_VIS)
+bool  showSweepIn  = input.bool(true, "Show Sweep Markers", group = G_VIS)
+bool  showTgtIn    = input.bool(true, "Show Target On Chart", group = G_VIS)
+int   topN         = input.int(3, "Show Top N Targets", minval = 1, maxval = 10, group = G_VIS)
+bool  showTierIn   = input.bool(false, "Show Liquidity Strength Labels", group = G_VIS)
+float zoneThick    = input.float(0.25, "Zone Thickness (ATR)", minval = 0.05, maxval = 1.0, step = 0.05, group = G_VIS)
+bool  showFlipIn   = input.bool(true, "Show Liquidity Flip Markers", group = G_VIS)
+bool  showShiftIn  = input.bool(false, "Show Liquidity Shift Markers", group = G_VIS)
+float shiftThr     = input.float(10.0, "Shift Threshold (pct points)", minval = 2.0, maxval = 50.0, step = 1.0, group = G_VIS)
+int   shiftLook    = input.int(5, "Shift Lookback (bars)", minval = 1, maxval = 50, group = G_VIS)
+
+// Effective visibility: Video style shows only the two zones unless extras are enabled
+bool proVis       = not videoMode or vidExtras
+bool showDash     = showDashIn and proVis
+bool showZones    = showZonesIn and proVis
+bool showLines    = showLinesIn and proVis
+bool showEqTags   = showEqIn and proVis
+bool showSessTags = showSessIn and proVis
+bool showSweepMk  = showSweepIn and proVis
+bool showTgtChart = showTgtIn and proVis
+bool showTierLbl  = showTierIn and proVis
+bool showFlipMk   = showFlipIn and proVis
+bool showShiftMk  = showShiftIn and proVis
+
+// ─── Colors
+color bslCol   = input.color(#26a69a, "Buy-Side Liquidity (above)", group = G_COL)
+color sslCol   = input.color(#ef5350, "Sell-Side Liquidity (below)", group = G_COL)
+color neuCol   = input.color(#9598a1, "Neutral", group = G_COL)
+color sweptCol = input.color(#787b86, "Swept / Historical", group = G_COL)
+color dashBg   = input.color(#131722EB, "Dashboard Background", group = G_COL)
+color dashTxt  = input.color(#d1d4dc, "Dashboard Text", group = G_COL)
+
+// ─── Signals
+bool  enableSig = input.bool(false, "Enable Signals", group = G_SIG,
+     tooltip = "Optional confirmed setups: sweep of one side + structure shift + flow agreement. Off by default - the core product is the liquidity map.")
+float sigThr    = input.float(55.0, "Signal Threshold (%)", minval = 50.0, maxval = 90.0, step = 1.0, group = G_SIG)
+bool  reqSweep  = input.bool(true, "Require Sweep", group = G_SIG)
+bool  reqStruct = input.bool(true, "Require Structure Shift", group = G_SIG)
+int   sigWindow = input.int(10, "Setup Window (bars)", minval = 2, maxval = 50, group = G_SIG)
+
+// ─── Alerts
+bool alFlow  = input.bool(true, "Enable Flow Shift Alerts", group = G_ALR)
+bool alSweep = input.bool(true, "Enable Sweep Alerts", group = G_ALR)
+bool alSig   = input.bool(true, "Enable Signal Alerts", group = G_ALR)
+bool alPool  = input.bool(true, "Enable Pool / Target Alerts", group = G_ALR)
+bool alRich  = input.bool(true, "Detailed alert() Messages", group = G_ALR,
+     tooltip = "Also sends messages with prices, pool tags and the current BUY/SELL split. Create the alert with \"Any alert() function call\" to receive them.")
+
+// ─── Debug
+bool debugMode = input.bool(false, "Debug Mode", group = G_DBG,
+     tooltip = "Adds factor diagnostics to the dashboard and raw scores to the Data Window.")
+
+// ════════════════════════════════════════════════════════════════════════════
+//  TYPES & PERSISTENT STATE
+// ════════════════════════════════════════════════════════════════════════════
+// Pool origin classes
+const int SRC_SWING = 0
+const int SRC_HTF   = 1
+const int SRC_SES   = 2      // Asia / London / New York session high-low
+const int SRC_PD    = 3
+const int SRC_PW    = 4
+const int SRC_PM    = 5
+
+// One estimated liquidity pool. Buy-side pools are highs (resting liquidity
+// ABOVE price); sell-side pools are lows (resting liquidity BELOW price).
+// Keeping every attribute on one object keeps price / strength / state / drawings
+// synchronised: removing the object removes all of its data at once.
+type Pool
+    int   id
+    float price                 // active level = cluster extreme (max of highs / min of lows)
+    float hi                    // highest member of the cluster
+    float lo                    // lowest member of the cluster
+    int   t                     // origin time (drawing anchor)
+    int   b                     // origin bar index
+    bool  isBuy                 // true = buy-side (above), false = sell-side (below)
+    int   src                   // SRC_* origin class
+    int   members    = 1        // confirmed swing points clustered here (equal levels)
+    int   tests      = 0        // rejected re-tests of the level (persistence)
+    int   lastTest              // bar index of the last counted test
+    int   fresh                 // bar index of the last reinforcement (age reference)
+    float relVol     = 1.0      // max relative volume around its members
+    float th                    // zone thickness in price units (fixed at creation)
+    string name      = ""       // session tag (PDH, ASIA L, ...) for session-class pools
+    bool  htf        = false    // confirmed by a higher-timeframe swing
+    bool  ext        = false    // external (major) swing
+    bool  structural = false    // protected swing / dealing-range extreme
+    bool  announced  = false    // major-pool alert already raised
+    bool  alive      = true     // false once swept, taken or pruned
+    int   sweptB                // bar index of the confirmed sweep
+    float w          = 0.0      // last weighted score (0 = not scored)
+    float dAtr       = 0.0      // last ATR distance from reference price
+    box   bx
+    line  ln
+    label lb
+
+// Running high/low of a calendar period (day / week / month).
+type Period
+    float hi
+    float lo
+    int   hiT
+    int   loT
+    int   hiB
+    int   loB
+    int   count = 0
+
+var array<Pool> pools      = array.new<Pool>()   // ACTIVE liquidity pools
+var array<Pool> sweptPools = array.new<Pool>()   // swept pools kept as history
+var array<int>  idSeq      = array.from(0)       // unique pool id counter
+var array<Pool> majorQ     = array.new<Pool>()   // pools that reached MAJOR on this bar (alerts)
+var Period      dayP       = Period.new()
+var Period      weekP      = Period.new()
+var Period      monthP     = Period.new()
+var Period      asiaP      = Period.new()
+var Period      ldnP       = Period.new()
+var Period      nyP        = Period.new()
+// recent swing bars -> pool that holds them (lets an external swing find its pool)
+var array<int>  recHiB     = array.new<int>()
+var array<Pool> recHiP     = array.new<Pool>()
+var array<int>  recLoB     = array.new<int>()
+var array<Pool> recLoP     = array.new<Pool>()
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CORE SERIES (computed on every bar)
+// ════════════════════════════════════════════════════════════════════════════
+float atrRaw   = ta.atr(atrLen)
+float atrSafe  = math.max(nz(atrRaw, high - low), syminfo.mintick)   // never 0 / na
+float vol      = nz(volume)
+float volAvg   = nz(ta.sma(vol, 20))
+float volShare = nz(math.sum(vol > 0 ? 1.0 : 0.0, 50)) / 50.0
+bool  volOK    = volShare >= 0.8 and volAvg > 0                     // usable volume feed?
+float rv       = volAvg > 0 ? vol / volAvg : 1.0
+float rvPivot  = volOK ? (nz(rv[swingLen - 1], 1.0) + nz(rv[swingLen], 1.0) + nz(rv[swingLen + 1], 1.0)) / 3.0 : 1.0
+// bar-count settings scale with swing granularity (defined for Swing Length 5)
+float lenScale = autoScale ? swingLen / 5.0 : 1.0
+int   memEff   = math.max(20, math.round(memoryBars * lenScale))
+int   rangeEff = math.max(20, math.round(rangeLen * lenScale))
+int   extLen   = math.min(swingLen * extMult, 60)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  HELPER FUNCTIONS
+// ════════════════════════════════════════════════════════════════════════════
+f_clamp(float x, float lo, float hi) =>
+    math.max(lo, math.min(hi, x))
+
+// Freshness: 1.0 when just formed / reinforced, decays toward a 0.5 floor so
+// persistent liquidity keeps relevance.
+f_timeFactor(int ageBars) =>
+    0.5 + 0.5 * math.exp(-math.max(ageBars, 0) / float(memEff))
+
+// Smooth ATR-distance decay: 1 / (1 + 0.25 * weight * distanceATR).
+f_distW(float dAtr) =>
+    1.0 / (1.0 + 0.25 * distWeight * dAtr)
+
+// Intrinsic strength components (before distance / age / directional weighting).
+// strength = base * cluster + tests + volume + structure + HTF
+f_components(Pool p) =>
+    float sessB = switch p.src
+        SRC_SES => 0.20
+        SRC_PD  => 0.25
+        SRC_PW  => 0.50
+        SRC_PM  => 0.75
+        => 0.0
+    float base    = 1.0 + sessWeight * sessB
+    float cluster = 1.0 + eqWeight / 1.2 * math.min(p.members - 1, 3)
+    float testB   = math.min(p.tests * 0.3, 1.5)
+    float volB    = volOK ? volWeight * f_clamp((math.min(p.relVol, 3.0) - 1.0) / 2.0, 0.0, 1.0) : 0.0
+    float structB = (p.structural ? structWeight : 0.0) + (p.ext ? 0.5 * structWeight : 0.0)
+    float htfB    = p.htf ? htfWeight : 0.0
+    [base, cluster, testB, volB, structB, htfB]
+
+f_intrinsic(Pool p) =>
+    [base, cluster, testB, volB, structB, htfB] = f_components(p)
+    base * cluster + testB + volB + structB + htfB
+
+// 0 = Minor, 1 = Moderate, 2 = Major, 3 = Extreme
+f_tier(float s) =>
+    s >= 4.0 ? 3 : s >= 2.75 ? 2 : s >= 1.75 ? 1 : 0
+
+f_tierName(int t) =>
+    t == 3 ? "EXTREME" : t == 2 ? "MAJOR" : t == 1 ? "MODERATE" : "MINOR"
+
+f_strengthName(float v) =>
+    v >= 80 ? "VERY STRONG" : v >= 60 ? "STRONG" : v >= 40 ? "MODERATE" : v >= 20 ? "WEAK" : "VERY WEAK"
+
+f_tag(Pool p) =>
+    string s = p.src >= SRC_SES and p.name != "" ? p.name : p.members >= 2 ? (p.isBuy ? "EQH" : "EQL") : (p.isBuy ? "BSL" : "SSL")
+    if p.members >= 2
+        s += " ×" + str.tostring(p.members)
+    if p.htf
+        s += " · HTF"
+    if p.ext
+        s += " · EXT"
+    if p.structural
+        s += " · STRUCT"
+    s
+
+f_pos(string s) =>
+    switch s
+        "Top Right"     => position.top_right
+        "Top Center"    => position.top_center
+        "Top Left"      => position.top_left
+        "Middle Right"  => position.middle_right
+        "Middle Left"   => position.middle_left
+        "Bottom Right"  => position.bottom_right
+        "Bottom Center" => position.bottom_center
+        "Bottom Left"   => position.bottom_left
+        => position.top_right
+
+f_size(string s) =>
+    switch s
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        "Large"  => size.large
+        => size.small
+
+f_share(float part, float tot) =>
+    tot > 0 ? str.tostring(part / tot * 100.0, "#0") + "%" : "—"
+
+// ─── Drawing management (every object belongs to exactly one Pool)
+f_zoneBounds(Pool p) =>
+    float top = p.isBuy ? p.price : math.max(p.hi, p.price + p.th)
+    float bot = p.isBuy ? math.min(p.lo, p.price - p.th) : p.price
+    [top, bot]
+
+f_newDrawings(Pool p) =>
+    color c = p.isBuy ? bslCol : sslCol
+    [top, bot] = f_zoneBounds(p)
+    if showZones
+        p.bx := box.new(p.t, top, time, bot, xloc = xloc.bar_time, extend = extend.right,
+             border_color = color.new(c, 82), border_width = 1, bgcolor = color.new(c, 90))
+    if showLines
+        p.ln := line.new(p.t, p.price, time, p.price, xloc = xloc.bar_time, extend = extend.right,
+             color = color.new(c, 45), style = line.style_dotted, width = 1)
+    p
+
+f_syncDrawings(Pool p) =>
+    [top, bot] = f_zoneBounds(p)
+    if not na(p.bx)
+        box.set_top(p.bx, top)
+        box.set_bottom(p.bx, bot)
+    if not na(p.ln)
+        line.set_y1(p.ln, p.price)
+        line.set_y2(p.ln, p.price)
+    p
+
+f_deleteDrawings(Pool p) =>
+    if not na(p.bx)
+        box.delete(p.bx)
+        p.bx := na
+    if not na(p.ln)
+        line.delete(p.ln)
+        p.ln := na
+    if not na(p.lb)
+        label.delete(p.lb)
+        p.lb := na
+    p
+
+// Swept pool: stop its zone/line at the sweep bar, fade it and mark the exact
+// swept level (or delete everything when swept levels are not kept).
+f_fadeSwept(Pool p, float depthAtr) =>
+    if not na(p.lb)
+        label.delete(p.lb)
+        p.lb := na
+    if keepSwept
+        if showSweepMk
+            string tip = "Swept " + (p.isBuy ? "buy-side" : "sell-side") + " liquidity: " + f_tag(p) + " @ " + str.tostring(p.price, format.mintick) +
+                 "\nRan " + str.tostring(depthAtr, "#0.00") + " ATR beyond the level, then closed back inside (confirmed)."
+            p.lb := label.new(time, p.price, "✕", xloc = xloc.bar_time, style = label.style_label_center, color = color.new(sweptCol, 100),
+                 textcolor = color.new(p.isBuy ? bslCol : sslCol, 10), size = size.small, tooltip = tip)
+        if not na(p.bx)
+            box.set_extend(p.bx, extend.none)
+            box.set_right(p.bx, time)
+            box.set_bgcolor(p.bx, color.new(sweptCol, 93))
+            box.set_border_color(p.bx, color.new(sweptCol, 85))
+        if not na(p.ln)
+            line.set_extend(p.ln, extend.none)
+            line.set_x2(p.ln, time)
+            line.set_color(p.ln, color.new(sweptCol, 55))
+            line.set_style(p.ln, line.style_dotted)
+            line.set_width(p.ln, 1)
+    else
+        f_deleteDrawings(p)
+    p
+
+// ─── Pool store
+// Adds a confirmed liquidity level. If it lies within the equal-level tolerance
+// of an active same-side pool, it is clustered into that pool (equal highs/lows);
+// otherwise a new pool is created. Returns the pool that holds the level.
+f_addLevel(float price, int originB, int originT, bool isBuy, int src, string name, float relVol, float tol, float thick) =>
+    int   best  = -1
+    float bestD = 1e100
+    int   n     = array.size(pools)
+    if n > 0
+        for i = 0 to n - 1
+            Pool q = array.get(pools, i)
+            if q.isBuy == isBuy
+                float d    = price > q.hi ? price - q.hi : price < q.lo ? q.lo - price : 0.0
+                float span = math.max(q.hi, price) - math.min(q.lo, price)
+                if d <= tol and span <= 2.0 * tol and d < bestD
+                    bestD := d
+                    best  := i
+    Pool p = na
+    if best >= 0
+        p := array.get(pools, best)
+        // HTF / session levels that sit exactly on an existing member describe the
+        // same swing: they upgrade the pool but are not an extra equal touch.
+        bool samePoint = math.abs(price - p.hi) <= syminfo.mintick * 0.5 or math.abs(price - p.lo) <= syminfo.mintick * 0.5
+        if src == SRC_SWING or not samePoint
+            p.members := p.members + 1
+            // the pivot candle itself was already counted as a test -> do not double count
+            if p.tests > 0 and not na(p.lastTest) and p.lastTest == originB
+                p.tests := p.tests - 1
+        p.hi     := math.max(p.hi, price)
+        p.lo     := math.min(p.lo, price)
+        p.price  := isBuy ? p.hi : p.lo
+        p.relVol := math.max(p.relVol, relVol)
+        p.fresh  := bar_index
+        if src == SRC_HTF
+            p.htf := true
+        if src >= SRC_SES and src > p.src
+            p.src  := src                     // most significant session class names the pool
+            p.name := name
+        f_syncDrawings(p)
+    else
+        int nid = array.get(idSeq, 0) + 1
+        array.set(idSeq, 0, nid)
+        p := Pool.new(id = nid, price = price, hi = price, lo = price, t = originT, b = originB, isBuy = isBuy,
+             src = src, name = name, relVol = relVol, fresh = bar_index, th = thick, htf = src == SRC_HTF)
+        f_newDrawings(p)
+        array.push(pools, p)
+    p
+
+// Returns true the first time a pool reaches MAJOR tier or higher.
+f_announce(Pool p) =>
+    bool fire = false
+    if not na(p)
+        float s = f_intrinsic(p)
+        if p.alive and not p.announced and f_tier(s) >= 2 and s >= minPoolStr
+            p.announced := true
+            array.push(majorQ, p)
+            fire := true
+    fire
+
+// Remembers which pool holds the swing confirmed at bar b (bounded history).
+f_remember(array<int> bars, array<Pool> ps, int b, Pool p) =>
+    array.push(bars, b)
+    array.push(ps, p)
+    if array.size(bars) > 64
+        array.shift(bars)
+        array.shift(ps)
+    array.size(bars)
+
+f_recall(array<int> bars, array<Pool> ps, int b) =>
+    Pool found = na
+    int  n     = array.size(bars)
+    if n > 0
+        for i = n - 1 to 0
+            if array.get(bars, i) == b
+                found := array.get(ps, i)
+                break
+    found
+
+// Keeps the active store bounded by pruning the least relevant pool.
+f_enforceCap(int cap) =>
+    while array.size(pools) > cap
+        int   worst  = 0
+        float worstS = 1e100
+        for i = 0 to array.size(pools) - 1
+            Pool q = array.get(pools, i)
+            float s = f_intrinsic(q) * f_timeFactor(bar_index - q.fresh) * f_distW(math.abs(q.price - close) / atrSafe)
+            if s < worstS
+                worstS := s
+                worst  := i
+        Pool gone = array.remove(pools, worst)
+        gone.alive := false
+        f_deleteDrawings(gone)
+    array.size(pools)
+
+// Run-period high/low tracker. Returns the COMPLETED period's values on the
+// first bar of a new period (na otherwise). The first, partial period on the
+// chart is discarded so a level is never reported from incomplete data.
+f_period(Period s, bool isNew) =>
+    float oHi  = na
+    float oLo  = na
+    int   oHiT = na
+    int   oLoT = na
+    int   oHiB = na
+    int   oLoB = na
+    if isNew
+        if s.count > 0
+            oHi  := s.hi
+            oLo  := s.lo
+            oHiT := s.hiT
+            oLoT := s.loT
+            oHiB := s.hiB
+            oLoB := s.loB
+        s.count := s.count + 1
+        s.hi    := high
+        s.lo    := low
+        s.hiT   := time
+        s.loT   := time
+        s.hiB   := bar_index
+        s.loB   := bar_index
+    else
+        if na(s.hi) or high > s.hi
+            s.hi  := high
+            s.hiT := time
+            s.hiB := bar_index
+        if na(s.lo) or low < s.lo
+            s.lo  := low
+            s.loT := time
+            s.loB := bar_index
+    [oHi, oLo, oHiT, oLoT, oHiB, oLoB]
+
+// Intraday session tracker: returns the session's high/low on the first bar after
+// the session closes (na otherwise). A session already running when the chart
+// starts is skipped, so a partial range is never reported.
+f_session(Period s, bool inS, bool wasIn) =>
+    float oHi  = na
+    float oLo  = na
+    int   oHiT = na
+    int   oLoT = na
+    int   oHiB = na
+    int   oLoB = na
+    if inS and not wasIn
+        s.count := bar_index > 0 ? 1 : 0
+        s.hi    := high
+        s.lo    := low
+        s.hiT   := time
+        s.loT   := time
+        s.hiB   := bar_index
+        s.loB   := bar_index
+    else if inS
+        if s.count > 0
+            if high > s.hi
+                s.hi  := high
+                s.hiT := time
+                s.hiB := bar_index
+            if low < s.lo
+                s.lo  := low
+                s.loT := time
+                s.loB := bar_index
+    else if wasIn and s.count > 0
+        oHi     := s.hi
+        oLo     := s.lo
+        oHiT    := s.hiT
+        oLoT    := s.loT
+        oHiB    := s.hiB
+        oLoB    := s.loB
+        s.count := 0
+    [oHi, oLo, oHiT, oLoT, oHiB, oLoB]
+
+// HTF swings evaluated INSIDE the HTF context. The [1] offset combined with
+// lookahead_on returns only the last COMPLETED HTF bar: no future leakage.
+f_htfSwings(int n) =>
+    float hph = ta.pivothigh(high, n, n)
+    float hpl = ta.pivotlow(low, n, n)
+    int   hpt = time[n]
+    [hph[1], hpl[1], hpt[1]]
+
+// ════════════════════════════════════════════════════════════════════════════
+//  DATA COLLECTION (confirmed swings, HTF swings, session levels)
+// ════════════════════════════════════════════════════════════════════════════
+bool  commit   = barstate.isconfirmed            // historical bars and the closing tick of a live bar
+float ph       = ta.pivothigh(high, swingLen, swingLen)
+float pl       = ta.pivotlow(low, swingLen, swingLen)
+int   pivT     = time[swingLen]
+float phExt    = ta.pivothigh(high, extLen, extLen)      // external (major) swings
+float plExt    = ta.pivotlow(low, extLen, extLen)
+int   extT     = time[extLen]
+float rangeHi  = nz(ta.highest(high, rangeEff), high)
+float rangeLo  = nz(ta.lowest(low, rangeEff), low)
+float tolNow   = eqTolATR * atrSafe
+float thickNow = zoneThick * atrSafe
+
+// ─── Higher timeframe (non-repainting)
+int    chartSec = timeframe.in_seconds(timeframe.period)
+string htfAuto  = chartSec <= 60 ? "15" : chartSec <= 300 ? "60" : chartSec <= 3600 ? "240" : chartSec <= 14400 ? "D" : chartSec <= 86400 ? "W" : "M"
+string htfTF    = switch htfChoice
+    "15m" => "15"
+    "30m" => "30"
+    "1H"  => "60"
+    "4H"  => "240"
+    "1D"  => "D"
+    => htfAuto
+bool   htfValid = useHTF and timeframe.in_seconds(htfTF) > chartSec
+string htfReq   = htfValid ? htfTF : timeframe.period
+[htfPH, htfPL, htfPT] = request.security(syminfo.tickerid, htfReq, f_htfSwings(htfLen), lookahead = barmerge.lookahead_on)
+
+// ─── Session levels (tracked from chart bars - only completed periods are used)
+bool  newDay    = timeframe.change("D") and bar_index > 0
+bool  newWeek   = timeframe.change("W") and bar_index > 0
+bool  newMonth  = timeframe.change("M") and bar_index > 0
+// current-session extremes as of the PREVIOUS bar (resting liquidity, not the developing candle)
+float csHiPrev  = newDay ? na : dayP.hi
+float csLoPrev  = newDay ? na : dayP.lo
+int   csHiTPrev = newDay ? na : dayP.hiT
+int   csLoTPrev = newDay ? na : dayP.loT
+[pdHi, pdLo, pdHiT, pdLoT, pdHiB, pdLoB] = f_period(dayP, newDay)
+[pwHi, pwLo, pwHiT, pwLoT, pwHiB, pwLoB] = f_period(weekP, newWeek)
+[pmHi, pmLo, pmHiT, pmLoT, pmHiB, pmLoB] = f_period(monthP, newMonth)
+bool  pdAllowed = chartSec < timeframe.in_seconds("D")
+bool  pwAllowed = chartSec < timeframe.in_seconds("W")
+bool  pmAllowed = chartSec < timeframe.in_seconds("M")
+
+// ─── Intraday sessions (Asia / London / New York)
+bool  kzAllowed = useKZ and chartSec <= 3600
+bool  inAsia    = not na(time(timeframe.period, asiaSes, sesTz))
+bool  inLdn     = not na(time(timeframe.period, ldnSes, sesTz))
+bool  inNy      = not na(time(timeframe.period, nySes, sesTz))
+[asHi, asLo, asHiT, asLoT, asHiB, asLoB] = f_session(asiaP, inAsia, inAsia[1])
+[ldHi, ldLo, ldHiT, ldLoT, ldHiB, ldLoB] = f_session(ldnP, inLdn, inLdn[1])
+[nyHi, nyLo, nyHiT, nyLoT, nyHiB, nyLoB] = f_session(nyP, inNy, inNy[1])
+
+// ════════════════════════════════════════════════════════════════════════════
+//  LIQUIDITY ENGINE (commits on confirmed bars only -> never repaints)
+// ════════════════════════════════════════════════════════════════════════════
+var float lastSH         = na
+var float lastSL         = na
+var bool  shBroken       = true
+var bool  slBroken       = true
+var int   hiType         = 0          // 1 = HH, -1 = LH
+var int   loType         = 0          // 1 = HL, -1 = LL
+var int   structDir      = 0          // 1 = bullish, -1 = bearish (last BOS)
+var int   lastBullShiftB = na
+var int   lastBearShiftB = na
+var Pool  lastSHPool     = na
+var Pool  lastSLPool     = na
+var int   lastHtfHiT     = na
+var int   lastHtfLoT     = na
+var Pool  lastSweepP     = na         // most recent confirmed sweep (dashboard)
+var float lastSweepD     = na
+var int   lastSweepB     = na
+
+bool  bslSweepNow = false
+bool  sslSweepNow = false
+bool  majorNew    = false
+Pool  bslSweptP   = na                // strongest pool swept on this bar, per side
+Pool  sslSweptP   = na
+float bslSweptD   = na
+float sslSweptD   = na
+
+if commit
+    array.clear(majorQ)
+    // 1) chart-timeframe confirmed swings -> pools (cluster into equal levels)
+    if not na(ph)
+        Pool npH = f_addLevel(ph, bar_index - swingLen, pivT, true, SRC_SWING, "", rvPivot, tolNow, thickNow)
+        if ph >= rangeHi
+            npH.structural := true            // dealing-range extreme
+        f_remember(recHiB, recHiP, bar_index - swingLen, npH)
+        hiType     := na(lastSH) ? 0 : ph > lastSH ? 1 : -1
+        lastSH     := ph
+        shBroken   := false
+        lastSHPool := npH
+        majorNew   := f_announce(npH) or majorNew
+    if not na(pl)
+        Pool npL = f_addLevel(pl, bar_index - swingLen, pivT, false, SRC_SWING, "", rvPivot, tolNow, thickNow)
+        if pl <= rangeLo
+            npL.structural := true
+        f_remember(recLoB, recLoP, bar_index - swingLen, npL)
+        loType     := na(lastSL) ? 0 : pl > lastSL ? 1 : -1
+        lastSL     := pl
+        slBroken   := false
+        lastSLPool := npL
+        majorNew   := f_announce(npL) or majorNew
+
+    // 1b) external swings: a swing that also holds over the wider window.
+    //     It is the same swing as a pool already stored, so it upgrades that pool.
+    if useExt and not na(phExt)
+        Pool eH = f_recall(recHiB, recHiP, bar_index - extLen)
+        if na(eH) or not eH.alive
+            eH := f_addLevel(phExt, bar_index - extLen, extT, true, SRC_SWING, "", 1.0, tolNow, thickNow)
+        eH.ext   := true
+        majorNew := f_announce(eH) or majorNew
+    if useExt and not na(plExt)
+        Pool eL = f_recall(recLoB, recLoP, bar_index - extLen)
+        if na(eL) or not eL.alive
+            eL := f_addLevel(plExt, bar_index - extLen, extT, false, SRC_SWING, "", 1.0, tolNow, thickNow)
+        eL.ext   := true
+        majorNew := f_announce(eL) or majorNew
+
+    // 2) higher-timeframe swings (from the last completed HTF bar only)
+    if htfValid and not na(htfPT)
+        if not na(htfPH) and (na(lastHtfHiT) or htfPT != lastHtfHiT)
+            lastHtfHiT := htfPT
+            majorNew   := f_announce(f_addLevel(htfPH, bar_index, htfPT, true, SRC_HTF, "", 1.0, tolNow, thickNow)) or majorNew
+        if not na(htfPL) and (na(lastHtfLoT) or htfPT != lastHtfLoT)
+            lastHtfLoT := htfPT
+            majorNew   := f_announce(f_addLevel(htfPL, bar_index, htfPT, false, SRC_HTF, "", 1.0, tolNow, thickNow)) or majorNew
+
+    // 3) previous day / week / month and intraday session highs & lows (completed periods only)
+    if usePDL and pdAllowed and not na(pdHi) and not na(pdLo)
+        majorNew := f_announce(f_addLevel(pdHi, pdHiB, pdHiT, true, SRC_PD, "PDH", 1.0, tolNow, thickNow)) or majorNew
+        majorNew := f_announce(f_addLevel(pdLo, pdLoB, pdLoT, false, SRC_PD, "PDL", 1.0, tolNow, thickNow)) or majorNew
+    if usePWL and pwAllowed and not na(pwHi) and not na(pwLo)
+        majorNew := f_announce(f_addLevel(pwHi, pwHiB, pwHiT, true, SRC_PW, "PWH", 1.0, tolNow, thickNow)) or majorNew
+        majorNew := f_announce(f_addLevel(pwLo, pwLoB, pwLoT, false, SRC_PW, "PWL", 1.0, tolNow, thickNow)) or majorNew
+    if usePML and pmAllowed and not na(pmHi) and not na(pmLo)
+        majorNew := f_announce(f_addLevel(pmHi, pmHiB, pmHiT, true, SRC_PM, "PMH", 1.0, tolNow, thickNow)) or majorNew
+        majorNew := f_announce(f_addLevel(pmLo, pmLoB, pmLoT, false, SRC_PM, "PML", 1.0, tolNow, thickNow)) or majorNew
+    if kzAllowed
+        if not na(asHi) and not na(asLo)
+            majorNew := f_announce(f_addLevel(asHi, asHiB, asHiT, true, SRC_SES, "ASIA H", 1.0, tolNow, thickNow)) or majorNew
+            majorNew := f_announce(f_addLevel(asLo, asLoB, asLoT, false, SRC_SES, "ASIA L", 1.0, tolNow, thickNow)) or majorNew
+        if not na(ldHi) and not na(ldLo)
+            majorNew := f_announce(f_addLevel(ldHi, ldHiB, ldHiT, true, SRC_SES, "LDN H", 1.0, tolNow, thickNow)) or majorNew
+            majorNew := f_announce(f_addLevel(ldLo, ldLoB, ldLoT, false, SRC_SES, "LDN L", 1.0, tolNow, thickNow)) or majorNew
+        if not na(nyHi) and not na(nyLo)
+            majorNew := f_announce(f_addLevel(nyHi, nyHiB, nyHiT, true, SRC_SES, "NY H", 1.0, tolNow, thickNow)) or majorNew
+            majorNew := f_announce(f_addLevel(nyLo, nyLoB, nyLoT, false, SRC_SES, "NY L", 1.0, tolNow, thickNow)) or majorNew
+
+    // 4) sweep / break / test engine on the confirmed candle
+    //    The mode's penetration band (penReq) separates noise from intent:
+    //    sweep  = trade beyond level + penReq AND a close back inside the level
+    //    taken  = close beyond level + penReq -> accepted beyond, liquidity consumed, pool removed
+    //    test   = anything else that reaches the tolerance band -> pool reinforced
+    //             (e.g. relatively-equal highs that close a hair above the first high)
+    float penReq = sweepMode == "Aggressive" ? 0.0 : tolNow    // inside the equal-level band = test, not sweep
+    bool  rejDn  = (high - close) >= 0.5 * (high - low)
+    bool  rejUp  = (close - low) >= 0.5 * (high - low)
+    int   nAct   = array.size(pools)
+    if nAct > 0
+        for i = nAct - 1 to 0
+            Pool p = array.get(pools, i)
+            int outcome = 0                   // 0 = none, 1 = swept, 2 = taken
+            if p.isBuy
+                if close > p.price + penReq
+                    outcome := 2
+                else if enableSweeps and high > p.price + penReq and close <= p.price and (sweepMode != "Strict" or rejDn)
+                    outcome := 1
+                else if high >= p.price - tolNow and bar_index - p.b > swingLen and (na(p.lastTest) or bar_index - p.lastTest >= swingLen)
+                    p.tests    := p.tests + 1
+                    p.lastTest := bar_index
+                    p.fresh    := bar_index
+            else
+                if close < p.price - penReq
+                    outcome := 2
+                else if enableSweeps and low < p.price - penReq and close >= p.price and (sweepMode != "Strict" or rejUp)
+                    outcome := 1
+                else if low <= p.price + tolNow and bar_index - p.b > swingLen and (na(p.lastTest) or bar_index - p.lastTest >= swingLen)
+                    p.tests    := p.tests + 1
+                    p.lastTest := bar_index
+                    p.fresh    := bar_index
+            if outcome == 1
+                float depth = (p.isBuy ? high - p.price : p.price - low) / atrSafe
+                p.alive  := false
+                p.sweptB := bar_index
+                if p.isBuy
+                    bslSweepNow := true
+                    if na(bslSweptP) or f_intrinsic(p) > f_intrinsic(bslSweptP)
+                        bslSweptP := p
+                        bslSweptD := depth
+                else
+                    sslSweepNow := true
+                    if na(sslSweptP) or f_intrinsic(p) > f_intrinsic(sslSweptP)
+                        sslSweptP := p
+                        sslSweptD := depth
+                array.remove(pools, i)
+                f_fadeSwept(p, depth)
+                if keepSwept or not removeSwept
+                    array.push(sweptPools, p)
+            else if outcome == 2
+                p.alive := false
+                array.remove(pools, i)
+                f_deleteDrawings(p)
+    while array.size(sweptPools) > maxSweeps
+        f_deleteDrawings(array.shift(sweptPools))
+    if not na(bslSweptP) or not na(sslSweptP)
+        bool useBsl = na(sslSweptP) or (not na(bslSweptP) and f_intrinsic(bslSweptP) >= f_intrinsic(sslSweptP))
+        if useBsl
+            lastSweepP := bslSweptP
+            lastSweepD := bslSweptD
+        else
+            lastSweepP := sslSweptP
+            lastSweepD := sslSweptD
+        lastSweepB := bar_index
+
+    // 5) market structure: close through the last confirmed swing = BOS / CHoCH.
+    //    The close must clear the same penetration band used for sweeps.
+    //    The opposite swing that launched the break becomes a protected (structural) pool.
+    if not shBroken and not na(lastSH) and close > lastSH + penReq
+        shBroken       := true
+        structDir      := 1
+        lastBullShiftB := bar_index
+        if not na(lastSLPool)
+            if lastSLPool.alive
+                lastSLPool.structural := true
+                majorNew := f_announce(lastSLPool) or majorNew
+    if not slBroken and not na(lastSL) and close < lastSL - penReq
+        slBroken       := true
+        structDir      := -1
+        lastBearShiftB := bar_index
+        if not na(lastSHPool)
+            if lastSHPool.alive
+                lastSHPool.structural := true
+                majorNew := f_announce(lastSHPool) or majorNew
+
+    // 6) bound the active store
+    f_enforceCap(maxPools)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SCORING (every tick) - PRIMARY: active pool map / SECONDARY: bounded tilts
+// ════════════════════════════════════════════════════════════════════════════
+bool  frozen   = freezeLive and barstate.isrealtime and not barstate.isconfirmed
+float refPrice = frozen ? nz(close[1], close) : close
+float refATR   = frozen ? nz(atrSafe[1], atrSafe) : atrSafe
+
+// ─── Market Pressure (separate model, SECONDARY only): -1 bearish .. +1 bullish
+float barRng   = high - low
+float clv      = barRng > 0 ? (2.0 * close - high - low) / barRng : 0.0
+float bodyN    = f_clamp((close - open) / atrSafe, -1.0, 1.0)
+float rocN     = f_clamp((close - nz(close[pressLen], close)) / (atrSafe * math.sqrt(pressLen)), -1.0, 1.0)
+[diPlus, diMinus, adxVal] = ta.dmi(14, 14)
+float diSum    = nz(diPlus) + nz(diMinus)
+float dmiN     = diSum > 0 ? (nz(diPlus) - nz(diMinus)) / diSum : 0.0
+float vSum     = nz(math.sum(vol, pressLen))
+float svSum    = nz(math.sum(vol * clv, pressLen))
+float volImb   = volOK and vSum > 0 ? f_clamp(svSum / vSum, -1.0, 1.0) : 0.0
+float pressRaw = volOK ? (clv + bodyN + rocN + dmiN + volImb) / 5.0 : (clv + bodyN + rocN + dmiN) / 4.0
+float pressure = f_clamp(nz(ta.ema(pressRaw, pressLen), pressRaw), -1.0, 1.0)
+float pressRef = frozen ? nz(pressure[1], pressure) : pressure
+
+// ─── Bounded directional relevance (never more than 1.25x per factor)
+bool  useStructTilt = flowMode == "Liquidity + Structure" or flowMode == "Balanced"
+bool  usePressTilt  = flowMode == "Liquidity + Pressure" or flowMode == "Balanced"
+float kMode         = flowMode == "Balanced" ? 0.5 : 1.0
+float pdPos         = rangeHi > rangeLo ? f_clamp((refPrice - rangeLo) / (rangeHi - rangeLo), 0.0, 1.0) : 0.5
+float bslMult       = 1.0
+float sslMult       = 1.0
+if useStructTilt and structDir != 0
+    float st = 0.25 * f_clamp(structWeight, 0.0, 1.0) * kMode
+    if structDir == 1
+        bslMult *= 1.0 + st              // bullish structure: overhead buy-side is the more relevant draw
+    else
+        sslMult *= 1.0 + st              // bearish structure: downside sell-side is the more relevant draw
+if usePressTilt
+    float pt = 0.25 * f_clamp(pressWeight, 0.0, 1.0) * kMode * math.abs(pressRef)
+    if pressRef > 0
+        bslMult *= 1.0 + pt
+    else
+        sslMult *= 1.0 + pt
+if usePD and flowMode != "Liquidity Only"
+    float pdt = 0.25 * pdWeight * math.abs(pdPos - 0.5) * 2.0
+    if pdPos > 0.5
+        sslMult *= 1.0 + pdt             // premium: sell-side below slightly more relevant
+    else
+        bslMult *= 1.0 + pdt             // discount: buy-side above slightly more relevant
+
+// ─── Aggregate every active pool (weighted aggregate, not a count of levels)
+float buyRaw       = 0.0                 // pure liquidity weight above price
+float sellRaw      = 0.0                 // pure liquidity weight below price
+float buyAdj       = 0.0                 // after bounded directional relevance
+float sellAdj      = 0.0
+int   buyCnt       = 0
+int   sellCnt      = 0
+float buyHtfW      = 0.0
+float sellHtfW     = 0.0
+float fEq          = 0.0                 // factor attribution (debug / confidence)
+float fVol         = 0.0
+float fStruct      = 0.0
+float fHtf         = 0.0
+float fTest        = 0.0
+float fSess        = 0.0
+float fDistSum     = 0.0
+Pool  bestBuy      = na
+Pool  bestSell     = na
+float bestBuyW     = 0.0
+float bestSellW    = 0.0
+Pool  nearMajBuy   = na
+Pool  nearMajSell  = na
+float nearMajBuyD  = 1e100
+float nearMajSellD = 1e100
+
+for p in pools
+    p.w    := 0.0
+    p.dAtr := math.abs(p.price - refPrice) / refATR
+    bool above = p.isBuy and p.price > refPrice
+    bool below = not p.isBuy and p.price < refPrice
+    if (above or below) and p.dAtr <= maxDistATR
+        [base, cluster, testB, volB, structB, htfB] = f_components(p)
+        float s = base * cluster + testB + volB + structB + htfB
+        if s >= minPoolStr
+            float dw = f_distW(p.dAtr)
+            float w0 = s * f_timeFactor(bar_index - p.fresh) * dw
+            float w  = w0 * (p.isBuy ? bslMult : sslMult)
+            p.w      := w
+            // s = 1 + (cluster-1) + (base-1)*cluster + tests + vol + struct + htf
+            fEq      += w0 * (cluster - 1.0) / s
+            fSess    += w0 * (base - 1.0) * cluster / s
+            fTest    += w0 * testB / s
+            fVol     += w0 * volB / s
+            fStruct  += w0 * structB / s
+            fHtf     += w0 * htfB / s
+            fDistSum += dw
+            if p.isBuy
+                buyRaw += w0
+                buyAdj += w
+                buyCnt += 1
+                if p.htf
+                    buyHtfW += w0
+                if w > bestBuyW
+                    bestBuyW := w
+                    bestBuy  := p
+                if f_tier(s) >= 2 and p.dAtr < nearMajBuyD
+                    nearMajBuyD := p.dAtr
+                    nearMajBuy  := p
+            else
+                sellRaw += w0
+                sellAdj += w
+                sellCnt += 1
+                if p.htf
+                    sellHtfW += w0
+                if w > bestSellW
+                    bestSellW := w
+                    bestSell  := p
+                if f_tier(s) >= 2 and p.dAtr < nearMajSellD
+                    nearMajSellD := p.dAtr
+                    nearMajSell  := p
+
+// Live raid: an active pool being traded through on the DEVELOPING bar. Display
+// only - the pool is not marked until the bar closes (sweep, test or taken).
+Pool raidP     = na
+bool raidBreak = false
+if barstate.isrealtime and not barstate.isconfirmed and not frozen
+    float raidS = -1.0
+    for p in pools
+        if p.isBuy ? high > p.price : low < p.price
+            float s = f_intrinsic(p)
+            if s >= minPoolStr and s > raidS
+                raidS     := s
+                raidP     := p
+                raidBreak := p.isBuy ? close > p.price : close < p.price
+
+// Swept pools only count when the user keeps them in the score (at 50%).
+if not removeSwept
+    for p in sweptPools
+        float d = math.abs(p.price - refPrice) / refATR
+        bool  above = p.isBuy and p.price > refPrice
+        bool  below = not p.isBuy and p.price < refPrice
+        if (above or below) and d <= maxDistATR
+            float s = f_intrinsic(p)
+            if s >= minPoolStr
+                float w0 = 0.5 * s * f_timeFactor(bar_index - p.fresh) * f_distW(d)
+                if p.isBuy
+                    buyRaw += w0
+                    buyAdj += w0 * bslMult
+                else
+                    sellRaw += w0
+                    sellAdj += w0 * sslMult
+
+// Current-session extremes (optional, transient levels)
+bool  csOK = useCSL and pdAllowed
+float csW  = 1.0 + 0.25 * sessWeight
+if csOK and not na(csHiPrev) and csHiPrev > refPrice
+    float d = (csHiPrev - refPrice) / refATR
+    if d <= maxDistATR
+        float w0 = csW * f_distW(d)
+        buyRaw += w0
+        buyAdj += w0 * bslMult
+if csOK and not na(csLoPrev) and csLoPrev < refPrice
+    float d = (refPrice - csLoPrev) / refATR
+    if d <= maxDistATR
+        float w0 = csW * f_distW(d)
+        sellRaw += w0
+        sellAdj += w0 * sslMult
+
+// ─── Normalise: smoothing + stability prior -> BUY% + SELL% = 100 exactly
+float buySm      = nz(ta.ema(buyAdj, smoothLen), buyAdj)
+float sellSm     = nz(ta.ema(sellAdj, smoothLen), sellAdj)
+float totalSm    = buySm + sellSm
+float denom      = totalSm + 2.0 * stability
+float pctModel   = denom > 0 ? (buySm + stability) / denom * 100.0 : 50.0
+bool  warm       = bar_index >= swingLen * 4 + atrLen
+// data sufficiency: with too little scored liquidity the reading shrinks
+// continuously toward 50/50 instead of inventing a confident split
+float dataFrac   = not warm or buyCnt + sellCnt == 0 ? 0.0 : math.min(totalSm / 0.6, 1.0)
+float buyPctRaw  = 50.0 + (pctModel - 50.0) * dataFrac
+float sellPctRaw = 100.0 - buyPctRaw
+bool  lowData    = dataFrac < 1.0
+
+float effBuy     = frozen ? nz(buyPctRaw[1], buyPctRaw) : buyPctRaw     // value shown / used for state
+float dispBuy    = showDecimals ? math.round(effBuy, 1) : float(math.round(effBuy))
+float dispSell   = 100.0 - dispBuy
+float diffPct    = 2.0 * effBuy - 100.0                                  // BUY% - SELL%
+float flowStrength = math.abs(diffPct)                                   // imbalance, NOT certainty
+int   domNow     = lowData ? 0 : diffPct > 0 and diffPct >= balanceThr ? 1 : diffPct < 0 and -diffPct >= balanceThr ? -1 : 0
+bool  extremeNow = not lowData and math.max(dispBuy, dispSell) >= extremeLvl
+
+// Dominant liquidity side vs. key pool: the side % is an aggregate of many pools;
+// the key pool is only the single strongest contributor on that side.
+Pool keyPool = na
+Pool nearMaj = na
+if domNow == 1
+    keyPool := bestBuy
+    nearMaj := nearMajBuy
+else if domNow == -1
+    keyPool := bestSell
+    nearMaj := nearMajSell
+else
+    if bestBuyW >= bestSellW
+        keyPool := bestBuy
+    else
+        keyPool := bestSell
+    if nearMajBuyD <= nearMajSellD
+        nearMaj := nearMajBuy
+    else
+        nearMaj := nearMajSell
+
+// ─── Model confidence (quality of the reading - NOT a probability of direction)
+int   nScored    = buyCnt + sellCnt
+float rawTot     = buyRaw + sellRaw
+float htfTot     = buyHtfW + sellHtfW
+float sepN       = math.min(flowStrength / 60.0, 1.0)
+float countN     = math.min(nScored / 6.0, 1.0)
+float clustN     = rawTot > 0 ? math.min(fEq / rawTot * 3.0, 1.0) : 0.0
+float structN    = structDir == 0 or domNow == 0 ? 0.5 : structDir == domNow ? 1.0 : 0.0
+float tfN        = not htfValid ? 0.5 : htfTot <= 0 ? 0.4 : domNow == 1 ? buyHtfW / htfTot : domNow == -1 ? sellHtfW / htfTot : 0.5
+float dataN      = (volOK ? 1.0 : 0.8) * (lowData ? 0.5 : 1.0)
+float confidence = 100.0 * dataN * (0.35 * sepN + 0.15 * countN + 0.15 * clustN + 0.20 * structN + 0.15 * tfN)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  FLOW EVENTS & OPTIONAL SIGNALS (confirmed bars only)
+// ════════════════════════════════════════════════════════════════════════════
+var int domState          = 0
+var int lastDirSide       = 0
+var int lastShiftB        = na
+var int lastTargetId      = na
+var int lastSSLSweepB     = na
+var int lastBSLSweepB     = na
+var int lastBuyCrossB     = na
+var int lastSellCrossB    = na
+var int lastBuySigAnchor  = na
+var int lastSellSigAnchor = na
+var float buyBaseAtSSL    = na        // BUY% just before the last sell-side sweep
+var float sellBaseAtBSL   = na        // SELL% just before the last buy-side sweep
+
+bool becameBuyDom  = false
+bool becameSellDom = false
+bool flipToBuy     = false
+bool flipToSell    = false
+bool shiftUp       = false
+bool shiftDn       = false
+bool tgtChangeBuy  = false
+bool tgtChangeSell = false
+bool sigBuy        = false
+bool sigSell       = false
+
+float pctChange = buyPctRaw - nz(buyPctRaw[shiftLook], buyPctRaw)
+float buyPrev   = nz(buyPctRaw[1], buyPctRaw)
+bool  buyCross  = ta.crossover(buyPctRaw, sigThr)
+bool  sellCross = ta.crossover(sellPctRaw, sigThr)
+
+if commit
+    // dominance & flips (BALANCED never counts as a side, so a flip is SELL -> BUY or BUY -> SELL)
+    if domNow != domState
+        becameBuyDom  := domNow == 1
+        becameSellDom := domNow == -1
+        domState      := domNow
+    if domNow != 0 and domNow != lastDirSide
+        flipToBuy   := lastDirSide == -1
+        flipToSell  := lastDirSide == 1
+        lastDirSide := domNow
+
+    // meaningful shift: >= threshold change within the lookback, with a cooldown
+    if not lowData and math.abs(pctChange) >= shiftThr and (na(lastShiftB) or bar_index - lastShiftB > shiftLook)
+        shiftUp    := pctChange > 0
+        shiftDn    := pctChange < 0
+        lastShiftB := bar_index
+
+    // strong target change: a new key pool on a dominant side
+    int tgtId = na
+    if domNow != 0 and not na(keyPool)
+        tgtId := keyPool.id
+    if not na(tgtId) and (na(lastTargetId) or tgtId != lastTargetId)
+        if flowStrength >= 40.0 or f_tier(f_intrinsic(keyPool)) >= 2
+            tgtChangeBuy  := domNow == 1
+            tgtChangeSell := domNow == -1
+        lastTargetId := tgtId
+
+    if sslSweepNow
+        lastSSLSweepB := bar_index
+        buyBaseAtSSL  := buyPrev
+    if bslSweepNow
+        lastBSLSweepB := bar_index
+        sellBaseAtBSL := 100.0 - buyPrev
+    if buyCross
+        lastBuyCrossB := bar_index
+    if sellCross
+        lastSellCrossB := bar_index
+
+    if enableSig and not lowData
+        // BUY: sell-side swept -> bullish structure shift after it -> flow moved toward buy-side
+        //      since the sweep and is above the threshold -> buy-side target exists
+        int  bAnchor   = reqSweep ? lastSSLSweepB : reqStruct ? lastBullShiftB : lastBuyCrossB
+        bool bSweepOk  = not reqSweep or (not na(lastSSLSweepB) and bar_index - lastSSLSweepB <= sigWindow)
+        bool bStructOk = not reqStruct or (not na(lastBullShiftB) and bar_index - lastBullShiftB <= sigWindow and (not reqSweep or lastBullShiftB >= lastSSLSweepB))
+        bool bCrossOk  = reqSweep or reqStruct or (not na(lastBuyCrossB) and bar_index - lastBuyCrossB <= sigWindow)
+        bool bFlowOk   = buyPctRaw >= sigThr and (not reqSweep or buyPctRaw > buyBaseAtSSL)
+        if bSweepOk and bStructOk and bCrossOk and bFlowOk and buyCnt > 0 and not na(bAnchor) and (na(lastBuySigAnchor) or bAnchor != lastBuySigAnchor)
+            sigBuy           := true
+            lastBuySigAnchor := bAnchor
+        // SELL: mirror image
+        int  sAnchor   = reqSweep ? lastBSLSweepB : reqStruct ? lastBearShiftB : lastSellCrossB
+        bool sSweepOk  = not reqSweep or (not na(lastBSLSweepB) and bar_index - lastBSLSweepB <= sigWindow)
+        bool sStructOk = not reqStruct or (not na(lastBearShiftB) and bar_index - lastBearShiftB <= sigWindow and (not reqSweep or lastBearShiftB >= lastBSLSweepB))
+        bool sCrossOk  = reqSweep or reqStruct or (not na(lastSellCrossB) and bar_index - lastSellCrossB <= sigWindow)
+        bool sFlowOk   = sellPctRaw >= sigThr and (not reqSweep or sellPctRaw > sellBaseAtBSL)
+        if sSweepOk and sStructOk and sCrossOk and sFlowOk and sellCnt > 0 and not na(sAnchor) and (na(lastSellSigAnchor) or sAnchor != lastSellSigAnchor)
+            sigSell           := true
+            lastSellSigAnchor := sAnchor
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CHART VISUALS (styled on the last bar only - objects are created per pool)
+// ════════════════════════════════════════════════════════════════════════════
+// rk: 0 = not ranked, 1 = key target, 2..N = next strongest pools
+f_style(Pool p, int rk, int dom, float sideTot) =>
+    float s       = f_intrinsic(p)
+    int   tier    = f_tier(s)
+    bool  vis     = s >= minPoolStr
+    bool  inScope = p.w > 0
+    bool  isT1    = rk == 1 and showTgtChart
+    bool  ranked  = rk > 0 and showTgtChart
+    color c       = p.isBuy ? bslCol : sslCol
+    int   bgT     = not vis ? 100 : isT1 ? 76 : not inScope ? 96 : tier == 3 ? 80 : tier == 2 ? 84 : tier == 1 ? 88 : 92
+    int   lnT     = not vis ? 100 : isT1 ? 0 : not inScope ? 85 : tier >= 2 ? 25 : tier == 1 ? 45 : 65
+    if not na(p.bx)
+        box.set_bgcolor(p.bx, color.new(c, bgT))
+        box.set_border_color(p.bx, color.new(c, not vis ? 100 : isT1 ? 50 : 82))
+    if not na(p.ln)
+        line.set_color(p.ln, color.new(c, lnT))
+        line.set_width(p.ln, isT1 ? 2 : 1)
+        line.set_style(p.ln, isT1 ? line.style_solid : tier >= 2 ? line.style_dashed : line.style_dotted)
+    bool isSess  = p.src >= SRC_PD
+    bool wantLbl = vis and (ranked or (isSess and showSessTags) or (p.members >= 2 and showEqTags) or showTierLbl)
+    if wantLbl
+        string tag = f_tag(p)
+        string arw = p.isBuy ? "▲" : "▼"
+        string shareTxt = sideTot > 0 ? str.tostring(p.w / sideTot * 100.0, "#0") : "0"
+        string txt = ""
+        if isT1
+            txt := (dom != 0 ? "TARGET " : "KEY POOL ") + arw + "  " + str.tostring(p.price, format.mintick) + "  ·  " +
+                 str.tostring(p.dAtr, "#0.00") + " ATR\n" + tag + " · " + f_tierName(tier) + " · " + shareTxt + "% of " + (p.isBuy ? "buy-side" : "sell-side")
+        else
+            txt := (ranked ? "T" + str.tostring(rk) + "  " : "") + tag + (showTierLbl ? " · " + f_tierName(tier) : "")
+        string tip = "Intrinsic strength " + str.tostring(s, "#0.00") + " (" + f_tierName(tier) + ")\nClustered swings: " +
+             str.tostring(p.members) + "  ·  Tests: " + str.tostring(p.tests) + "\nShare of its side's liquidity score: " + shareTxt + "%"
+        color  bg = isT1 ? color.new(c, 20) : color.new(c, 100)
+        color  tc = isT1 ? color.white : color.new(c, ranked ? 0 : 25)
+        string ls = isT1 ? size.small : size.tiny
+        if na(p.lb)
+            p.lb := label.new(time, p.price, txt, xloc = xloc.bar_time, style = label.style_label_left, color = bg,
+                 textcolor = tc, size = ls, textalign = text.align_left, tooltip = tip)
+        else
+            label.set_xy(p.lb, time, p.price)
+            label.set_text(p.lb, txt)
+            label.set_color(p.lb, bg)
+            label.set_textcolor(p.lb, tc)
+            label.set_size(p.lb, ls)
+            label.set_tooltip(p.lb, tip)
+    else if not na(p.lb)
+        label.delete(p.lb)
+        p.lb := na
+    p
+
+var line  csHiLn = na
+var line  csLoLn = na
+var label csHiLb = na
+var label csLoLb = na
+
+if barstate.islast
+    // rank the scored pools: T1 = key pool on the dominant side, then strongest remaining
+    int nP = array.size(pools)
+    if nP > 0
+        array<float> ws = array.new<float>()
+        for p in pools
+            array.push(ws, p.w)
+        array<int> rankIdx  = array.sort_indices(ws, order.descending)
+        array<int> ranks    = array.new<int>(nP, 0)
+        int        nextRank = na(keyPool) ? 1 : 2
+        for k = 0 to nP - 1
+            int  idx = array.get(rankIdx, k)
+            Pool q   = array.get(pools, idx)
+            if q.w > 0
+                if not na(keyPool) and q.id == keyPool.id
+                    array.set(ranks, idx, 1)
+                else if nextRank <= topN
+                    array.set(ranks, idx, nextRank)
+                    nextRank += 1
+        for i = 0 to nP - 1
+            Pool q = array.get(pools, i)
+            f_style(q, array.get(ranks, i), domNow, q.isBuy ? buyAdj : sellAdj)
+
+    // current-session high / low (optional)
+    bool drawCsHi = csOK and not na(csHiPrev) and not na(csHiTPrev)
+    bool drawCsLo = csOK and not na(csLoPrev) and not na(csLoTPrev)
+    if drawCsHi
+        if na(csHiLn)
+            csHiLn := line.new(csHiTPrev, csHiPrev, time, csHiPrev, xloc = xloc.bar_time, extend = extend.right, color = color.new(neuCol, 40), style = line.style_dotted)
+            csHiLb := label.new(time, csHiPrev, "CSH", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(neuCol, 100), textcolor = color.new(neuCol, 20), size = size.tiny)
+        else
+            line.set_xy1(csHiLn, csHiTPrev, csHiPrev)
+            line.set_xy2(csHiLn, time, csHiPrev)
+            label.set_xy(csHiLb, time, csHiPrev)
+    else if not na(csHiLn)
+        line.delete(csHiLn)
+        label.delete(csHiLb)
+        csHiLn := na
+        csHiLb := na
+    if drawCsLo
+        if na(csLoLn)
+            csLoLn := line.new(csLoTPrev, csLoPrev, time, csLoPrev, xloc = xloc.bar_time, extend = extend.right, color = color.new(neuCol, 40), style = line.style_dotted)
+            csLoLb := label.new(time, csLoPrev, "CSL", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(neuCol, 100), textcolor = color.new(neuCol, 20), size = size.tiny)
+        else
+            line.set_xy1(csLoLn, csLoTPrev, csLoPrev)
+            line.set_xy2(csLoLn, time, csLoPrev)
+            label.set_xy(csLoLb, time, csLoPrev)
+    else if not na(csLoLn)
+        line.delete(csLoLn)
+        label.delete(csLoLb)
+        csLoLn := na
+        csLoLb := na
+
+// ════════════════════════════════════════════════════════════════════════════
+//  VIDEO STYLE: the chart split at price into two zones, each labelled with
+//  its share of the estimated active liquidity (upper zone = liquidity resting
+//  above price, lower zone = liquidity resting below price).
+// ════════════════════════════════════════════════════════════════════════════
+int   zHiOff = nz(ta.highestbars(high, zoneLen), 0)
+int   zLoOff = nz(ta.lowestbars(low, zoneLen), 0)
+float zHi    = nz(ta.highest(high, zoneLen), high)
+float zLo    = nz(ta.lowest(low, zoneLen), low)
+
+var box   upZone = na
+var box   dnZone = na
+var label upLbl  = na
+var label dnLbl  = na
+
+if barstate.islast and videoMode
+    int    minW  = math.max(3, math.round(zoneLen / 4.0))
+    int    lUp   = math.min(bar_index + zHiOff, bar_index - minW)
+    int    lDn   = math.min(bar_index + zLoOff, bar_index - minW)
+    float  px    = close
+    float  zTop  = math.max(zHi, px)
+    float  zBot  = math.min(zLo, px)
+    int    xLbl  = math.round((math.max(lUp, lDn) + bar_index) / 2.0)
+    float  upPct = math.round(effBuy, 1)
+    float  dnPct = 100.0 - upPct
+    string upNm  = zoneNames == "Sellers / Buyers" ? "Sellers" : zoneNames == "Buy-side / Sell-side" ? "Buy-side" : zoneNames == "Above / Below" ? "Above" : "▲ UP"
+    string dnNm  = zoneNames == "Sellers / Buyers" ? "Buyers" : zoneNames == "Buy-side / Sell-side" ? "Sell-side" : zoneNames == "Above / Below" ? "Below" : "▼ DOWN"
+    string upSz  = upPct > dnPct ? size.large : size.normal
+    string dnSz  = dnPct > upPct ? size.large : size.normal
+    string zTip  = "Share of the estimated active liquidity resting in this zone. Price tends to be drawn toward the side holding more liquidity - an estimate, not a guarantee. If price runs this zone's liquidity and closes back out of it (a sweep), the pull is used up and price often turns."
+    if na(upZone)
+        upZone := box.new(lUp, zTop, bar_index, px, border_width = 0, bgcolor = color.new(upZoneCol, zoneTransp))
+        dnZone := box.new(lDn, px, bar_index, zBot, border_width = 0, bgcolor = color.new(dnZoneCol, zoneTransp))
+        upLbl  := label.new(xLbl, (px + zTop) / 2.0, "", style = label.style_label_center, color = upZoneCol,
+             textcolor = color.white, size = size.normal, tooltip = zTip)
+        dnLbl  := label.new(xLbl, (zBot + px) / 2.0, "", style = label.style_label_center, color = dnZoneCol,
+             textcolor = color.white, size = size.normal, tooltip = zTip)
+    box.set_lefttop(upZone, lUp, zTop)
+    box.set_rightbottom(upZone, bar_index, px)
+    box.set_lefttop(dnZone, lDn, px)
+    box.set_rightbottom(dnZone, bar_index, zBot)
+    label.set_xy(upLbl, xLbl, (px + zTop) / 2.0)
+    label.set_xy(dnLbl, xLbl, (zBot + px) / 2.0)
+    label.set_text(upLbl, upNm + " " + str.tostring(upPct, "#0.0") + "%")
+    label.set_text(dnLbl, dnNm + " " + str.tostring(dnPct, "#0.0") + "%")
+    label.set_size(upLbl, upSz)
+    label.set_size(dnLbl, dnSz)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  DASHBOARD
+// ════════════════════════════════════════════════════════════════════════════
+// Three columns: label | bar or value | percentage. Row layout depends only on
+// inputs, so it is fixed for the whole run and cells are merged once.
+bool sideRows  = showPct or showBar
+int  DBG_ROWS  = 12
+int  rowHead   = 0
+int  rowTop    = sideRows ? 1 : -1
+int  rowBot    = sideRows ? 2 : -1
+int  c0        = sideRows ? 3 : 1
+int  rowTgt    = showTgtRow ? c0 : -1
+int  c1        = c0 + (showTgtRow ? 1 : 0)
+int  rowStr    = showStrRow ? c1 : -1
+int  c2        = c1 + (showStrRow ? 1 : 0)
+int  rowConf   = showConfRow ? c2 : -1
+int  c3        = c2 + (showConfRow ? 1 : 0)
+int  rowKey    = showKeyRow ? c3 : -1
+int  c4        = c3 + (showKeyRow ? 1 : 0)
+int  rowNear   = showNearRow ? c4 : -1
+int  c5        = c4 + (showNearRow ? 1 : 0)
+int  rowSweep  = showSweepRow ? c5 : -1
+int  c6        = c5 + (showSweepRow ? 1 : 0)
+int  rowStruct = showStructRow ? c6 : -1
+int  c7        = c6 + (showStructRow ? 1 : 0)
+int  rowStatus = showStatusRow ? c7 : -1
+int  c8        = c7 + (showStatusRow ? 1 : 0)
+int  rowDbg    = debugMode ? c8 : -1
+int  totalRows = c8 + (debugMode ? DBG_ROWS : 0)
+
+var table dash = showDash ? table.new(f_pos(dashPos), 3, totalRows, bgcolor = dashBg, frame_color = color.new(neuCol, 70),
+     frame_width = 1, border_color = color.new(neuCol, 92), border_width = 0) : na
+
+// value rows: label in column 0, value spanning columns 1-2
+f_mergeValueRow(table t, int r) =>
+    if r >= 0
+        table.merge_cells(t, 1, r, 2, r)
+    r
+
+if barstate.isfirst and not na(dash)
+    table.merge_cells(dash, 0, rowHead, 2, rowHead)
+    f_mergeValueRow(dash, rowTgt)
+    f_mergeValueRow(dash, rowStr)
+    f_mergeValueRow(dash, rowConf)
+    f_mergeValueRow(dash, rowKey)
+    f_mergeValueRow(dash, rowNear)
+    f_mergeValueRow(dash, rowSweep)
+    f_mergeValueRow(dash, rowStruct)
+    if rowStatus >= 0
+        table.merge_cells(dash, 0, rowStatus, 2, rowStatus)
+    if debugMode
+        for k = 0 to DBG_ROWS - 1
+            table.merge_cells(dash, 1, rowDbg + k, 2, rowDbg + k)
+
+f_cell(table t, int c, int r, string s, color tc, string ha, string sz, string tip) =>
+    table.cell(t, c, r, s, text_color = tc, text_halign = ha, text_size = sz, tooltip = tip)
+
+f_row(table t, int r, string lbl, string val, color lc, color vc, string sz, string tip) =>
+    if r >= 0
+        table.cell(t, 0, r, lbl, text_color = lc, text_halign = text.align_left, text_size = sz)
+        table.cell(t, 1, r, val, text_color = vc, text_halign = text.align_right, text_size = sz, tooltip = tip)
+    r
+
+f_bar(float pct, int cells) =>
+    int filled = math.max(0, math.min(cells, math.round(pct / 100.0 * cells)))
+    str.repeat("█", filled) + str.repeat("░", cells - filled)
+
+f_poolTxt(Pool p) =>
+    str.tostring(p.price, format.mintick) + " · " + str.tostring(p.dAtr, "#0.00") + " ATR"
+
+float confDisp = frozen ? nz(confidence[1], confidence) : confidence
+
+if barstate.islast and not na(dash)
+    string sz     = f_size(dashSize)
+    bool   buyTop = dispBuy >= dispSell
+    string fmt    = showDecimals ? "#0.0" : "#0"
+    string sideB  = wording == "Side" ? "BUY-SIDE" : "ABOVE"
+    string sideS  = wording == "Side" ? "SELL-SIDE" : "BELOW"
+    color  dimTxt = color.new(dashTxt, 35)
+    int    cells  = dashSize == "Tiny" ? 10 : dashSize == "Small" ? 12 : dashSize == "Normal" ? 14 : 16
+
+    f_cell(dash, 0, rowHead, "EST. LIQUIDITY FLOW", dashTxt, text.align_center, sz,
+         "Share of the currently scored ACTIVE liquidity resting above price (buy-side) vs below price (sell-side). An estimate of liquidity concentration - not a probability of price direction.")
+
+    // side rows: dominant side first, each with its own coloured bar
+    if sideRows
+        for k = 0 to 1
+            bool  isBuyRow = k == 0 ? buyTop : not buyTop
+            int   r        = k == 0 ? rowTop : rowBot
+            float v        = isBuyRow ? dispBuy : dispSell
+            color col      = isBuyRow ? bslCol : sslCol
+            f_cell(dash, 0, r, isBuyRow ? "BUY-SIDE" : "SELL-SIDE", col, text.align_left, sz,
+                 isBuyRow ? "Estimated liquidity resting ABOVE price" : "Estimated liquidity resting BELOW price")
+            if showBar
+                table.cell(dash, 1, r, f_bar(v, cells), text_color = col, text_halign = text.align_left, text_size = sz,
+                     text_font_family = font.family_monospace)
+            if showPct
+                f_cell(dash, 2, r, str.tostring(v, fmt) + "%", col, text.align_right, sz, "")
+
+    if rowTgt >= 0
+        string tTxt = lowData ? "LOW DATA" : domNow == 1 ? sideB + " ▲" : domNow == -1 ? sideS + " ▼" : "BALANCED"
+        color  tCol = lowData or domNow == 0 ? neuCol : domNow == 1 ? bslCol : sslCol
+        f_row(dash, rowTgt, "TARGET", tTxt, dimTxt, tCol, sz,
+             "Dominant estimated liquidity side. BALANCED when the sides differ by less than the Balanced Threshold.")
+
+    if rowStr >= 0
+        string sTxt = lowData ? "—" : extremeNow ? "EXTREME" : f_strengthName(flowStrength)
+        color  sCol = lowData or domNow == 0 ? neuCol : domNow == 1 ? bslCol : sslCol
+        f_row(dash, rowStr, "STRENGTH", sTxt, dimTxt, sCol, sz,
+             "Liquidity Flow Strength = size of the imbalance between the two sides (0-100). Not certainty.")
+
+    if rowConf >= 0
+        f_row(dash, rowConf, "MODEL CONF.", str.tostring(confDisp, "#0") + "%", dimTxt, dashTxt, sz,
+             "Model confidence: score separation, pool count, clustering, structure and HTF agreement, data quality. Not a probability of price direction.")
+
+    if rowKey >= 0
+        string kTxt = "—"
+        color  kCol = neuCol
+        string kTip = "No active pool scored."
+        if not na(keyPool)
+            float sideTot = keyPool.isBuy ? buyAdj : sellAdj
+            kTxt := f_poolTxt(keyPool)
+            kCol := keyPool.isBuy ? bslCol : sslCol
+            kTip := f_tag(keyPool) + " · " + f_tierName(f_tier(f_intrinsic(keyPool))) + "\nStrongest single pool on " +
+                 (domNow == 0 ? "either side" : "the dominant side") + ": " + (sideTot > 0 ? str.tostring(keyPool.w / sideTot * 100.0, "#0") : "0") +
+                 "% of that side's score. The side % aggregates every active pool."
+        f_row(dash, rowKey, "KEY POOL", kTxt, dimTxt, kCol, sz, kTip)
+
+    if rowNear >= 0
+        string nTxt = "—"
+        color  nCol = neuCol
+        string nTip = "No MAJOR or EXTREME pool is currently scored."
+        if not na(nearMaj)
+            nTxt := f_poolTxt(nearMaj)
+            nCol := nearMaj.isBuy ? bslCol : sslCol
+            nTip := f_tag(nearMaj) + " · " + f_tierName(f_tier(f_intrinsic(nearMaj)))
+        f_row(dash, rowNear, "NEAREST MAJOR", nTxt, dimTxt, nCol, sz, nTip)
+
+    if rowSweep >= 0
+        string wTxt = "—"
+        color  wCol = neuCol
+        string wTip = "No confirmed sweep yet."
+        if not na(lastSweepP)
+            int ago = bar_index - lastSweepB
+            wTxt := (lastSweepP.isBuy ? "BSL ✕ " : "SSL ✕ ") + str.tostring(lastSweepP.price, format.mintick) + " · " +
+                 (ago == 0 ? "this bar" : ago == 1 ? "1 bar ago" : str.tostring(ago) + " bars ago")
+            wCol := lastSweepP.isBuy ? bslCol : sslCol
+            wTip := "Last confirmed sweep: " + f_tag(lastSweepP) + "\nRan " + str.tostring(lastSweepD, "#0.00") +
+                 " ATR beyond the level and closed back inside."
+        f_row(dash, rowSweep, "LAST SWEEP", wTxt, dimTxt, wCol, sz, wTip)
+
+    if rowStruct >= 0
+        string hT   = hiType == 1 ? "HH" : hiType == -1 ? "LH" : "-"
+        string lT   = loType == 1 ? "HL" : loType == -1 ? "LL" : "-"
+        string mTxt = (structDir == 1 ? "BULLISH" : structDir == -1 ? "BEARISH" : "UNDEFINED") + " · " + hT + "/" + lT
+        color  mCol = structDir == 1 ? bslCol : structDir == -1 ? sslCol : neuCol
+        f_row(dash, rowStruct, "STRUCTURE", mTxt, dimTxt, mCol, sz,
+             "Direction of the last break of structure, plus the last swing high / swing low types.")
+
+    if rowStatus >= 0
+        string stTxt = "% = est. share of active liquidity"
+        color  stCol = color.new(dashTxt, 55)
+        string stSz  = size.tiny
+        string stTip = ""
+        if not na(raidP)
+            stTxt := (raidBreak ? "BREAKING " : "RAIDING ") + (raidP.isBuy ? "BSL " : "SSL ") + str.tostring(raidP.price, format.mintick) + " · LIVE"
+            stCol := raidP.isBuy ? bslCol : sslCol
+            stSz  := sz
+            stTip := "Price is trading beyond " + f_tag(raidP) + " on the developing candle. Nothing is marked until the bar closes: back inside = sweep, beyond = liquidity taken."
+        else if lowData
+            stTxt := "BALANCED / LOW DATA"
+            stCol := neuCol
+            stSz  := sz
+            stTip := "Too little active liquidity is scored to show a directional reading."
+        else if extremeNow
+            stTxt := dispBuy > dispSell ? "EXTREME BUY-SIDE LIQUIDITY" : "EXTREME SELL-SIDE LIQUIDITY"
+            stCol := dispBuy > dispSell ? bslCol : sslCol
+            stSz  := sz
+            stTip := "The estimated liquidity map is heavily one-sided. This is not a probability that price will move that way."
+        else if domNow == 0
+            stTxt := "BALANCED"
+            stCol := neuCol
+            stSz  := sz
+        f_cell(dash, 0, rowStatus, stTxt, stCol, text.align_center, stSz, stTip)
+
+    if debugMode
+        int    r0 = rowDbg
+        color  dc = color.new(dashTxt, 25)
+        string ds = size.tiny
+        string dpTxt = "—"
+        if not na(keyPool)
+            dpTxt := f_tag(keyPool) + " · s " + str.tostring(f_intrinsic(keyPool), "#0.00") + " · w " + str.tostring(keyPool.w, "#0.00")
+        f_row(dash, r0, "RAW BUY / SELL", str.tostring(buyRaw, "#0.00") + " / " + str.tostring(sellRaw, "#0.00"), dc, dc, ds, "")
+        f_row(dash, r0 + 1, "ADJ. BUY / SELL", str.tostring(buyAdj, "#0.00") + " / " + str.tostring(sellAdj, "#0.00"), dc, dc, ds, "")
+        f_row(dash, r0 + 2, "ACTIVE POOLS", "B " + str.tostring(buyCnt) + " · S " + str.tostring(sellCnt) + " · stored " +
+             str.tostring(array.size(pools)) + " · swept " + str.tostring(array.size(sweptPools)), dc, dc, ds, "")
+        f_row(dash, r0 + 3, "DOMINANT POOL", dpTxt, dc, dc, ds, "")
+        f_row(dash, r0 + 4, "VOLUME FACTOR", volOK ? f_share(fVol, rawTot) + " of score" : "n/a (no usable volume)", dc, dc, ds, "")
+        f_row(dash, r0 + 5, "DISTANCE FACTOR", "avg " + str.tostring(nScored > 0 ? fDistSum / nScored : 0.0, "#0.00"), dc, dc, ds, "")
+        f_row(dash, r0 + 6, "EQUAL-LEVEL FACTOR", f_share(fEq, rawTot) + " of score", dc, dc, ds, "")
+        f_row(dash, r0 + 7, "STRUCTURE FACTOR", f_share(fStruct, rawTot) + " · dir " + str.tostring(structDir), dc, dc, ds, "")
+        f_row(dash, r0 + 8, "HTF FACTOR", htfValid ? f_share(fHtf, rawTot) + " · TF " + htfTF : "off", dc, dc, ds, "")
+        f_row(dash, r0 + 9, "TESTS / SESSION", f_share(fTest, rawTot) + " / " + f_share(fSess, rawTot), dc, dc, ds, "")
+        f_row(dash, r0 + 10, "PRESSURE", str.tostring(pressRef, "#0.00") + (usePressTilt ? "" : " (not used)"), dc, dc, ds, "")
+        f_row(dash, r0 + 11, "TILT BSL / SSL", "x" + str.tostring(bslMult, "#0.00") + " / x" + str.tostring(sslMult, "#0.00"), dc, dc, ds, "")
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MARKERS (all conditions are confirmed-bar only -> fixed once printed)
+// ════════════════════════════════════════════════════════════════════════════
+plotshape(showSweepMk and bslSweepNow, "Buy-Side Liquidity Sweep", shape.xcross, location.abovebar, color.new(bslCol, 10), size = size.tiny)
+plotshape(showSweepMk and sslSweepNow, "Sell-Side Liquidity Sweep", shape.xcross, location.belowbar, color.new(sslCol, 10), size = size.tiny)
+plotshape(showFlipMk and flipToBuy, "Liquidity Flip → Buy-Side", shape.diamond, location.belowbar, color.new(bslCol, 30), text = "FLIP", textcolor = color.new(bslCol, 20), size = size.tiny)
+plotshape(showFlipMk and flipToSell, "Liquidity Flip → Sell-Side", shape.diamond, location.abovebar, color.new(sslCol, 30), text = "FLIP", textcolor = color.new(sslCol, 20), size = size.tiny)
+plotshape(showShiftMk and shiftUp, "Liquidity Shift ↑", shape.circle, location.belowbar, color.new(bslCol, 50), text = "SHIFT", textcolor = color.new(bslCol, 40), size = size.tiny)
+plotshape(showShiftMk and shiftDn, "Liquidity Shift ↓", shape.circle, location.abovebar, color.new(sslCol, 50), text = "SHIFT", textcolor = color.new(sslCol, 40), size = size.tiny)
+plotshape(sigBuy, "Confirmed BUY Setup", shape.triangleup, location.belowbar, bslCol, text = "BUY", textcolor = bslCol, size = size.small)
+plotshape(sigSell, "Confirmed SELL Setup", shape.triangledown, location.abovebar, sslCol, text = "SELL", textcolor = sslCol, size = size.small)
+
+// Debug values in the Data Window only (no chart clutter)
+plot(debugMode ? buyRaw : na, "Raw Buy-Side Score", color = bslCol, display = display.data_window)
+plot(debugMode ? sellRaw : na, "Raw Sell-Side Score", color = sslCol, display = display.data_window)
+plot(debugMode ? buyPctRaw : na, "Buy-Side % (smoothed)", color = neuCol, display = display.data_window)
+plot(debugMode ? pressure : na, "Market Pressure", color = neuCol, display = display.data_window)
+plot(debugMode ? confidence : na, "Model Confidence", color = neuCol, display = display.data_window)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ALERTS (event-based, confirmed bars only - never every candle)
+// ════════════════════════════════════════════════════════════════════════════
+// Detailed alert() messages: one combined message per confirmed bar with prices,
+// pool tags and the current split. Create the alert with "Any alert() function call".
+if alRich and commit
+    string msg = ""
+    if alSweep and not na(bslSweptP)
+        msg += "\n• Buy-side liquidity SWEPT @ " + str.tostring(bslSweptP.price, format.mintick) + " (" + f_tag(bslSweptP) + ", " +
+             str.tostring(bslSweptD, "#0.00") + " ATR deep, closed back below)"
+    if alSweep and not na(sslSweptP)
+        msg += "\n• Sell-side liquidity SWEPT @ " + str.tostring(sslSweptP.price, format.mintick) + " (" + f_tag(sslSweptP) + ", " +
+             str.tostring(sslSweptD, "#0.00") + " ATR deep, closed back above)"
+    if alFlow
+        if flipToBuy or flipToSell
+            msg += "\n• Liquidity flow FLIPPED to " + (flipToBuy ? "BUY-SIDE (above price)" : "SELL-SIDE (below price)")
+        else if becameBuyDom or becameSellDom
+            msg += "\n• " + (becameBuyDom ? "Buy-side" : "Sell-side") + " liquidity is now dominant"
+        if showShiftMk and (shiftUp or shiftDn)      // shifts are frequent: only when the user opted in
+            msg += "\n• Flow shifted " + (shiftUp ? "toward buy-side" : "toward sell-side") + " by " + str.tostring(math.abs(pctChange), "#0") +
+                 " pts in " + str.tostring(shiftLook) + " bars"
+    if alPool
+        for q in majorQ
+            msg += "\n• New " + f_tierName(f_tier(f_intrinsic(q))) + " pool: " + f_tag(q) + " @ " + str.tostring(q.price, format.mintick)
+        if (tgtChangeBuy or tgtChangeSell) and not na(keyPool)
+            msg += "\n• New dominant target: " + f_tag(keyPool) + " @ " + f_poolTxt(keyPool)
+    if alSig
+        if sigBuy
+            msg += "\n• Confirmed BUY setup: sell-side sweep + bullish structure shift + flow moving to buy-side"
+        if sigSell
+            msg += "\n• Confirmed SELL setup: buy-side sweep + bearish structure shift + flow moving to sell-side"
+    if msg != ""
+        alert("Liquidity Flow · " + syminfo.ticker + " " + timeframe.period + " · est. BUY-SIDE " + str.tostring(dispBuy, "#0") +
+             "% / SELL-SIDE " + str.tostring(dispSell, "#0") + "%" + msg, alert.freq_once_per_bar_close)
+
+// Classic alert conditions (one per event type)
+alertcondition(alFlow and becameBuyDom, "Buy-side liquidity dominant", "Estimated buy-side liquidity became dominant on {{ticker}} {{interval}}")
+alertcondition(alFlow and becameSellDom, "Sell-side liquidity dominant", "Estimated sell-side liquidity became dominant on {{ticker}} {{interval}}")
+alertcondition(alFlow and (flipToBuy or flipToSell), "Liquidity flow flip", "Liquidity Flow flipped sides on {{ticker}} {{interval}}")
+alertcondition(alFlow and shiftUp, "Liquidity flow shifted bullish", "Liquidity Flow shifted bullish (toward buy-side) on {{ticker}} {{interval}}")
+alertcondition(alFlow and shiftDn, "Liquidity flow shifted bearish", "Liquidity Flow shifted bearish (toward sell-side) on {{ticker}} {{interval}}")
+alertcondition(alSweep and bslSweepNow, "Buy-side sweep", "Buy-side liquidity swept on {{ticker}} {{interval}}")
+alertcondition(alSweep and sslSweepNow, "Sell-side sweep", "Sell-side liquidity swept on {{ticker}} {{interval}}")
+alertcondition(alPool and majorNew, "Major liquidity pool detected", "Major liquidity pool detected on {{ticker}} {{interval}}")
+alertcondition(alPool and tgtChangeBuy, "New buy-side target", "New dominant buy-side liquidity target detected on {{ticker}} {{interval}}")
+alertcondition(alPool and tgtChangeSell, "New sell-side target", "New dominant sell-side liquidity target detected on {{ticker}} {{interval}}")
+alertcondition(alSig and sigBuy, "Confirmed BUY setup", "Confirmed BUY setup (sell-side sweep + bullish shift) on {{ticker}} {{interval}}")
+alertcondition(alSig and sigSell, "Confirmed SELL setup", "Confirmed SELL setup (buy-side sweep + bearish shift) on {{ticker}} {{interval}}")
