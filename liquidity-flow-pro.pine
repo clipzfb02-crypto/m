@@ -52,13 +52,15 @@ const string G_DBG  = "Debug"
 
 // ─── Style
 string styleMode  = input.string("Video", "Display Style", options = ["Video", "Pro"], group = G_STY,
-     tooltip = "Video: the chart is split at price into two zones - red above (Sellers), green below (Buyers) - each labelled with its share of the estimated liquidity.\nPro: dashboard plus every liquidity pool, sweep and target drawn on the chart.")
+     tooltip = "Video: the chart is split at price into two zones, each labelled with its share of the estimated liquidity. Price tends to be drawn toward the side holding more liquidity: ▲ UP 80% = most liquidity above price, ▼ DOWN 80% = most liquidity below.\nPro: dashboard plus every liquidity pool, sweep and target drawn on the chart.")
 bool   vidExtras  = input.bool(false, "Video: also show dashboard & levels", group = G_STY)
 int    zoneLen    = input.int(50, "Video: Zone Lookback (bars)", minval = 10, maxval = 500, group = G_STY,
      tooltip = "The upper zone runs from price up to the highest high of this many bars, the lower zone from price down to the lowest low.")
-string zoneNames  = input.string("Sellers / Buyers", "Video: Zone Labels", options = ["Sellers / Buyers", "Buy-side / Sell-side", "Above / Below"], group = G_STY)
-color  upZoneCol  = input.color(#f23645, "Video: Upper Zone", group = G_STY, inline = "vz")
-color  dnZoneCol  = input.color(#4caf50, "Lower Zone", group = G_STY, inline = "vz")
+string zoneNames  = input.string("Direction (▲ UP / ▼ DOWN)", "Video: Zone Labels",
+     options = ["Direction (▲ UP / ▼ DOWN)", "Sellers / Buyers", "Buy-side / Sell-side", "Above / Below"], group = G_STY,
+     tooltip = "Direction: the upper zone reads ▲ UP and the lower zone ▼ DOWN, so the larger percentage shows the side price is more likely to be drawn toward. The larger side is also drawn with a bigger label.")
+color  upZoneCol  = input.color(#4caf50, "Video: Upper Zone", group = G_STY, inline = "vz")
+color  dnZoneCol  = input.color(#f23645, "Lower Zone", group = G_STY, inline = "vz")
 int    zoneTransp = input.int(82, "Video: Zone Transparency", minval = 0, maxval = 100, group = G_STY)
 bool   videoMode  = styleMode == "Video"
 
@@ -1315,9 +1317,11 @@ if barstate.islast and videoMode
     int    xLbl  = math.round((math.max(lUp, lDn) + bar_index) / 2.0)
     float  upPct = math.round(effBuy, 1)
     float  dnPct = 100.0 - upPct
-    string upNm  = zoneNames == "Sellers / Buyers" ? "Sellers" : zoneNames == "Buy-side / Sell-side" ? "Buy-side" : "Above"
-    string dnNm  = zoneNames == "Sellers / Buyers" ? "Buyers" : zoneNames == "Buy-side / Sell-side" ? "Sell-side" : "Below"
-    string zTip  = "Share of the currently scored active liquidity resting in this zone. An estimate of liquidity concentration - not a probability of price direction."
+    string upNm  = zoneNames == "Sellers / Buyers" ? "Sellers" : zoneNames == "Buy-side / Sell-side" ? "Buy-side" : zoneNames == "Above / Below" ? "Above" : "▲ UP"
+    string dnNm  = zoneNames == "Sellers / Buyers" ? "Buyers" : zoneNames == "Buy-side / Sell-side" ? "Sell-side" : zoneNames == "Above / Below" ? "Below" : "▼ DOWN"
+    string upSz  = upPct > dnPct ? size.large : size.normal
+    string dnSz  = dnPct > upPct ? size.large : size.normal
+    string zTip  = "Share of the estimated active liquidity resting in this zone. Price tends to be drawn toward the side holding more liquidity - an estimate, not a guarantee. If price runs this zone's liquidity and closes back out of it (a sweep), the pull is used up and price often turns."
     if na(upZone)
         upZone := box.new(lUp, zTop, bar_index, px, border_width = 0, bgcolor = color.new(upZoneCol, zoneTransp))
         dnZone := box.new(lDn, px, bar_index, zBot, border_width = 0, bgcolor = color.new(dnZoneCol, zoneTransp))
@@ -1333,6 +1337,8 @@ if barstate.islast and videoMode
     label.set_xy(dnLbl, xLbl, (zBot + px) / 2.0)
     label.set_text(upLbl, upNm + " " + str.tostring(upPct, "#0.0") + "%")
     label.set_text(dnLbl, dnNm + " " + str.tostring(dnPct, "#0.0") + "%")
+    label.set_size(upLbl, upSz)
+    label.set_size(dnLbl, dnSz)
 
 // ════════════════════════════════════════════════════════════════════════════
 //  DASHBOARD
