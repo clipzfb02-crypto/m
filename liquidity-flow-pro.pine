@@ -375,6 +375,7 @@ f_newDrawings(Pool p) =>
     if showLines
         p.ln := line.new(p.t, p.price, time, p.price, xloc = xloc.bar_time, extend = extend.right,
              color = color.new(c, 45), style = line.style_dotted, width = 1)
+    p
 
 f_syncDrawings(Pool p) =>
     [top, bot] = f_zoneBounds(p)
@@ -384,6 +385,7 @@ f_syncDrawings(Pool p) =>
     if not na(p.ln)
         line.set_y1(p.ln, p.price)
         line.set_y2(p.ln, p.price)
+    p
 
 f_deleteDrawings(Pool p) =>
     if not na(p.bx)
@@ -395,6 +397,7 @@ f_deleteDrawings(Pool p) =>
     if not na(p.lb)
         label.delete(p.lb)
         p.lb := na
+    p
 
 // Swept pool: stop its zone/line at the sweep bar, fade it and mark the exact
 // swept level (or delete everything when swept levels are not kept).
@@ -421,6 +424,7 @@ f_fadeSwept(Pool p, float depthAtr) =>
             line.set_width(p.ln, 1)
     else
         f_deleteDrawings(p)
+    p
 
 // ─── Pool store
 // Adds a confirmed liquidity level. If it lies within the equal-level tolerance
@@ -1200,6 +1204,7 @@ f_style(Pool p, int rk, int dom, float sideTot) =>
     else if not na(p.lb)
         label.delete(p.lb)
         p.lb := na
+    p
 
 var line  csHiLn = na
 var line  csLoLn = na
@@ -1296,6 +1301,7 @@ var table dash = showDash ? table.new(f_pos(dashPos), 3, totalRows, bgcolor = da
 f_mergeValueRow(table t, int r) =>
     if r >= 0
         table.merge_cells(t, 1, r, 2, r)
+    r
 
 if barstate.isfirst and not na(dash)
     table.merge_cells(dash, 0, rowHead, 2, rowHead)
@@ -1319,6 +1325,7 @@ f_row(table t, int r, string lbl, string val, color lc, color vc, string sz, str
     if r >= 0
         table.cell(t, 0, r, lbl, text_color = lc, text_halign = text.align_left, text_size = sz)
         table.cell(t, 1, r, val, text_color = vc, text_halign = text.align_right, text_size = sz, tooltip = tip)
+    r
 
 f_bar(float pct, int cells) =>
     int filled = math.max(0, math.min(cells, math.round(pct / 100.0 * cells)))
