@@ -36,6 +36,7 @@ indicator("Liquidity Flow Pro [Non-Repaint]", shorttitle = "LiqFlow Pro", overla
 // ════════════════════════════════════════════════════════════════════════════
 //  INPUTS
 // ════════════════════════════════════════════════════════════════════════════
+const string G_STY  = "Style"
 const string G_DET  = "Liquidity Detection"
 const string G_CALC = "Liquidity Calculation"
 const string G_MODE = "Flow Model"
@@ -48,6 +49,18 @@ const string G_COL  = "Colors"
 const string G_SIG  = "Signals"
 const string G_ALR  = "Alerts"
 const string G_DBG  = "Debug"
+
+// ─── Style
+string styleMode  = input.string("Video", "Display Style", options = ["Video", "Pro"], group = G_STY,
+     tooltip = "Video: the chart is split at price into two zones - red above (Sellers), green below (Buyers) - each labelled with its share of the estimated liquidity.\nPro: dashboard plus every liquidity pool, sweep and target drawn on the chart.")
+bool   vidExtras  = input.bool(false, "Video: also show dashboard & levels", group = G_STY)
+int    zoneLen    = input.int(50, "Video: Zone Lookback (bars)", minval = 10, maxval = 500, group = G_STY,
+     tooltip = "The upper zone runs from price up to the highest high of this many bars, the lower zone from price down to the lowest low.")
+string zoneNames  = input.string("Sellers / Buyers", "Video: Zone Labels", options = ["Sellers / Buyers", "Buy-side / Sell-side", "Above / Below"], group = G_STY)
+color  upZoneCol  = input.color(#f23645, "Video: Upper Zone", group = G_STY, inline = "vz")
+color  dnZoneCol  = input.color(#4caf50, "Lower Zone", group = G_STY, inline = "vz")
+int    zoneTransp = input.int(82, "Video: Zone Transparency", minval = 0, maxval = 100, group = G_STY)
+bool   videoMode  = styleMode == "Video"
 
 // ─── Liquidity Detection
 int   swingLen   = input.int(5, "Swing Length", minval = 2, maxval = 20, group = G_DET,
@@ -129,7 +142,7 @@ bool   removeSwept  = input.bool(true, "Remove Swept Levels From Active Score", 
 int    maxSweeps    = input.int(20, "Max Historical Sweeps", minval = 0, maxval = 50, group = G_SWP)
 
 // ─── Dashboard
-bool   showDash      = input.bool(true, "Show Dashboard", group = G_DASH)
+bool   showDashIn    = input.bool(true, "Show Dashboard", group = G_DASH)
 string dashPos       = input.string("Top Right", "Position",
      options = ["Top Right", "Top Center", "Top Left", "Middle Right", "Middle Left", "Bottom Right", "Bottom Center", "Bottom Left"], group = G_DASH)
 string dashSize      = input.string("Small", "Size", options = ["Tiny", "Small", "Normal", "Large"], group = G_DASH)
@@ -151,19 +164,32 @@ float  extremeLvl    = input.float(85.0, "Extreme Reading (%)", minval = 60.0, m
      tooltip = "A side at or above this share is labelled EXTREME. It means the model's liquidity map is heavily one-sided, not that a move is likely.")
 
 // ─── Visuals
-bool  showZones    = input.bool(true, "Show Liquidity Zones", group = G_VIS)
-bool  showLines    = input.bool(true, "Show Liquidity Lines", group = G_VIS)
-bool  showEqTags   = input.bool(true, "Show Equal Levels", group = G_VIS)
-bool  showSessTags = input.bool(true, "Show Session Level Tags", group = G_VIS)
-bool  showSweepMk  = input.bool(true, "Show Sweep Markers", group = G_VIS)
-bool  showTgtChart = input.bool(true, "Show Target On Chart", group = G_VIS)
+bool  showZonesIn  = input.bool(true, "Show Liquidity Zones", group = G_VIS)
+bool  showLinesIn  = input.bool(true, "Show Liquidity Lines", group = G_VIS)
+bool  showEqIn     = input.bool(true, "Show Equal Levels", group = G_VIS)
+bool  showSessIn   = input.bool(true, "Show Session Level Tags", group = G_VIS)
+bool  showSweepIn  = input.bool(true, "Show Sweep Markers", group = G_VIS)
+bool  showTgtIn    = input.bool(true, "Show Target On Chart", group = G_VIS)
 int   topN         = input.int(3, "Show Top N Targets", minval = 1, maxval = 10, group = G_VIS)
-bool  showTierLbl  = input.bool(false, "Show Liquidity Strength Labels", group = G_VIS)
+bool  showTierIn   = input.bool(false, "Show Liquidity Strength Labels", group = G_VIS)
 float zoneThick    = input.float(0.25, "Zone Thickness (ATR)", minval = 0.05, maxval = 1.0, step = 0.05, group = G_VIS)
-bool  showFlipMk   = input.bool(true, "Show Liquidity Flip Markers", group = G_VIS)
-bool  showShiftMk  = input.bool(false, "Show Liquidity Shift Markers", group = G_VIS)
+bool  showFlipIn   = input.bool(true, "Show Liquidity Flip Markers", group = G_VIS)
+bool  showShiftIn  = input.bool(false, "Show Liquidity Shift Markers", group = G_VIS)
 float shiftThr     = input.float(10.0, "Shift Threshold (pct points)", minval = 2.0, maxval = 50.0, step = 1.0, group = G_VIS)
 int   shiftLook    = input.int(5, "Shift Lookback (bars)", minval = 1, maxval = 50, group = G_VIS)
+
+// Effective visibility: Video style shows only the two zones unless extras are enabled
+bool proVis       = not videoMode or vidExtras
+bool showDash     = showDashIn and proVis
+bool showZones    = showZonesIn and proVis
+bool showLines    = showLinesIn and proVis
+bool showEqTags   = showEqIn and proVis
+bool showSessTags = showSessIn and proVis
+bool showSweepMk  = showSweepIn and proVis
+bool showTgtChart = showTgtIn and proVis
+bool showTierLbl  = showTierIn and proVis
+bool showFlipMk   = showFlipIn and proVis
+bool showShiftMk  = showShiftIn and proVis
 
 // ─── Colors
 color bslCol   = input.color(#26a69a, "Buy-Side Liquidity (above)", group = G_COL)
@@ -1263,6 +1289,50 @@ if barstate.islast
         label.delete(csLoLb)
         csLoLn := na
         csLoLb := na
+
+// ════════════════════════════════════════════════════════════════════════════
+//  VIDEO STYLE: the chart split at price into two zones, each labelled with
+//  its share of the estimated active liquidity (upper zone = liquidity resting
+//  above price, lower zone = liquidity resting below price).
+// ════════════════════════════════════════════════════════════════════════════
+int   zHiOff = nz(ta.highestbars(high, zoneLen), 0)
+int   zLoOff = nz(ta.lowestbars(low, zoneLen), 0)
+float zHi    = nz(ta.highest(high, zoneLen), high)
+float zLo    = nz(ta.lowest(low, zoneLen), low)
+
+var box   upZone = na
+var box   dnZone = na
+var label upLbl  = na
+var label dnLbl  = na
+
+if barstate.islast and videoMode
+    int    minW  = math.max(3, math.round(zoneLen / 4.0))
+    int    lUp   = math.min(bar_index + zHiOff, bar_index - minW)
+    int    lDn   = math.min(bar_index + zLoOff, bar_index - minW)
+    float  px    = close
+    float  zTop  = math.max(zHi, px)
+    float  zBot  = math.min(zLo, px)
+    int    xLbl  = math.round((math.max(lUp, lDn) + bar_index) / 2.0)
+    float  upPct = math.round(effBuy, 1)
+    float  dnPct = 100.0 - upPct
+    string upNm  = zoneNames == "Sellers / Buyers" ? "Sellers" : zoneNames == "Buy-side / Sell-side" ? "Buy-side" : "Above"
+    string dnNm  = zoneNames == "Sellers / Buyers" ? "Buyers" : zoneNames == "Buy-side / Sell-side" ? "Sell-side" : "Below"
+    string zTip  = "Share of the currently scored active liquidity resting in this zone. An estimate of liquidity concentration - not a probability of price direction."
+    if na(upZone)
+        upZone := box.new(lUp, zTop, bar_index, px, border_width = 0, bgcolor = color.new(upZoneCol, zoneTransp))
+        dnZone := box.new(lDn, px, bar_index, zBot, border_width = 0, bgcolor = color.new(dnZoneCol, zoneTransp))
+        upLbl  := label.new(xLbl, (px + zTop) / 2.0, "", style = label.style_label_center, color = upZoneCol,
+             textcolor = color.white, size = size.normal, tooltip = zTip)
+        dnLbl  := label.new(xLbl, (zBot + px) / 2.0, "", style = label.style_label_center, color = dnZoneCol,
+             textcolor = color.white, size = size.normal, tooltip = zTip)
+    box.set_lefttop(upZone, lUp, zTop)
+    box.set_rightbottom(upZone, bar_index, px)
+    box.set_lefttop(dnZone, lDn, px)
+    box.set_rightbottom(dnZone, bar_index, zBot)
+    label.set_xy(upLbl, xLbl, (px + zTop) / 2.0)
+    label.set_xy(dnLbl, xLbl, (zBot + px) / 2.0)
+    label.set_text(upLbl, upNm + " " + str.tostring(upPct, "#0.0") + "%")
+    label.set_text(dnLbl, dnNm + " " + str.tostring(dnPct, "#0.0") + "%")
 
 // ════════════════════════════════════════════════════════════════════════════
 //  DASHBOARD

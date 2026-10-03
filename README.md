@@ -18,6 +18,13 @@ LAST SWEEP  BSL ✕ 25125.50 · 3 bars ago
 
 **What the percentage means:** it is the share of the currently scored *active* liquidity resting above price (buy-side) versus below price (sell-side). It is **not** a probability of direction. "92% SELL-SIDE" means 92% of the liquidity the model scores sits below price, not that there is a 92% chance price falls. The model uses only chart data: OHLCV, swings, session levels and HTF swings. It does not read an exchange order book.
 
+### Display styles
+* **Video** (default): the chart is split at the current price into two zones, matching the reference clip. A red zone above price is labelled `Sellers xx.x%` and a green zone below is labelled `Buyers yy.y%`. Each percentage is that zone's share of the estimated active liquidity, and the two always add up to 100%.
+  * The zones run from price to the highest high / lowest low of `Zone Lookback` bars (default 50).
+  * The labels can be changed to Buy-side/Sell-side or Above/Below.
+  * `Video: also show dashboard & levels` adds the Pro drawings on top.
+* **Pro:** the dashboard plus every liquidity pool, sweep and target drawn on the chart.
+
 ### Install
 In TradingView, open the Pine Editor, paste the whole file and click **Add to chart**.
 
