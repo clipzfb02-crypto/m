@@ -2360,6 +2360,9 @@ if barstate.islast and masterIn
         color  bBg  = color.new(colNeuIn, 25)
         color  bTc  = color.white
         int    vAge = bar_index - nz(vtBar, bar_index)
+        // Track record of this chart's virtual trades (after costs), so the result is visible in Simple View too
+        float  expB = wrN >= 1 ? (wrPosR - wrNegR) / wrN : 0.0
+        string stTxt = wrN >= 1 ? "\nThis chart: " + str.tostring(wrN, "0") + " trades · " + str.tostring(100.0 * wrW / wrN, "0") + "% win · " + (expB >= 0 ? "+" : "") + str.tostring(expB, "0.00") + "R/trade (" + (expB >= 0 ? "+$" : "-$") + str.tostring(math.abs(expB) * riskUsdIn, "0") + ")" : "\nThis chart: no trades yet"
         if not sigOnIn
             bTxt := "SIGNALS OFF"
         else if vtDir != 0
@@ -2375,7 +2378,7 @@ if barstate.islast and masterIn
                 bTxt := sTxt + " NOW  ·  " + qTxt + "\n" + lvlTxt
                 bBg  := vtDir == 1 ? colBullIn : colBearIn
             else
-                bTxt := sTxt + " RUNNING since " + str.format_time(vtT, "HH:mm", "America/New_York") + " NY  ·  too late to enter\nIf you are in: Stop " + str.tostring(vtSL, format.mintick) + "  ·  Target " + str.tostring(vtTP, format.mintick)
+                bTxt := sTxt + " RUNNING since " + str.format_time(vtT, "HH:mm", "America/New_York") + " NY  ·  too late to enter\nIf you are in: Stop " + str.tostring(vtSL, format.mintick) + "  ·  Target " + str.tostring(vtTP, format.mintick) + stTxt
                 bBg  := color.new(colPanelIn, 6)
                 bTc  := vtDir == 1 ? colBullIn : colBearIn
         else if bar_index - vtXBar <= 3
@@ -2388,11 +2391,11 @@ if barstate.islast and masterIn
             string dirTxt = primSide == 1 ? "DOL SAYS ▲ HIGHER" : primSide == -1 ? "DOL SAYS ▼ LOWER" : "NO DOL IN RANGE"
             string tgtTxt = primSide != 0 and not na(primTrig) ? "  ·  target " + str.tostring(primTrig, format.mintick) + "  ·  " + potTxt + " chance" : ""
             string whyTxt = bDay ? "daily limit reached" : newsBlock ? "news blackout" : flatNow or (intra and not hrsOk) ? "outside signal hours (09:30-11:30 · 13:30-15:45 NY)" : tradeModeIn == "DOL Direction" ? (dolWhy != "" ? dolWhy : "waiting for the next DOL") : gateIn and shN < gateNIn ? "Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "no proven edge on this chart" : "no setup yet"
-            bTxt := dirTxt + tgtTxt + "\nNo entry now: " + whyTxt
+            bTxt := dirTxt + tgtTxt + "\nNo entry now: " + whyTxt + stTxt
             bBg  := color.new(colPanelIn, 6)
             if chartSec != 60 and chartSec != 300
                 bTxt := bTxt + "\nTuned for 1m / 5m charts"
-        table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = simpleIn ? size.small : size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal.")
+        table.cell(ban, 0, 0, bTxt, text_color = bTc, bgcolor = bBg, text_size = simpleIn ? size.small : size.normal, text_font_family = font.family_monospace, tooltip = "Solid blue BUY NOW / solid red SELL NOW = a new trade signal (passed every filter, the Edge Gate and the daily limit). RUNNING = trade already open, too late to enter. Amber EXIT = the trade just closed. NO TRADE / WAIT = do not trade. The DOL target line is never a trade signal. 'This chart' = this chart's past virtual trades after costs (entry at the signal close, so real fills can differ); $ = average per trade at your Risk per Trade.")
 
     // ── Debug panel
     if debugIn

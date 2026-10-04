@@ -36,6 +36,10 @@ Blue and red appear only on real trades. Everything else is white, grey or amber
 | Amber **EXIT** | The trade just closed (target, stop, time stop or the 15:55 New York close). Close it if you are still in. |
 | Grey **NO TRADE** / **WAIT** | Do not trade. The banner says why. |
 
+- **This chart line.** The banner also shows this chart's own track record: virtual trades, win rate and average R
+  per trade after costs, with the $ amount at your Risk per Trade (for example `This chart: 14 trades · 43% win ·
+  -0.12R/trade (-$12)`). It is visible in Simple View, where the table is hidden. Entries are at the signal close,
+  so real fills can differ.
 - **One trade at a time.** A signal is only taken when no trade is open, so a triangle, an alert and the banner always describe the same trade.
 - **Day close.** An open trade is closed at 15:55 New York and nothing is carried overnight. This applies when Signal Hours are not Any Time.
 - **Alerts.** Entry alerts include entry, stop, target and size. There is also an exit alert.
