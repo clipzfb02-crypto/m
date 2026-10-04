@@ -2080,7 +2080,7 @@ if barstate.islast and masterIn
     string lsz    = f_sz(lblSizeIn)
     color  noCol  = color.new(#000000, 100)
 
-    // ── Active DOL: live read-out (PoT updates intrabar; the selection itself does not)
+    // ── Active DOL read-out (bar-close PoT, the same value the engine trades on)
     int    pIdx   = f_findId(zs, primId)
     string dolTxt = "—"
     string potTxt = "—"
