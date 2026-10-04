@@ -280,6 +280,8 @@ rvolIn     = input.float(1.2, "Min RVOL", minval = 0.1, maxval = 10.0, step = 0.
 sigKzIn    = input.bool(false, "Signals Only in London / New York", group = G_FLT, tooltip = "Uses the London and New York windows from the Sessions group.")
 sigHtf2In  = input.bool(false, "Also Require Macro-TF Alignment", group = G_FLT)
 sigHrsIn   = input.string("Auto", "Signal Hours (New York)", options = ["Auto", "Any Time", "RTH 09:30-16:00", "Core 09:30-11:30 + 13:30-15:45"], group = G_FLT, tooltip = "Auto = Core hours on futures, indices and stocks, Any Time on crypto and forex. Tested on 3.7 years of 1-minute Nasdaq-100 and S&P 500 data: overnight and after-hours signals have tiny stops, so costs ate 6-18% of every trade and lost 3-5x more than signals in the core New York hours.")
+ofOnIn     = input.bool(true, "Order Flow Filter (volume delta)", inline = "of", group = G_FLT, tooltip = "BUY only while buyers control the last N minutes, SELL only while sellers do. Approximate volume delta: each 1-minute bar's volume counts as buying when it closes up and selling when it closes down (similar to TradingView's Volume Delta; Pine has no bid / ask feed). 5-minute charts read the 1-minute bars inside each candle. Tested on MNQ / NQ and S&P, 1m and 5m (19 days of 1-minute and 49 days of 5-minute CME data, 42 days of 1-minute index data): with a 10-20 minute window, trades lost about 0.05R less per trade, with about half as many trades. The gain is small and not statistically proven, and the trades still lost money after costs on average. A 30-minute window did worse.")
+ofWinIn    = input.int(15, "Window (min)", minval = 1, maxval = 240, inline = "of", group = G_FLT)
 maxCostIn  = input.float(3.0, "Max Cost (% of Stop, 0 = off)", minval = 0.0, maxval = 100.0, step = 0.5, group = G_FLT, tooltip = "Skips a signal when the round-trip cost is more than this % of the stop distance. Tested on 1-minute NQ and S&P: signals with cost under 3% of the stop lost about 4x less than the rest. Tight stops on 1-minute charts are where costs do the damage.")
 
 // ── NEWS GUARD (Pine cannot read news feeds — this uses scheduled release windows + automatic spike detection)
@@ -1025,6 +1027,17 @@ float rngBar   = math.max(high - low, syminfo.mintick)
 bool  dispBull = not dispOnIn or (close > open and bodyAbs >= dispBodyIn * atrS and bodyAbs / rngBar >= 0.5)
 bool  dispBear = not dispOnIn or (close < open and bodyAbs >= dispBodyIn * atrS and bodyAbs / rngBar >= 0.5)
 bool  rvolOk   = not rvolOnIn or volPrev <= 0 or nz(volume) >= rvolIn * volPrev
+// Order flow (approximate volume delta): up-close volume minus down-close volume, from 1-minute bars
+float ofBar = nz(volume) * math.sign(close - open)
+if ofOnIn and chartSec > 60 and chartSec <= 3600
+    array<float> ofArr = request.security_lower_tf(syminfo.tickerid, "1", nz(volume) * math.sign(close - open))
+    if array.size(ofArr) > 0
+        ofBar := array.sum(ofArr)
+int   ofLen    = math.max(1, math.round(ofWinIn * 60.0 / chartSec))
+float ofVol    = math.sum(nz(volume), ofLen)
+float ofRat    = ofVol > 0 ? math.sum(ofBar, ofLen) / ofVol : na
+bool  ofBuyOk  = not ofOnIn or na(ofRat) or ofRat > 0
+bool  ofSellOk = not ofOnIn or na(ofRat) or ofRat < 0
 bool  inKz     = not na(time(timeframe.period, lonIn, tzStr)) or not na(time(timeframe.period, nyIn, tzStr))
 bool  kzOk     = not sigKzIn or not intra or inKz
 // Signal hours (New York time). Auto = Core hours on futures / indices / stocks, any time on crypto / forex.
@@ -1862,13 +1875,15 @@ if barstate.isconfirmed and masterIn and inWin
         else if primId == dolTrId
             dolWhy := "this DOL was already traded · next DOL soon"
         else if nz(primPot) < unlikelyIn
-            dolWhy := "DOL unlikely (PoT " + str.tostring(nz(primPot), "0") + "%)"
+            dolWhy := "DOL unlikely (chance under " + str.tostring(unlikelyIn, "0") + "%)"
         else if newsBlock or not hrsOk or flatNow
             dolWhy := "outside hours / news"
+        else if not (primSide == 1 ? ofBuyOk : ofSellOk)
+            dolWhy := "order flow against (" + (primSide == 1 ? "sellers" : "buyers") + " in control, last " + str.tostring(ofWinIn) + " min)"
         else
             dEnt := primSide
     else if not dolMode
-        dEnt := sigBull ? 1 : sigBear ? -1 : 0
+        dEnt := sigBull and ofBuyOk ? 1 : sigBear and ofSellOk ? -1 : 0
     if dEnt != 0
         int   dN  = dEnt
         float slN = dN == 1 ? (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS : (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
@@ -2206,8 +2221,10 @@ if barstate.islast and masterIn
     if pIdx >= 0
         Zn     p    = array.get(zs, pIdx)
         int    sd   = p.side
-        float  potL = f_potLive(f_liveDist(p, close), sd)
-        bool   unl  = potL < unlikelyIn
+        // One PoT number everywhere: the bar-close value the engine traded on (no intrabar flicker)
+        float  potL = nz(primPot, f_potLive(f_liveDist(p, close), sd))
+        bool   onTr = vtDir != 0 and vtDir == sd
+        bool   unl  = potL < unlikelyIn and not onTr
         color  dc   = unl ? colNeuIn : colDolIn
         string arw  = sd == 1 ? "above" : "below"
         dolTxt := (unl ? "UNLIKELY " : "") + f_kindTxt(p) + " " + arw
@@ -2224,7 +2241,7 @@ if barstate.islast and masterIn
             if not simpleIn
                 f_mkLbl(rT, p.t0, keyY, "", color.new(dc, 0), dc, label.style_circle, size.tiny, "DOL origin · " + f_srcList(p))
             string l1  = simpleIn ? "Target: " + f_tgtName(p) + (unl ? " (unlikely)" : "") : (unl ? "DOL UNLIKELY · " : "DOL TARGET · ") + f_kindTxt(p) + " " + arw
-            string l2  = simpleIn ? "PoT: " + str.tostring(potL, "0.0") + "%" : "PoT " + str.tostring(potL, "0.0") + "% · not a trade signal"
+            string l2  = (simpleIn ? "PoT: " : "PoT ") + str.tostring(potL, "0.0") + "%"
             string l3  = detailIn ? "\n" + f_srcList(p) + " · " + p.tf + " · " + str.tostring(p.dist, "0.0") + " ATR" : ""
             string tip = f_srcList(p) + " · " + p.tf + "\nDistance " + str.tostring(p.dist, "0.00") + " ATR" + "\nProximity " + str.tostring(p.fP, "0.00") + "  Freshness " + str.tostring(p.fF, "0.00") + "\nConfluence " + str.tostring(p.fC, "0.00") + "  Density " + str.tostring(p.fD, "0.00") + "\nStructure " + str.tostring(p.fS, "0.00") + "  HTF " + str.tostring(p.fH, "0.00") + "\nScore = structural significance · PoT = calibrated probability of touch within " + str.tostring(effHor) + " bars. Not a guarantee.\nThis is a liquidity target, NOT a buy / sell signal. Trade only the blue BUY / red SELL banner."
             f_mkLbl(rT, rightT, keyY, l1 + "\n" + l2 + l3, simpleIn ? color.new(#2A2A2E, 12) : color.new(colPanelIn, 8), dc, label.style_label_left, lsz, tip)
