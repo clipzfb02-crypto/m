@@ -46,6 +46,17 @@ Blue and red appear only on real trades. Everything else is white, grey or amber
   shrinks so the $ risk stays the same. On 1-minute charts this makes stops wide compared with the candles. 5-minute
   charts fit these stops better.
 
+- **Order Flow Filter (on, 15-minute window).** BUY only while buyers control the last 15 minutes, SELL only while
+  sellers do. Pine has no bid / ask feed, so this is approximate volume delta: each 1-minute bar's volume counts as
+  buying when it closes up and selling when it closes down. 5-minute charts read the 1-minute bars inside each candle.
+  - **Test:** MNQ / NQ and S&P on 1m and 5m. Data: 19 days of 1-minute and 49 days of 5-minute CME data, plus 42 days
+    of 1-minute index data.
+  - **Result:** with a 10-20 minute window, trades lost about 0.05R less per trade, with about half as many trades.
+    A 30-minute window did worse. The gain is small and not statistically proven, and the trades still lost money
+    after costs on average.
+- **One PoT number.** The DOL label, the banner and the trade decision all use the same bar-close PoT. The DOL never
+  reads "unlikely" while a trade toward it is open.
+
 ## Research behind v6
 A Python replica of the engine was run on 26 datasets: 13 markets on 5m and 1h, about 1.1M bars.
 - **Markets:** BTC, ETH, SOL, ES, NQ, GC, CL, EURUSD, GBPUSD, USDJPY, SPY, QQQ and TSLA.
