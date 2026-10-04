@@ -16,7 +16,7 @@
 //   • all engine state changes execute on confirmed bars only;
 //   • pivots are confirmed pivots anchored to their real candle;
 //   • all request.security() calls return [1]-offset values with lookahead_on (closed HTF bars only);
-//   • PoT on the label / table updates live, but target SELECTION only changes at bar close.
+//   • the DOL label, table and banner show the bar-close PoT the engine traded on; target SELECTION only changes at bar close.
 //
 // PoT (Probability of Touch) — validated out-of-sample on 13 markets × 2 timeframes (≈ 519k resolved targets):
 //   base   = blend of this market's EMPIRICAL excursion distribution (how far price actually travelled within
