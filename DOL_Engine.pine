@@ -262,7 +262,8 @@ tblPosIn  = input.string("Top Right", "Position", options = ["Top Right", "Top L
 tblSizeIn = input.string("Small", "Text Size", options = ["Tiny", "Small", "Normal"], group = G_TBL)
 
 // ── SIGNALS
-tradeModeIn = input.string("DOL Direction", "Trade Mode", options = ["DOL Direction", "Confirmed Signals"], group = G_SIG, tooltip = "DOL Direction: trade straight toward the DOL as soon as it is placed. BUY when the DOL is above, SELL when it is below, target = the DOL, stop beyond the nearest opposite liquidity. One trade per DOL; no Edge Gate wait. Confirmed Signals: only trade the stricter structure-break signals (fewer trades, Edge Gate applies). Neither mode is proven profitable: watch WIN / EDGE.")
+tradeModeIn = input.string("DOL Direction", "Trade Mode", options = ["DOL Direction", "Sweep Reversal", "Confirmed Signals"], group = G_SIG, tooltip = "DOL Direction: trade straight toward the DOL as soon as it is placed. BUY when the DOL is above, SELL when it is below, target = the DOL, stop beyond the nearest opposite liquidity. One trade per DOL; no Edge Gate wait.\nSweep Reversal: a candle runs a swing low / prior-day low (or high) and closes back inside → BUY (or SELL) at that close, stop just beyond the sweep wick, target = the nearest untaken liquidity on the other side paying at least the Sweep Min Reward : Risk.\nConfirmed Signals: only trade the stricter structure-break signals (fewer trades, Edge Gate applies).\nNo mode is proven profitable: watch the 'This chart' line in the banner.")
+swRRIn     = input.float(1.0, "Sweep Reversal: Min Reward : Risk", minval = 0.3, maxval = 10.0, step = 0.1, group = G_SIG, tooltip = "Sweep Reversal mode only. The target is the nearest untaken liquidity on the other side that pays at least this many R.")
 sigOnIn    = input.bool(true, "Show Execution Signals", group = G_SIG, tooltip = "Printed only on a CLOSED candle (never repaints or moves): execution-TF break in the HTF direction, with the DOL on the same side. Entry, stop and target are fixed at the signal.")
 sigReqSwIn = input.bool(true, "Require Opposite Liquidity Sweep", group = G_SIG)
 sigScoreIn = input.int(55, "Min DOL Score", minval = 0, maxval = 100, group = G_SIG)
@@ -1701,6 +1702,53 @@ if barstate.isconfirmed and masterIn and inWin
         lastSigB := bar_index
 
 // =====================================================================================================
+// LIQUIDITY SWEEPS (Sweep Reversal mode) — untaken chart swing highs / lows and the prior day's high / low.
+// A level is swept when a closed candle trades through it and closes back on the other side. Closed bars only.
+// =====================================================================================================
+var array<float> sqH = array.new<float>()
+var array<float> sqL = array.new<float>()
+bool swpBuy  = false
+bool swpSell = false
+if barstate.isconfirmed and masterIn and inWin
+    float sqPen = minPenIn * atrS
+    if newDay
+        if not na(pdh)
+            array.push(sqH, pdh)
+        if not na(pdl)
+            array.push(sqL, pdl)
+    int nqH = array.size(sqH)
+    if nqH > 0
+        for i = nqH - 1 to 0
+            float lv = array.get(sqH, i)
+            if high > lv + sqPen
+                swpSell := swpSell or close < lv
+                array.remove(sqH, i)
+    int nqL = array.size(sqL)
+    if nqL > 0
+        for i = nqL - 1 to 0
+            float lv = array.get(sqL, i)
+            if low < lv - sqPen
+                swpBuy := swpBuy or close > lv
+                array.remove(sqL, i)
+    if not na(ph)
+        array.push(sqH, ph)
+    if not na(pl)
+        array.push(sqL, pl)
+    while array.size(sqH) > 60
+        array.shift(sqH)
+    while array.size(sqL) > 60
+        array.shift(sqL)
+
+// Nearest untaken level on `dir` side that pays at least `minRew` (price units) from `px`
+f_sqPick(array<float> lv, int dir, float px, float minRew) =>
+    float best = na
+    for x in lv
+        float rw = (x - px) * dir
+        if rw >= minRew and (na(best) or rw < (best - px) * dir)
+            best := x
+    best
+
+// =====================================================================================================
 // WIN-RATE TRACKER — virtual trades, resolved on later bars only (gaps fill at the open · intrabar order = TradingView broker emulator)
 // =====================================================================================================
 // Shadow ledger: every signal is replayed with fixed target sizes until its stop or time stop, so each chart
@@ -1868,6 +1916,8 @@ if barstate.isconfirmed and masterIn and inWin
     // Entry at the signal close · stop beyond the swept liquidity · target by Target Mode · Edge Gate
     // DOL Direction mode: enter toward the DOL as soon as it is placed (one trade per DOL)
     bool dolMode = tradeModeIn == "DOL Direction"
+    bool swpMode = tradeModeIn == "Sweep Reversal"
+    bool fastMd  = dolMode or swpMode
     int  dEnt    = 0
     dolWhy := ""
     if dolMode and vtDir == 0
@@ -1883,15 +1933,27 @@ if barstate.isconfirmed and masterIn and inWin
             dolWhy := "order flow against (" + (primSide == 1 ? "sellers" : "buyers") + " in control, last " + str.tostring(ofWinIn) + " min)"
         else
             dEnt := primSide
-    else if not dolMode
+    else if swpMode and vtDir == 0
+        int sSd = swpBuy and not swpSell ? 1 : swpSell and not swpBuy ? -1 : 0
+        if sSd == 0
+            dolWhy := "waiting for a liquidity sweep"
+        else if newsBlock or not hrsOk or flatNow
+            dolWhy := "outside hours / news"
+        else if not (sSd == 1 ? ofBuyOk : ofSellOk)
+            dolWhy := "order flow against (" + (sSd == 1 ? "sellers" : "buyers") + " in control, last " + str.tostring(ofWinIn) + " min)"
+        else
+            dEnt := sSd
+    else if not fastMd
         dEnt := sigBull and ofBuyOk ? 1 : sigBear and ofSellOk ? -1 : 0
     if dEnt != 0
         int   dN  = dEnt
         float slN = dN == 1 ? (bar_index - lastSslSwB <= sigWinIn and not na(lastSslLo) ? lastSslLo : swLo) - stopBufIn * atrS : (bar_index - lastBslSwB <= sigWinIn and not na(lastBslHi) ? lastBslHi : swHi) + stopBufIn * atrS
+        if swpMode
+            slN := dN == 1 ? low - stopBufIn * atrS : high + stopBufIn * atrS
         float rkN = (close - slN) * dN
         // DOL mode never skips for a tight stop: the stop is widened until the round-trip cost is at most
         // Max Cost % of the risk (MNQ ≈ 33 pts · MES ≈ 17 pts · ES ≈ 12.5 pts at 3 %). Size shrinks to keep $ risk fixed.
-        if dolMode
+        if fastMd
             if rkN <= 0
                 slN := dN == 1 ? swLo - stopBufIn * atrS : swHi + stopBufIn * atrS
                 rkN := (close - slN) * dN
@@ -1915,6 +1977,10 @@ if barstate.isconfirmed and masterIn and inWin
                 tpN := rwD >= minRRIn * rkN and rwD >= minTp ? primTrig : na
                 if na(tpN)
                     dolWhy := "DOL too close for the stop (< " + str.tostring(minRRIn, "0.0") + "R)"
+            else if swpMode
+                tpN := f_sqPick(dN == 1 ? sqH : sqL, dN, close, math.max(swRRIn * rkN, minTp))
+                if na(tpN)
+                    dolWhy := "sweep, but no target paying " + str.tostring(swRRIn, "0.0") + "R"
             else if tgtModeIn == "Target Win Rate"
                 float lq = math.log(tgtWrIn / (100.0 - tgtWrIn)) / 0.908
                 float qq = 1.0 / (1.0 + math.exp(-lq))
@@ -1930,7 +1996,7 @@ if barstate.isconfirmed and masterIn and inWin
                 gTgt   := array.get(shM, kN)
                 gEdge  := shN > 1 ? array.get(shSm, kN) / shN : na
                 gState := shN < gateNIn ? 0 : not na(lN) and lN > 0 ? 1 : -1
-                gOk    := dolMode or not gateIn or gState == 1
+                gOk    := fastMd or not gateIn or gState == 1
             bool dayOk = not dayGuardIn or (dayR > -dayLossIn and dayT < dayMaxIn)
             // One trade at a time: a signal is only taken when flat, so the marker, alert and banner always match
             if not na(tpN) and gOk and dayOk and vtDir == 0 and not flatNow
@@ -1948,7 +2014,7 @@ if barstate.isconfirmed and masterIn and inWin
                 vtBE     := false
                 if dolMode
                     dolTrId := primId
-            if not dolMode and array.size(sdD) < 80
+            if not fastMd and array.size(sdD) < 80
                 array.push(sdD, dN)
                 array.push(sdEn, close)
                 array.push(sdSL, slN)
@@ -2334,8 +2400,8 @@ if barstate.islast and masterIn
             table.cell(tbl, 0, 13, "EDGE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Expectancy (average R per trade) and maximum drawdown of the virtual trades, in R.")
             table.cell(tbl, 1, 13, "", text_size = tsz)
             table.cell(tbl, 2, 13, edTxt, text_color = wrCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
-            string gtTxt = tradeModeIn == "DOL Direction" ? "OFF · DOL mode" : not gateIn ? "OFF" : gState == 0 ? "LEARNING · " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : (gState == 1 ? "OPEN · " : "PAUSED · ") + (na(gEdge) ? "—" : (gEdge >= 0 ? "+" : "") + str.tostring(gEdge, "0.00") + "R @ " + str.tostring(gTgt, "0.##") + "R")
-            color  gtCol = tradeModeIn == "DOL Direction" or not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colTextIn : C_WARN
+            string gtTxt = tradeModeIn != "Confirmed Signals" ? "OFF · " + tradeModeIn : not gateIn ? "OFF" : gState == 0 ? "LEARNING · " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : (gState == 1 ? "OPEN · " : "PAUSED · ") + (na(gEdge) ? "—" : (gEdge >= 0 ? "+" : "") + str.tostring(gEdge, "0.00") + "R @ " + str.tostring(gTgt, "0.##") + "R")
+            color  gtCol = tradeModeIn != "Confirmed Signals" or not gateIn or gState == 0 ? colNeuIn : gState == 1 ? colTextIn : C_WARN
             table.cell(tbl, 0, 14, "GATE", text_color = lbl, text_size = tsz, text_halign = text.align_left, text_font_family = font.family_monospace, tooltip = "Edge Gate: average profit per signal (after costs) of the current target size, replayed on " + str.tostring(shN, "0") + " past signals of this chart. OPEN = proven positive → signals are taken. PAUSED = no proven edge → signals are skipped. Status updates at each signal.")
             table.cell(tbl, 1, 14, "", text_size = tsz)
             table.cell(tbl, 2, 14, gtTxt, text_color = gtCol, text_size = tsz, text_halign = text.align_right, text_font_family = font.family_monospace)
@@ -2390,7 +2456,7 @@ if barstate.islast and masterIn
             bool   bDay   = dayGuardIn and (dayR <= -dayLossIn or dayT >= dayMaxIn)
             string dirTxt = primSide == 1 ? "DOL SAYS ▲ HIGHER" : primSide == -1 ? "DOL SAYS ▼ LOWER" : "NO DOL IN RANGE"
             string tgtTxt = primSide != 0 and not na(primTrig) ? "  ·  target " + str.tostring(primTrig, format.mintick) + "  ·  " + potTxt + " chance" : ""
-            string whyTxt = bDay ? "daily limit reached" : newsBlock ? "news blackout" : flatNow or (intra and not hrsOk) ? "outside signal hours (09:30-11:30 · 13:30-15:45 NY)" : tradeModeIn == "DOL Direction" ? (dolWhy != "" ? dolWhy : "waiting for the next DOL") : gateIn and shN < gateNIn ? "Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "no proven edge on this chart" : "no setup yet"
+            string whyTxt = bDay ? "daily limit reached" : newsBlock ? "news blackout" : flatNow or (intra and not hrsOk) ? "outside signal hours (09:30-11:30 · 13:30-15:45 NY)" : tradeModeIn != "Confirmed Signals" ? (dolWhy != "" ? dolWhy : tradeModeIn == "Sweep Reversal" ? "waiting for a liquidity sweep" : "waiting for the next DOL") : gateIn and shN < gateNIn ? "Edge Gate learning " + str.tostring(shN, "0") + "/" + str.tostring(gateNIn) : gateIn and gState == -1 ? "no proven edge on this chart" : "no setup yet"
             bTxt := dirTxt + tgtTxt + "\nNo entry now: " + whyTxt + stTxt
             bBg  := color.new(colPanelIn, 6)
             if chartSec != 60 and chartSec != 300
@@ -2424,8 +2490,8 @@ if barstate.islast and masterIn
 // =====================================================================================================
 plotshape(sigOnIn and takeBull, "BUY Signal", shape.triangleup, location.belowbar, colBullIn, size = size.small)
 plotshape(sigOnIn and takeBear, "SELL Signal", shape.triangledown, location.abovebar, colBearIn, size = size.small)
-plotshape(sigOnIn and tradeModeIn != "DOL Direction" and sigBull and not takeBull, "Skipped Long (no edge / daily limit / in trade)", shape.xcross, location.belowbar, color.new(colNeuIn, 40), size = size.tiny)
-plotshape(sigOnIn and tradeModeIn != "DOL Direction" and sigBear and not takeBear, "Skipped Short (no edge / daily limit / in trade)", shape.xcross, location.abovebar, color.new(colNeuIn, 40), size = size.tiny)
+plotshape(sigOnIn and tradeModeIn == "Confirmed Signals" and sigBull and not takeBull, "Skipped Long (no edge / daily limit / in trade)", shape.xcross, location.belowbar, color.new(colNeuIn, 40), size = size.tiny)
+plotshape(sigOnIn and tradeModeIn == "Confirmed Signals" and sigBear and not takeBear, "Skipped Short (no edge / daily limit / in trade)", shape.xcross, location.abovebar, color.new(colNeuIn, 40), size = size.tiny)
 plotshape(sigOnIn and evExit, "Trade Exit", shape.diamond, location.abovebar, color.new(C_WARN, 0), size = size.tiny)
 bgcolor(masterIn and newsBgIn and newsBlock ? color.new(C_WARN, 93) : na, title = "News Blackout")
 plot(primScr, "DOL Score", color = colNeuIn, display = display.data_window)
