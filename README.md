@@ -45,6 +45,15 @@ Blue and red appear only on real trades. Everything else is white, grey or amber
 - **Alerts.** Entry alerts include entry, stop, target and size. There is also an exit alert.
 - **Trade Mode: DOL Direction (default).** BUY when the DOL is above price, SELL when it is below, target = the DOL,
   one trade per DOL. Built for MNQ and ES / MES on 1-minute and 5-minute charts.
+- **Trade Mode: Sweep Reversal.** A candle runs a swing low or the prior day's low and closes back above it: BUY at
+  that close. Highs work the same way for SELL. The stop goes just beyond the sweep wick (widened to the minimum stop),
+  and the target is the nearest untaken liquidity on the other side paying at least 1R (Sweep Min Reward : Risk).
+  - **Test:** MNQ / NQ and S&P on 1m and 5m, costs included. Data: 4 weeks of 1-minute and 10 weeks of 5-minute CME
+    data, plus 6 weeks of 1-minute index data (March to April 2025).
+  - **Without the order flow filter:** 1,350 trades, 38% win, -0.06R per trade.
+  - **With the order flow filter:** 357 trades, 49% win, +0.09R per trade. It was positive only in the March to April
+    2025 data and negative in the recent CME data, so it is not proven.
+  - **DOL Direction with order flow, same data:** 1,235 trades, 53% win, -0.02R per trade.
 - **Minimum stop.** In DOL Direction mode a stop that is too tight for the costs is widened instead of skipping the
   trade, so costs stay under 3% of the risk: about 33 points on MNQ, 17 on MES and 12.5 on ES. The contract count
   shrinks so the $ risk stays the same. On 1-minute charts this makes stops wide compared with the candles. 5-minute
