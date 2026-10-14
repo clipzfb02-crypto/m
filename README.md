@@ -1,8 +1,6 @@
-# DOL Engine · Draw on Liquidity
+# DOL Engine v2 · Draw on Liquidity
 
-An open-source TradingView indicator (Pine Script v6) that finds, scores and tracks liquidity levels, then highlights the one most likely to be the market's next **Draw on Liquidity (DOL)**.
-
-It does not plot every swing and gap. It keeps a small pool of candidate levels, scores each out of 100 on every confirmed bar and draws only the winner as a target zone. A few secondary targets can be shown too.
+An open-source TradingView indicator (Pine Script v6) that finds, scores and tracks liquidity, then highlights the pool the market is most likely drawing to next: the **Draw on Liquidity (DOL)**. The indicator also records how its own past picks played out on the chart you're viewing.
 
 > This is an independent implementation written from a public feature description. It shares no code with any commercial script.
 
@@ -12,64 +10,97 @@ It does not plot every swing and gap. It keeps a small pool of candidate levels,
 2. Paste the contents of [`indicators/dol_engine.pine`](indicators/dol_engine.pine).
 3. Click **Add to chart**.
 
-Keep the chart timeframe **at or below the Execution TF** of the selected Trading Mode. The bias table shows a warning if it is higher.
+Keep the chart timeframe **at or below the Execution TF** of the selected Trading Mode. The panel shows a warning when it is higher.
+
+## What it looks at
+
+| Source | Details |
+|---|---|
+| **Chart swings** | BSL above swing highs, SSL below swing lows. Equal highs and lows fold into one pool, which moves to the **outermost** print. |
+| **STF / HTF swings** | Confirmed pivots from the sub-structure and structure timeframes, kept only if they are still unswept on their own timeframe. |
+| **Key liquidity** | PDH/PDL, PWH/PWL, and Asia, London and NY-AM session highs and lows. Each zone is anchored to the exact candle that printed it. |
+| **Imbalances** | Chart FVGs with a displacement quality gate, plus HTF FVGs (non-repainting `request.security`). |
+| **Blocks** | Order blocks from the leg that broke structure. Quality depends on imbalance in the leg, liquidity taken at the origin, and leg size. A block that was already revisited is skipped. **Breakers** only come from blocks that swept liquidity. |
+
+External pools (STF/HTF swings and key levels) live in a **registry**. When price drifts too far they leave the scoring pool, and they come back once price returns within range.
 
 ## How a level is scored
 
-Every level in the pool gets four pillar scores between 0 and 1. These are blended with user weights into a score out of 100:
+`score = 100 × mult × Σ(weight × pillar) / Σ weights`
 
-| Pillar | What it measures | Default weight |
+| Pillar | Default weight | Measures |
 |---|---|---|
-| **Proximity** | ATR-normalised distance from price: `1 − dist / MaxATR`, and 0 beyond *Max ATR Distance*. Beyond *Max ATR × Eject Multiplier* the level is ejected from the pool. | 35 |
-| **Freshness** | Exponential decay: `0.5 ^ (age / half-life)` | 20 |
-| **Confluence** | Overlap (within *Confluence Tolerance*) with PDH, PDL, daily EQ, the Midnight / London / NY opens and the HTF range EQ. HTF and STF swing levels get extra hits. The level also gets a bonus when it sits on the side the HTF bias points to. | 25 |
-| **Density** | For BSL/SSL: equal highs or lows folded into the level, candle *coiling* (overlap ratio) and *inducement sweeps* before the level formed. For gaps and blocks: coiling and inducement. | 20 |
+| **Proximity** | 25 | ATR distance blended with first-passage *reachability*. It tapers below *Min Target Distance*, because a zone price is sitting on is being delivered, not drawn to. It is 0 beyond *Max ATR Distance*. |
+| **Freshness** | 10 | Liquidity *matures* (stops build up for a while), then slowly goes stale. Imbalances decay with a half-life. Higher-timeframe levels age in their own timeframe. |
+| **Confluence** | 15 | Overlap with PDH/PDL, PWH/PWL, the midnight / London / NY opens, the daily EQ and the HTF dealing-range EQ. |
+| **Density** | 20 | For liquidity, the *magnitude* of the pool: equal highs/lows, stacked pools, tests, swing prominence, and source tier (PW > PD > session > HTF > STF > chart). It also counts coiling and inducement. For imbalances it is displacement quality. |
+| **Draw** | 30 | Alignment with the order-flow vector **D** ∈ [-1, 1]. D combines MTF swing structure, recent displacement, and the outcome of recent liquidity raids: a raid that holds means continuation, a raid that rejects means reversal. |
 
-The highest score becomes the active DOL, as long as it clears *Min Score for DOL*. A challenger has to beat the current target by *Switch Hysteresis* points to take over, which stops the target from flickering.
+`mult` adjusts the score:
+- *Origin lockout*: a fresh FVG, OB or breaker is the origin of the move, not its target, until price has left it.
+- *Inner-pool* penalty: the outermost pool in a stack is the draw.
+- *Counter-draw* penalty.
+- *Partial mitigation*.
+- *Killzone affinity*: London raids Asia; NY raids London and the previous day.
+- *Volume-profile path cost*: thin-volume paths score higher than high-volume walls.
+- *Adaptive calibration* from the accuracy ledger.
 
-### Level sources
+**Selection** first considers levels on the side D points to. If none qualifies, it shows a `⚠ COUNTER-DRAW` target. A challenger must beat the current DOL by the hysteresis (double that to flip sides) on **two consecutive bars**. Outside killzones the hysteresis widens. A target whose side no longer matches the draw is ghosted as `⊘ INVALIDATED`.
 
-* **BSL / SSL**: confirmed chart swing highs and lows, plus swings from the HTF and STF structure. Equal highs and lows within tolerance merge into a single level and raise its density.
-* **Fair Value Gaps**: three-candle imbalances above a minimum ATR size.
-* **Order Blocks**: when a candle body closes through the last swing, the last opposite-close candle at the origin of the leg.
-* **Breakers**: order blocks that price later closed through. Their polarity flips.
+## On the chart
 
-The pool is capped at *Pool Size*. When it overflows, the weakest level that isn't the active target is dropped.
+- **DOL zone**: opacity follows the score. It has a neon core line, a tether from price, and a terminal HUD showing:
+  - type and tags (`EQx2 · STK1 · T3`), the score meter, and PoT % with its reach class (`CORE`, `EXTENDED` or `STRETCH`);
+  - typical bars to hit, the draw vector, the current killzone, distance and age;
+  - **R:R · WIN % · EV** against an **invalidation** placed just beyond the nearest opposing pool.
+- **HTF Objective**: the strongest pool on the draw side, ranked without proximity.
+- **Secondary targets**, the optional **candidate pool**, and optional **reach bands**: the empirical median and 80th-percentile move over the PoT horizon.
+- **iFVG** zones with a CE line, removed after too many body closes inside them.
+- **LVN** zones from the 1H volume profile. They are off by default.
+- **Ghost trail** of targets marked `✕ SWEPT`, `⊘ EJECTED` or `⊘ INVALIDATED`.
+- **Themes**: Neon, Matrix, Ice, Mono or Custom.
 
-## Modules
+## Terminal panel
 
-* **Trading Modes**: sets the HTF, STF and Execution timeframes.
+- **Bias by timeframe**: swing bias and internal bias for the HTF, STF and Execution timeframes, plus where price sits in each dealing range (premium or discount, as a %).
+- **Draw**: the order-flow draw vector with a meter.
+- **Target**: score, PoT, reach class and distance, then R:R, race WIN % and EV.
+- **Pool**: the scoring pool, external registry and iFVG counts.
+- **Accuracy**:
+  - **DOL HIT %** with its Wilson 95% interval and the rolling last-50 rate.
+  - **EDGE**: hits above what a *random level at the same distance* would get, with a z-score and a verdict (`✓ EDGE`, `~ WEAK` or `✕ NO EDGE`).
+  - **BARS→HIT**: average and median bars to hit, plus *heat*, the 80th-percentile adverse excursion in ATR.
+  - The Full view adds per-family hit rates and race stats (win %, average R, profit factor).
 
-  | Mode | HTF | STF | Execution |
-  |---|---|---|---|
-  | Swing | W | D | 4H |
-  | Day Trading | 4H | 1H | 15m |
-  | Scalping | 1H | 15m | 5m |
-  | Custom | your choice | your choice | your choice |
+## Probability of Touch
 
-* **DOL zones**: the target is drawn as a zone, not a line. It stretches left to the nearest historical candle that printed the level. A touch anywhere on the zone's near edge counts as a sweep. The terminal-style readout shows the level type, score meter, PoT and ATR distance. Hover over it to see the four pillar scores.
-* **Probability of Touch (PoT%)**: the chance that price touches the zone within *PoT Horizon* bars. It uses a first-passage (reflection principle) model with recent bar volatility and an optional drift term, and is capped at 95%. *Minimum PoT to Show DOL* hides targets below a threshold.
-* **iFVG**: unmitigated FVGs are watched. When a candle closes fully through one, it flips into an inversion zone with the opposite polarity. Once more than *Max Body Closes Inside* candles close inside it, or price closes back through it, the zone is removed.
-* **LVN (Low Volume Nodes)**: 1H OHLCV bars build a background volume profile. 60% of each bar's volume is spread across its range and 40% across its body. The nearest low-volume runs above and below price are drawn. This module is off by default.
-* **Ghost Trail**: when the active DOL is swept or ejected, a faded copy stays on the chart, marked `SWEPT` or `EJECTED`.
-* **Bias Table**: shows bias for HTF, STF and Execution. Bias flips only when a candle **body** closes through the last confirmed swing node. The table also shows premium or discount against each timeframe's range EQ, plus the active target, PoT and pool status.
+- **Analytic**: first-passage probability for a random walk with drift, using recent bar volatility.
+- **Empirical** (the default): blends in how often price on this symbol actually travelled that far within the horizon, split by HTF regime and learned bar by bar from closed history. The analytic model acts as a Bayesian prior.
+
+Both models are capped at 95%. The readout is deliberately live and updates every tick.
 
 ## Alerts
 
 | Alert | Fires when |
 |---|---|
-| New DOL Target Active | the engine switches to a new highest-scoring level (on bar close) |
-| New iFVG Formed | an FVG inverts (on bar close) |
+| New DOL Target Active | the engine commits to a new target that passes the PoT filter (bar close) |
+| New iFVG Formed | an FVG inverts (bar close) |
 | DOL Target Swept | real-time price touches the active DOL zone (intrabar) |
+| Draw Direction Flip | the order-flow draw flips side (bar close) |
 
-Each event also calls `alert()` with a detailed message. Use **Any alert() function call** to get the level type, price and score.
+Each event also calls `alert()` with a detailed message. Use **Any alert() function call** to receive it.
 
 ## Repainting
 
-* Pool updates, scoring, target selection, iFVG and breaker logic only run when `barstate.isconfirmed` is true.
-* Every `request.security()` call reads `[1]`-offset series with `barmerge.lookahead_on`. Historical bars only see higher-timeframe bars that had already closed.
-* The **PoT readout** and the **DOL Target Swept** alert are deliberately live. They update every tick from the unclosed bar.
+- Pool updates, scoring, selection, the ledger, iFVG and breaker logic only run when `barstate.isconfirmed` is true.
+- Every `request.security()` call reads `[1]`-offset series with `barmerge.lookahead_on`, and never at a timeframe below the chart's.
+- On charts above 1H, the volume profile uses `request.security_lower_tf` on closed bars.
+- The **PoT readout** and the **DOL Target Swept** alert are deliberately live.
+
+## Performance
+
+Levels are tracked on every bar. Scoring, selection and the ledger run on the last *Calculation Depth* bars (default 5000). Raise that setting for longer accuracy statistics, or lower it for faster loading.
 
 ## Disclaimer
 
-This is for education only. It is not financial advice.
+This is for education only. It is not financial advice. The accuracy panel describes the indicator's past behaviour on the loaded history. It does not guarantee future results.
