@@ -447,11 +447,15 @@ f_race(float a, float b, float sig, float mu) =>
 f_raceH(float a, float b, float sig, float mu, int h) =>
     float pInf = f_race(a, b, sig, mu)
     float p    = pInf
-    if a > 0 and b > 0 and sig > 0
+    if a > 0 and b > 0 and sig > 0 and h > 0
         float L    = a + b
         float nu   = mu * mu / (2.0 * sig * sig)
         float tail = 0.0
-        for n = 1 to 30
+        // enough terms that the first dropped one has decayed by e^-40 (short
+        // horizons over wide barriers converge slowly)
+        float nX   = L / (math.pi * sig) * math.sqrt(80.0 / h)
+        int   nT   = nX >= 400.0 ? 400 : math.max(12, int(math.ceil(nX)))
+        for n = 1 to nT
             float lam = 0.5 * math.pow(n * math.pi * sig / L, 2)
             float c   = 2.0 / (n * math.pi) * (n % 2 == 1 ? 1.0 : -1.0) * math.sin(n * math.pi * b / L)
             tail += c * lam / (lam + nu) * math.exp(math.min(50.0, mu * a / (sig * sig) - (lam + nu) * h))
@@ -1066,8 +1070,10 @@ f_findLiq(array<Level> lvls, int kind, float px, float tol) =>
 // the density (the pool keeps maturing: its age is not reset); a print beyond the
 // stored one moves the level to the outermost extreme (stops sit beyond it) and
 // carries any open ledger record with it; a higher-tier source upgrades the level.
-f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool countEq) =>
-    if countEq
+// The candle that printed a PDH / PWH / session extreme confirming later as a
+// chart pivot is the same print, not an equal high / low.
+f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool countEq, int pivBar) =>
+    if countEq and (math.abs(px - lv.price) > syminfo.mintick * 0.5 or pivBar != lv.bornBar)
         lv.eqCount += 1
     bool outer = kind == 0 ? px > lv.price + syminfo.mintick * 0.5 : px < lv.price - syminfo.mintick * 0.5
     if outer
@@ -1086,10 +1092,10 @@ f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool cou
     lv.prom := math.max(lv.prom, nz(prom))
     outer
 
-f_mergeLiq(array<Level> lvls, int kind, float px, int src, float tol, float prom, float hlm, bool countEq) =>
+f_mergeLiq(array<Level> lvls, int kind, float px, int src, float tol, float prom, float hlm, bool countEq, int pivBar) =>
     int j = f_findLiq(lvls, kind, px, tol)
     if j >= 0
-        f_mergeAt(lvls.get(j), kind, px, src, prom, hlm, countEq)
+        f_mergeAt(lvls.get(j), kind, px, src, prom, hlm, countEq, pivBar)
     j >= 0
 
 // Finds the nearest historical candle that printed `lvl`. Returns [anchorBar,
@@ -1696,7 +1702,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         obSwingHBar := bar_index - pivLen
         if useLiq
             float promH = (ph - llR) / atr
-            if not f_mergeLiq(pool, 0, ph, 0, eqPx, promH, 1.0, true)
+            if not f_mergeLiq(pool, 0, ph, 0, eqPx, promH, 1.0, true, bar_index - pivLen)
                 [aBH, okH] = f_anchorScan(ph, true, pivLen + 2)
                 if okH
                     nextId += 1
@@ -1708,7 +1714,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         obSwingLBar := bar_index - pivLen
         if useLiq
             float promL = (hhR - pl) / atr
-            if not f_mergeLiq(pool, 1, pl, 0, eqPx, promL, 1.0, true)
+            if not f_mergeLiq(pool, 1, pl, 0, eqPx, promL, 1.0, true, bar_index - pivLen)
                 [aBL, okL] = f_anchorScan(pl, false, pivLen + 2)
                 if okL
                     nextId += 1
@@ -1748,13 +1754,15 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         if nyEnd
             regNew := f_pushExt(extReg, nyH, true, 5, nyHB, (nyH - nyL) / atr * 0.5, 1.0) or regNew
             regNew := f_pushExt(extReg, nyL, false, 5, nyLB, (nyH - nyL) / atr * 0.5, 1.0) or regNew
-    // over capacity: evict the lowest-tier, farthest, oldest pool (never PWH/PDH just for being old)
+    // over capacity: evict the weakest pool, ranked by tier decayed on its own
+    // freshness clock. Distance is ignored: far pools are what the registry keeps
+    // for re-entry, so a PWH outlives many STF pivots.
     while extReg.size() > 60
         int   xI = 0
         float xK = 1e100
         for i = 0 to extReg.size() - 1
             Ext   ex  = extReg.get(i)
-            float key = f_tierW(ex.src) - math.abs(ex.px - close) / (atrE * ejectD) - (bar_index - ex.bornBar) * 1e-6
+            float key = f_tierW(ex.src) * math.pow(0.5, (bar_index - ex.bornBar) / (4.0 * halfLife * math.max(ex.hlMult, 1.0)))
             if key < xK
                 xK := key
                 xI := i
@@ -1781,7 +1789,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                         best := gap
                         jx   := i
                 if jx >= 0
-                    f_mergeAt(pool.get(jx), k, e.px, e.src, e.prom, e.hlMult, false)
+                    f_mergeAt(pool.get(jx), k, e.px, e.src, e.prom, e.hlMult, false, -1)
                 else
                     nextId += 1
                     Level ne = f_newLevel(nextId, k, e.src, e.isHigh ? e.px + wPx : e.px, e.isHigh ? e.px : e.px - wPx, e.px, e.anchorBar, e.bornBar, coilScore, indScore)
