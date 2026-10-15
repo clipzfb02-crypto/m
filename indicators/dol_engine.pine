@@ -281,12 +281,12 @@ color cText = switch theme
     => #C9D1D9
 
 // ── Derived constants ─────────────────────────────────────────────────────────
-const int NB  = 40
-const int NB1 = 41
+const int NB  = 60
+const int NB1 = 61
 float wSum    = math.max(wProx + wFresh + wConf + wDens + wDraw, 1e-9)
 int   H       = math.min(potH, 450)
 float delivAt = delivIn == "Touch" ? 0.0 : delivIn == "Full Fill" ? 1.0 : 0.5
-float bStep   = maxATR / NB
+float bStep   = math.max(maxATR * ejectMult, 10.0) / NB   // excursion grid reaches the eject distance
 float chartS  = math.max(timeframe.in_seconds(), 1)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -366,6 +366,9 @@ type Trial
     float pBase
     float pRace
     float rr0
+    float d0     = 0.0
+    bool  liq    = false
+    float stopR  = -1.0
     float mae    = 0.0
     int   bars   = 0
     int   race   = 0
@@ -437,6 +440,23 @@ f_race(float a, float b, float sig, float mu) =>
             float eA = math.exp(math.max(-50.0, math.min(50.0, -k * a)))
             p := (1.0 - eB) / (eA - eB)
     math.max(0.0, math.min(1.0, nz(p, 0.5)))
+
+// P(+a is reached first AND within h bars): the infinite-horizon race minus the
+// probability flux through +a after h (eigen-expansion of Brownian motion with
+// drift absorbed at both barriers).
+f_raceH(float a, float b, float sig, float mu, int h) =>
+    float pInf = f_race(a, b, sig, mu)
+    float p    = pInf
+    if a > 0 and b > 0 and sig > 0
+        float L    = a + b
+        float nu   = mu * mu / (2.0 * sig * sig)
+        float tail = 0.0
+        for n = 1 to 30
+            float lam = 0.5 * math.pow(n * math.pi * sig / L, 2)
+            float c   = 2.0 / (n * math.pi) * (n % 2 == 1 ? 1.0 : -1.0) * math.sin(n * math.pi * b / L)
+            tail += c * lam / (lam + nu) * math.exp(math.min(50.0, mu * a / (sig * sig) - (lam + nu) * h))
+        p := f_clamp(pInf - tail, 0.0, pInf)
+    p
 
 f_logit(float p) =>
     float q = math.max(0.005, math.min(0.995, p))
@@ -552,15 +572,17 @@ f_cell(table t, int c, int r, string txt, color tc, color bg) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 // LEVEL METHODS
 // ═══════════════════════════════════════════════════════════════════════════════
-// Edge of the zone that faces price; touching it counts as a sweep.
+// Edge of the zone that faces price.
 method nearEdge(Level this) =>
     this.side == 1 ? this.bottom : this.top
 
 method distance(Level this, float px) =>
     this.side == 1 ? this.bottom - px : px - this.top
 
+// Liquidity is swept when price trades through it (an exact equal high / low is
+// more resting liquidity, not a raid); an imbalance is reached on a touch.
 method touched(Level this, float hi, float lo) =>
-    this.side == 1 ? hi >= this.bottom : lo <= this.top
+    this.kind <= 1 ? (this.side == 1 ? hi > this.bottom : lo < this.top) : (this.side == 1 ? hi >= this.bottom : lo <= this.top)
 
 method isLiquidity(Level this) =>
     this.kind <= 1
@@ -601,7 +623,7 @@ method evaluate(Level this, float px, float atrV, array<float> anchors, float co
     float dist  = math.max(0.0, this.distance(px))
     float dAtr  = dist / atrV
     float lin   = dAtr >= maxATR ? 0.0 : 1.0 - dAtr / maxATR
-    float reach = sig > 0 ? f_pot(dist, sig, mu * this.side, potH) / 0.95 : lin
+    float reach = dAtr >= maxATR ? 0.0 : sig > 0 ? f_pot(dist, sig, mu * this.side, potH) / 0.95 : lin
     float taper = minDistATR > 0 ? math.min(1.0, dAtr / minDistATR) : 1.0
     this.prox  := dAtr >= maxATR ? 0.0 : (0.5 * lin + 0.5 * reach) * (0.30 + 0.70 * taper)
     float age   = float(bar_index - this.bornBar) / math.max(this.hlMult, 1.0)
@@ -610,9 +632,11 @@ method evaluate(Level this, float px, float atrV, array<float> anchors, float co
         this.fresh := (0.35 + 0.65 * (1.0 - math.exp(-age / (0.25 * halfLife)))) * math.pow(0.5, age / (4.0 * halfLife))
     else
         this.fresh := math.pow(0.5, age / halfLife)
-    int hits = 0
+    int   hits = 0
+    float aLo  = this.bottom - confTol
+    float aHi  = this.top + confTol
     for a in anchors
-        if not na(a) and a >= this.bottom - confTol and a <= this.top + confTol
+        if a >= aLo and a <= aHi
             hits += 1
     this.conf := math.min(1.0, hits * 0.35)
     if this.isLiquidity()
@@ -967,6 +991,7 @@ var array<label> ghostL = array.new<label>()
 var int   nextId      = 0
 var int   activeId    = -1
 var int   lastAnnId   = -1
+var int   annPend     = -1
 var int   challId     = -1
 var int   challN      = 0
 var int   activeSince = 0
@@ -990,6 +1015,7 @@ var array<float> vpSm   = array.new<float>()
 var float        vpLo   = na
 var float        vpStep = na
 var float        vpMean = na
+var array<float> vpCum  = array.new<float>()   // vpCum[r] = Σ vpSm[0 .. r-1]
 
 // Empirical excursion surface: S[r][j] = #windows whose H-bar excursion reached
 // at least j·bStep ATR, per direction and HTF regime r (0 against · 1 neutral · 2 with)
@@ -1007,6 +1033,9 @@ var array<float> stMae  = array.new<float>(5, 0.0)
 var array<int>   ttHit  = array.new<int>()
 var array<float> maeHit = array.new<float>()
 var array<int>   roll50 = array.new<int>()
+var array<float> dHit   = array.new<float>()   // distance (ATR) of each hit in ttHit
+// cluster-robust variance for the edge test: [block id, open-block Σresidual, Σ closed-block residual²]
+var array<float> cluSt  = array.from(-1.0, 0.0, 0.0)
 // race: [decided n, target-first wins, Σ model p (decided), Σ R (all), n (all), gross win R, gross loss R]
 var array<float> raceSt = array.new<float>(7, 0.0)
 
@@ -1034,29 +1063,33 @@ f_findLiq(array<Level> lvls, int kind, float px, float tol) =>
     j
 
 // Folds a print into an existing pool. Equal highs / lows from the chart raise
-// the density; any print beyond the stored one moves the level to the outermost
-// extreme (stops sit beyond it); a higher-tier source upgrades the level.
-f_mergeLiq(array<Level> lvls, int kind, float px, int src, float tol, int bornBar, float prom, float hlm, bool countEq) =>
+// the density (the pool keeps maturing: its age is not reset); a print beyond the
+// stored one moves the level to the outermost extreme (stops sit beyond it) and
+// carries any open ledger record with it; a higher-tier source upgrades the level.
+f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool countEq) =>
+    if countEq
+        lv.eqCount += 1
+    bool outer = kind == 0 ? px > lv.price + syminfo.mintick * 0.5 : px < lv.price - syminfo.mintick * 0.5
+    if outer
+        float sh = px - lv.price
+        lv.price  += sh
+        lv.top    += sh
+        lv.bottom += sh
+        lv.oTop   += sh
+        lv.oBot   += sh
+        for t in openT
+            if t.lvId == lv.id
+                t.edge := lv.nearEdge()
+    if f_tierW(src) > f_tierW(lv.src)
+        lv.src    := src
+        lv.hlMult := math.max(lv.hlMult, hlm)
+    lv.prom := math.max(lv.prom, nz(prom))
+    outer
+
+f_mergeLiq(array<Level> lvls, int kind, float px, int src, float tol, float prom, float hlm, bool countEq) =>
     int j = f_findLiq(lvls, kind, px, tol)
     if j >= 0
-        Level lv  = lvls.get(j)
-        float gap = math.abs(lv.price - px)
-        if gap > syminfo.mintick * 0.5
-            if countEq
-                lv.eqCount += 1
-                lv.bornBar := math.max(lv.bornBar, bornBar)
-            bool outer = kind == 0 ? px > lv.price : px < lv.price
-            if outer
-                float sh = px - lv.price
-                lv.price  += sh
-                lv.top    += sh
-                lv.bottom += sh
-                lv.oTop   += sh
-                lv.oBot   += sh
-        if f_tierW(src) > f_tierW(lv.src)
-            lv.src    := src
-            lv.hlMult := math.max(lv.hlMult, hlm)
-        lv.prom := math.max(lv.prom, nz(prom))
+        f_mergeAt(lvls.get(j), kind, px, src, prom, hlm, countEq)
     j >= 0
 
 // Finds the nearest historical candle that printed `lvl`. Returns [anchorBar,
@@ -1083,35 +1116,85 @@ f_anchorScan(float lvl, bool isHigh, int maxBack) =>
             bestI := i
     [bar_index - (anchor >= 0 ? anchor : bestI), valid]
 
-// Chart bar that contains time t (scan, then a time-based estimate beyond it).
+// Chart bar on which each HTF / STF bar opened: exact anchors for MTF pivots and
+// HTF FVGs even when they arrive hundreds of chart bars after they printed.
+var map<int, int> tfOpenBar = map.new<int, int>()
+var array<int>    tfOpenQ   = array.new<int>()
+f_recOpen(int t) =>
+    if not na(t) and not tfOpenBar.contains(t)
+        tfOpenBar.put(t, bar_index)
+        tfOpenQ.push(t)
+        if tfOpenQ.size() > 4000
+            tfOpenBar.remove(tfOpenQ.shift())
+    true
+if timeframe.in_seconds() < timeframe.in_seconds(tfH)
+    f_recOpen(time(tfH))
+if timeframe.in_seconds() < timeframe.in_seconds(tfS)
+    f_recOpen(time(tfS))
+
+// Chart bar that contains time t: recorded open bar, else a binary search over
+// the recent window, else a wall-clock estimate.
 f_barAtTime(int t, int maxBack) =>
     int res = bar_index
     if not na(t)
-        res := math.max(0, bar_index - math.round((time - t) / (chartS * 1000.0)))
-        int lim = math.min(maxBack, bar_index)
-        for i = 0 to lim
-            if time[i] <= t
-                res := bar_index - i
-                break
+        if tfOpenBar.contains(t)
+            res := tfOpenBar.get(t)
+        else
+            res := math.max(0, bar_index - math.round((time - t) / (chartS * 1000.0)))
+            int lim = math.min(maxBack, bar_index)
+            if time[lim] <= t
+                int lo = 0
+                int hi = lim
+                while lo < hi
+                    int mid = math.floor((lo + hi) / 2.0)
+                    if time[mid] <= t
+                        hi := mid
+                    else
+                        lo := mid + 1
+                res := bar_index - lo
     res
 
 f_pushExt(array<Ext> reg, float px, bool isHigh, int src, int aBar, float prom, float hlm) =>
-    bool ok = not na(px) and (isHigh ? high < px : low > px)
+    bool ok = not na(px) and (isHigh ? high <= px : low >= px)
     if ok
-        reg.push(Ext.new(px, isHigh, src, f_x(nz(aBar, bar_index)), nz(aBar, bar_index), nz(prom), hlm))
+        bool dup = false
+        for e in reg
+            if e.isHigh == isHigh and math.abs(e.px - px) <= syminfo.mintick * 0.5
+                if f_tierW(src) > f_tierW(e.src)
+                    e.src    := src
+                    e.hlMult := math.max(e.hlMult, hlm)
+                e.prom := math.max(e.prom, nz(prom))
+                dup := true
+                break
+        if not dup
+            reg.push(Ext.new(px, isHigh, src, f_x(nz(aBar, bar_index)), nz(aBar, bar_index), nz(prom), hlm))
     ok
 
-// Puts a registry entry into the pool (or upgrades the pool already there).
-f_extToPool(array<Level> lvls, Ext e, int id, float wPx, float tol, float coil, float induce) =>
-    int  k      = e.isHigh ? 0 : 1
-    bool pushed = false
-    if not f_mergeLiq(lvls, k, e.px, e.src, tol, e.bornBar, e.prom, e.hlMult, false)
-        Level nl = f_newLevel(id, k, e.src, e.isHigh ? e.px + wPx : e.px, e.isHigh ? e.px : e.px - wPx, e.px, e.anchorBar, e.bornBar, coil, induce)
-        nl.prom   := e.prom
-        nl.hlMult := e.hlMult
-        lvls.push(nl)
-        pushed := true
-    pushed
+// Stacked liquidity on one side, O(n log n): with the pools sorted by price only
+// neighbours inside the window can interact, so the scan stops at the first one
+// outside it. Inner pools are inducement; the outermost pool of a stack is the draw.
+f_stackSide(array<Level> lvls, array<float> px, array<int> ix, float tol) =>
+    int n = px.size()
+    if n > 1
+        array<int> ord = px.sort_indices(order.ascending)
+        for a = 0 to n - 2
+            Level la = lvls.get(ix.get(ord.get(a)))
+            for b = a + 1 to n - 1
+                Level lb = lvls.get(ix.get(ord.get(b)))
+                if math.abs(la.price - lb.price) <= tol
+                    if lb.price > la.price
+                        if la.side == 1
+                            la.inner := true
+                            lb.stack += 1
+                        else
+                            lb.inner := true
+                            la.stack += 1
+                    else
+                        la.stack += 1
+                        lb.stack += 1
+                else
+                    break
+    n
 
 f_ghost(Level lv, string reason, array<box> gB, array<label> gL, int maxG, color col, color txtCol) =>
     box   b = box.new(f_x(lv.anchorBar), lv.top, bar_index, lv.bottom, border_color = color.new(col, 65), border_width = 1,
@@ -1142,17 +1225,22 @@ f_surv(array<int> S, int r, float u) =>
 
 // Empirical probability that price travels dAtr ATR toward `side` within H bars,
 // given the HTF regime. Returns [p, sample count] (p = na while warming up).
+// Consecutive windows overlap by H-1 bars, so they carry about 0.6·H times less
+// information than independent samples; the gate and the blend weights use that.
 f_empPoT(float dAtr, int side, int bias) =>
-    array<int> S = side == 1 ? sUp : sDn
-    int   r = side == 1 ? bias + 1 : 1 - bias
-    float u = math.max(0.0, dAtr) / bStep
-    float n = S.get(r * NB1)
-    float p = na
-    if n >= 150
+    array<int> S    = side == 1 ? sUp : sDn
+    int        r    = side == 1 ? bias + 1 : 1 - bias
+    float      u    = math.max(0.0, dAtr) / bStep
+    float      n    = S.get(r * NB1)
+    float      nMin = math.max(150.0, 20.0 * H)
+    float      p    = na
+    if u > NB
+        n := 0.0   // beyond the grid: callers fall back to the analytic model
+    else if n >= nMin
         p := f_surv(S, r, u) / n
     else
         float nAll = S.get(0) + S.get(NB1) + S.get(2 * NB1)
-        if nAll >= 150
+        if nAll >= nMin
             p := (f_surv(S, 0, u) + f_surv(S, 1, u) + f_surv(S, 2, u)) / nAll
             n := nAll
     [p, n]
@@ -1164,7 +1252,8 @@ f_potModel(float d, int side, float mu) =>
     if potModel == "Empirical" and nz(atr) > 0
         [pE, nE] = f_empPoT(d / atr, side, htfBias)
         if not na(pE)
-            out := math.min(0.95, (nE * pE + priorM * pA) / (nE + priorM))
+            float nEff = nE / math.max(1.0, 0.6 * H)
+            out := math.min(0.95, (nEff * pE + priorM * pA) / (nEff + priorM))
     out
 
 // Baseline for the edge test: how often a RANDOM level at this distance gets hit.
@@ -1174,14 +1263,15 @@ f_potBase(float d, int side) =>
     if nz(atr) > 0
         [pE, nE] = f_empPoT(d / atr, side, htfBias)
         if not na(pE)
-            out := (nE * pE + priorM * pA) / (nE + priorM)
+            float nEff = nE / math.max(1.0, 0.6 * H)
+            out := (nEff * pE + priorM * pA) / (nEff + priorM)
     f_clamp(out, 0.01, 0.99)
 
 // Smallest distance (ATR) whose empirical H-bar reach probability falls to q.
 f_reachD(array<int> S, int r, float q) =>
     float n = S.get(r * NB1)
     float d = na
-    if n >= 150
+    if n >= math.max(150.0, 20.0 * H)
         float prev = 1.0
         for j = 1 to NB
             float s = S.get(r * NB1 + j) / n
@@ -1212,8 +1302,12 @@ f_invalidation(Level tgt) =>
         inv := ok ? sw - tgt.side * buf : close - tgt.side * 1.5 * atr
     float risk = math.max(math.abs(close - inv), 0.25 * atr)
     inv := close - tgt.side * risk
-    float d = math.max(0.0, tgt.distance(close))
-    [inv, d / risk, f_race(d, risk, nz(potSig), potMu * tgt.side)]
+    float d  = math.max(0.0, tgt.distance(close))
+    float sg = nz(potSig)
+    float m  = potMu * tgt.side
+    float pW = f_raceH(d, risk, sg, m, H)
+    float pL = f_raceH(risk, d, sg, -m, H)
+    [inv, d / risk, pW + pL > 1e-9 ? pW / (pW + pL) : f_race(d, risk, sg, m)]
 
 // Race probability corrected by the ledger's observed first-touch outcomes.
 f_raceAdj(float pModel) =>
@@ -1222,32 +1316,45 @@ f_raceAdj(float pModel) =>
     float dl = n > 0 ? f_logit((raceSt.get(1) + 20.0 * pb) / (n + 20.0)) - f_logit(pb) : 0.0
     f_sigm(f_logit(pModel) + dl)
 
-// Bounded per-family multiplier from the ledger (Beta(2,2) prior, needs 10 outcomes).
+// Bounded per-family multiplier from the ledger: hits relative to what a random
+// level at the same distances would have scored (so near families are not
+// rewarded twice for proximity). Needs 10 outcomes.
 f_calMult(int g) =>
     float n = stN.get(g)
     float k = stK.get(g)
-    float N = stN.get(4)
+    float e = stPE.get(g)
     float K = stK.get(4)
-    n >= 10 ? f_clamp(((k + 2.0) / (n + 4.0)) / ((K + 2.0) / (N + 4.0)), 0.8, 1.2) : 1.0
+    float E = stPE.get(4)
+    n >= 10 ? f_clamp(((k + 2.0) / (e + 2.0)) / ((K + 2.0) / (E + 2.0)), 0.8, 1.2) : 1.0
 
 f_profile(int rows) =>
     float        pHi  = lvH.max()
     float        pLo  = lvL.min()
     float        step = (pHi - pLo) / rows
-    array<float> prof = array.new<float>(rows, 0.0)
     array<float> sm   = array.new<float>(rows, 0.0)
     if step > 0
+        // difference array: each hour adds a flat run over its range (60% of its
+        // volume) and over its body (40%) in O(1)
+        array<float> dif = array.new<float>(rows + 1, 0.0)
         for j = 0 to lvV.size() - 1
             float hv = lvV.get(j)
-            // 60% of each hour's volume across its range, 40% across its body
-            int r0 = f_row(lvL.get(j), pLo, step, rows)
-            int r1 = f_row(lvH.get(j), pLo, step, rows)
-            for r = r0 to r1
-                prof.set(r, prof.get(r) + 0.6 * hv / (r1 - r0 + 1))
-            int b0 = f_row(math.min(lvO.get(j), lvC.get(j)), pLo, step, rows)
-            int b1 = f_row(math.max(lvO.get(j), lvC.get(j)), pLo, step, rows)
-            for r = b0 to b1
-                prof.set(r, prof.get(r) + 0.4 * hv / (b1 - b0 + 1))
+            float oj = lvO.get(j)
+            float cj = lvC.get(j)
+            int   r0 = f_row(lvL.get(j), pLo, step, rows)
+            int   r1 = f_row(lvH.get(j), pLo, step, rows)
+            int   b0 = f_row(math.min(oj, cj), pLo, step, rows)
+            int   b1 = f_row(math.max(oj, cj), pLo, step, rows)
+            float ra = 0.6 * hv / (r1 - r0 + 1)
+            float rb = 0.4 * hv / (b1 - b0 + 1)
+            dif.set(r0, dif.get(r0) + ra)
+            dif.set(r1 + 1, dif.get(r1 + 1) - ra)
+            dif.set(b0, dif.get(b0) + rb)
+            dif.set(b1 + 1, dif.get(b1 + 1) - rb)
+        array<float> prof = array.new<float>(rows, 0.0)
+        float run = 0.0
+        for r = 0 to rows - 1
+            run += dif.get(r)
+            prof.set(r, math.max(0.0, run))
         for r = 0 to rows - 1
             sm.set(r, (prof.get(math.max(0, r - 1)) + 2.0 * prof.get(r) + prof.get(math.min(rows - 1, r + 1))) / 4.0)
     [sm, pLo, step]
@@ -1257,44 +1364,55 @@ f_pathVol(float a, float b) =>
     int   rows = vpSm.size()
     float res  = 1.0
     if rows > 0 and vpStep > 0 and vpMean > 0
-        int   r0  = f_row(math.min(a, b), vpLo, vpStep, rows)
-        int   r1  = f_row(math.max(a, b), vpLo, vpStep, rows)
-        float acc = 0.0
-        for r = r0 to r1
-            acc += vpSm.get(r)
-        res := acc / (r1 - r0 + 1) / vpMean
+        int r0 = f_row(math.min(a, b), vpLo, vpStep, rows)
+        int r1 = f_row(math.max(a, b), vpLo, vpStep, rows)
+        res := (vpCum.get(r1 + 1) - vpCum.get(r0)) / (r1 - r0 + 1) / vpMean
     res
 
 f_openTrial(Level lv) =>
     float d = math.max(0.0, lv.distance(close))
     [inv, rr, pR] = f_invalidation(lv)
     Trial.new(lvId = lv.id, grp = lv.grp(), side = lv.side, edge = lv.nearEdge(), inv = inv, risk = math.abs(close - inv),
-      entry = close, atr0 = atr, bar0 = bar_index, pBase = f_potBase(d, lv.side), pRace = pR, rr0 = rr)
+      entry = close, atr0 = atr, bar0 = bar_index, pBase = f_potBase(d, lv.side), pRace = pR, rr0 = rr,
+      d0 = atr > 0 ? d / atr : 0.0, liq = lv.isLiquidity())
 
 // One confirmed-bar step of a ledger record; returns its status (0 = still open).
 f_step(Trial t) =>
     t.bars := t.bars + 1
-    t.mae  := math.max(t.mae, (t.side == 1 ? t.entry - low : high - t.entry) / t.atr0)
-    bool hit = t.side == 1 ? high >= t.edge : low <= t.edge
+    bool hit = t.liq ? (t.side == 1 ? high > t.edge : low < t.edge) : (t.side == 1 ? high >= t.edge : low <= t.edge)
+    bool stp = t.side == 1 ? low <= t.inv : high >= t.inv
+    bool tgtOpn = t.side == 1 ? open >= t.edge : open <= t.edge
+    bool stpOpn = t.side == 1 ? open <= t.inv : open >= t.inv
+    // bar path: bull bar O-L-H-C, bear bar O-H-L-C; a gap beyond a barrier settles it at the open
+    bool  advFirst = not tgtOpn and (stpOpn or (t.side == 1 ? close >= open : close < open))
+    float adv      = hit and not advFirst ? (t.side == 1 ? t.entry - open : open - t.entry) : (t.side == 1 ? t.entry - low : high - t.entry)
+    t.mae := math.max(t.mae, adv / t.atr0)
     if t.race == 0
-        bool stp = t.side == 1 ? low <= t.inv : high >= t.inv
         if hit and stp
-            // same-bar double touch: OHLC path heuristic (bull bar O-L-H-C, bear bar O-H-L-C)
-            t.race := (t.side == 1 ? close < open : close >= open) ? 1 : -1
+            t.race := advFirst ? -1 : 1
         else if hit
             t.race := 1
         else if stp
             t.race := -1
+        if t.race == -1 and stpOpn
+            t.stopR := t.side * (open - t.entry) / t.risk
     if hit
         t.status := 1
     else if t.bars >= H
         t.status := 3
     if t.status != 0 and t.risk > 0
-        t.rOut := t.race == 1 ? t.rr0 : t.race == -1 ? -1.0 : t.side * (close - t.entry) / t.risk
+        t.rOut := t.race == 1 ? t.rr0 : t.race == -1 ? t.stopR : t.side * (close - t.entry) / t.risk
     t.status
 
 f_book(Trial t) =>
-    int y = t.status == 1 ? 1 : 0
+    int   y   = t.status == 1 ? 1 : 0
+    // overlapping records share a price path: accumulate residuals in 2H-bar blocks
+    float blk = math.floor(bar_index / (2.0 * H))
+    if blk != cluSt.get(0)
+        cluSt.set(2, cluSt.get(2) + cluSt.get(1) * cluSt.get(1))
+        cluSt.set(1, 0.0)
+        cluSt.set(0, blk)
+    cluSt.set(1, cluSt.get(1) + y - t.pBase)
     for g in array.from(t.grp, 4)
         stN.set(g, stN.get(g) + 1)
         stK.set(g, stK.get(g) + y)
@@ -1309,9 +1427,11 @@ f_book(Trial t) =>
     if y == 1
         ttHit.push(t.bars)
         maeHit.push(t.mae)
+        dHit.push(t.d0)
         if ttHit.size() > 300
             ttHit.shift()
             maeHit.shift()
+            dHit.shift()
     if t.race != 0
         raceSt.set(0, raceSt.get(0) + 1.0)
         raceSt.set(1, raceSt.get(1) + (t.race == 1 ? 1.0 : 0.0))
@@ -1347,6 +1467,8 @@ if barstate.isconfirmed and not na(atr) and atr > 0
     float ejectD = maxATR * ejectMult
     float eqPx   = eqTol * atr
     bool  regNew = false
+    // only the final state of a drawing is visible: update them on the last bars only
+    bool  tailBar = bar_index >= last_bar_index - 1 or not barstate.ishistory
 
     // ── 0 · empirical surface: the H-bar window that started at bar - H is complete
     float aH = atr[H]
@@ -1416,7 +1538,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
     if extReg.size() > 0
         for i = extReg.size() - 1 to 0
             Ext e = extReg.get(i)
-            if e.isHigh ? high >= e.px : low <= e.px
+            if e.isHigh ? high > e.px : low < e.px
                 extReg.remove(i)
 
     // ── 5 · FVG → iFVG inversion ──────────────────────────────────────────────
@@ -1458,7 +1580,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                     box.delete(z.bx)
                     line.delete(z.ce)
                     ifvgs.remove(i)
-                else if not na(z.bx)
+                else if tailBar and not na(z.bx)
                     box.set_right(z.bx, bar_index + 3)
                     line.set_x2(z.ce, bar_index + 3)
 
@@ -1574,7 +1696,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         obSwingHBar := bar_index - pivLen
         if useLiq
             float promH = (ph - llR) / atr
-            if not f_mergeLiq(pool, 0, ph, 0, eqPx, bar_index - pivLen, promH, 1.0, true)
+            if not f_mergeLiq(pool, 0, ph, 0, eqPx, promH, 1.0, true)
                 [aBH, okH] = f_anchorScan(ph, true, pivLen + 2)
                 if okH
                     nextId += 1
@@ -1586,7 +1708,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         obSwingLBar := bar_index - pivLen
         if useLiq
             float promL = (hhR - pl) / atr
-            if not f_mergeLiq(pool, 1, pl, 0, eqPx, bar_index - pivLen, promL, 1.0, true)
+            if not f_mergeLiq(pool, 1, pl, 0, eqPx, promL, 1.0, true)
                 [aBL, okL] = f_anchorScan(pl, false, pivLen + 2)
                 if okL
                     nextId += 1
@@ -1626,15 +1748,47 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         if nyEnd
             regNew := f_pushExt(extReg, nyH, true, 5, nyHB, (nyH - nyL) / atr * 0.5, 1.0) or regNew
             regNew := f_pushExt(extReg, nyL, false, 5, nyLB, (nyH - nyL) / atr * 0.5, 1.0) or regNew
+    // over capacity: evict the lowest-tier, farthest, oldest pool (never PWH/PDH just for being old)
     while extReg.size() > 60
-        extReg.shift()
+        int   xI = 0
+        float xK = 1e100
+        for i = 0 to extReg.size() - 1
+            Ext   ex  = extReg.get(i)
+            float key = f_tierW(ex.src) - math.abs(ex.px - close) / (atrE * ejectD) - (bar_index - ex.bornBar) * 1e-6
+            if key < xK
+                xK := key
+                xI := i
+        extReg.remove(xI)
 
     // ── 11 · registry → pool (external pools re-enter once price is in range) ─
     if extReg.size() > 0 and (regNew or bar_index % 5 == 0)
+        array<int> ix0 = array.new<int>()
+        array<int> ix1 = array.new<int>()
+        for [i, lv] in pool
+            if lv.kind == 0
+                ix0.push(i)
+            else if lv.kind == 1
+                ix1.push(i)
         for e in extReg
             if math.abs(e.px - close) / atrE <= maxATR
-                if f_extToPool(pool, e, nextId + 1, wPx, eqPx, coilScore, indScore)
+                int        k    = e.isHigh ? 0 : 1
+                array<int> ixs  = e.isHigh ? ix0 : ix1
+                int        jx   = -1
+                float      best = eqPx
+                for i in ixs
+                    float gap = math.abs(pool.get(i).price - e.px)
+                    if gap <= best
+                        best := gap
+                        jx   := i
+                if jx >= 0
+                    f_mergeAt(pool.get(jx), k, e.px, e.src, e.prom, e.hlMult, false)
+                else
                     nextId += 1
+                    Level ne = f_newLevel(nextId, k, e.src, e.isHigh ? e.px + wPx : e.px, e.isHigh ? e.px : e.px - wPx, e.px, e.anchorBar, e.bornBar, coilScore, indScore)
+                    ne.prom   := e.prom
+                    ne.hlMult := e.hlMult
+                    pool.push(ne)
+                    ixs.push(pool.size() - 1)
 
     // ── 12 · HTF fair value gaps ──────────────────────────────────────────────
     if hfNew
@@ -1683,43 +1837,50 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         lastDirSide := dirSide
 
     // ── 15 · volume-profile cache ─────────────────────────────────────────────
-    if inCalc and needVP and lvV.size() >= 12 and (newHour or h1Lower or vpSm.size() == 0)
+    if inCalc and needVP and lvV.size() >= 12 and (usePathVP ? (newHour or h1Lower or vpSm.size() == 0) : tailBar)
         [vSm, vLo, vStep] = f_profile(lvnRows)
         vpSm   := vSm
         vpLo   := vLo
         vpStep := vStep
         vpMean := vSm.avg()
+        vpCum  := array.new<float>(vSm.size() + 1, 0.0)
+        for r = 0 to vSm.size() - 1
+            vpCum.set(r + 1, vpCum.get(r) + vSm.get(r))
 
     if inCalc
         // ── 16 · stacked liquidity: the outermost pool of a stack is the draw ─
-        int nP = pool.size()
-        if nP > 0
-            for i = 0 to nP - 1
-                Level la = pool.get(i)
-                la.stack := 0
-                la.inner := false
-        if nP > 1
-            for i = 0 to nP - 1
-                Level la = pool.get(i)
-                if la.isLiquidity()
-                    for j = 0 to nP - 1
-                        if j != i
-                            Level lb = pool.get(j)
-                            if lb.kind == la.kind and math.abs(la.price - lb.price) <= clusATR * atr
-                                bool bOut = la.side == 1 ? lb.price > la.price : lb.price < la.price
-                                if bOut
-                                    la.inner := true
-                                else
-                                    la.stack += 1
+        array<float> bPx = array.new<float>()
+        array<int>   bIx = array.new<int>()
+        array<float> sPx = array.new<float>()
+        array<int>   sIx = array.new<int>()
+        for [i, la] in pool
+            la.stack := 0
+            la.inner := false
+            if la.kind == 0
+                bPx.push(la.price)
+                bIx.push(i)
+            else if la.kind == 1
+                sPx.push(la.price)
+                sIx.push(i)
+        f_stackSide(pool, bPx, bIx, clusATR * atr)
+        f_stackSide(pool, sPx, sIx, clusATR * atr)
 
         // ── 17 · score the pool ───────────────────────────────────────────────
-        array<float> anchors = array.from(aPDH, aPDL, aPWH, aPWL, dayEQ, midOpen, ldnOpen, nyOpen, htfEQ)
-        float        confTol = confATR * atr
+        array<float> anchors = array.new<float>()
+        for a in array.from(aPDH, aPDL, aPWH, aPWL, dayEQ, midOpen, ldnOpen, nyOpen, htfEQ)
+            if not na(a)
+                anchors.push(a)
+        float confTol = confATR * atr
+        float cm0     = f_calMult(0)
+        float cm1     = f_calMult(1)
+        float cm2     = f_calMult(2)
+        float cm3     = f_calMult(3)
         if pool.size() > 0
             for lv in pool
                 lv.mult *= f_kzAff(kz, lv.src)
                 if useCal
-                    lv.mult *= f_calMult(lv.grp())
+                    int g = lv.grp()
+                    lv.mult *= g == 0 ? cm0 : g == 1 ? cm1 : g == 2 ? cm2 : cm3
                 if usePathVP and vpSm.size() > 0
                     float vf = f_pathVol(close, lv.nearEdge())
                     lv.mult *= vf < 0.6 ? 1.10 : vf > 1.4 ? 0.85 : 1.0
@@ -1760,7 +1921,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                 if lv.id == activeId
                     curI := i
                 // HTF objective: strongest liquidity on the draw side, ranked without proximity
-                if lv.isLiquidity() and dirSide != 0 and lv.side == dirSide
+                if tailBar and lv.isLiquidity() and dirSide != 0 and lv.side == dirSide
                     float oKey = lv.mult * (wFresh * lv.fresh + wConf * lv.conf + wDens * lv.dens + wDraw * lv.draw)
                     if oKey > oS
                         oS := oKey
@@ -1768,14 +1929,16 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         objId := -1
         if oI >= 0
             objId := pool.get(oI).id
-        bool  useCtr  = aI < 0 or aS < minScore
-        int   bI      = useCtr ? gI : aI
-        float bS      = useCtr ? gS : aS
         float curS    = -1.0
         int   curSide = 0
         if curI >= 0
             curS    := pool.get(curI).score
             curSide := pool.get(curI).side
+        // a counter-draw DOL is only evicted once the draw side clears minScore by the hysteresis
+        float ctrGate = minScore + (curI >= 0 and dirSide != 0 and curSide != dirSide ? hyst : 0.0)
+        bool  useCtr  = aI < 0 or aS < ctrGate
+        int   bI      = useCtr ? gI : aI
+        float bS      = useCtr ? gS : aS
         bool curElig = curI >= 0 and (useCtr or dirSide == 0 or curSide == dirSide)
         bool curOk   = curElig and curS >= minScore - hyst
         int  bId     = -1
@@ -1801,40 +1964,56 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         if pick >= 0
             activeLv := pool.get(pick)
             pickId   := activeLv.id
-        activeCtr := pick >= 0 and useCtr
+        activeCtr := not na(activeLv) and dirSide != 0 and activeLv.side != dirSide
         if pickId != activeId
             newDolEvent := pickId >= 0 and pickId != lastAnnId
-            if newDolEvent
-                lastAnnId := pickId
+            // the announcement waits until the target is actually shown (PoT filter)
+            annPend     := newDolEvent ? pickId : -1
             activeId    := pickId
             activeSince := bar_index
 
         // ── 20 · ledger: grade every H-bar window in which a DOL was asserted ─
-        if accView != "Off" and not na(activeLv) and bar_index >= warmup
+        if (accView != "Off" or useCal) and not na(activeLv) and bar_index >= math.max(0, last_bar_index - calcBars) + warmup
             bool has = false
             for t in openT
                 if t.lvId == activeLv.id
                     has := true
                     break
-            if not has and openT.size() < 64
+            if not has and openT.size() < math.max(64, H + 1)
                 openT.push(f_openTrial(activeLv))
     else
+        // before scoring starts: drop the farthest, lowest-tier pool first (never just the oldest)
         while pool.size() > poolMax
-            pool.shift()
+            int   tI = 0
+            float tK = -1e100
+            for i = 0 to pool.size() - 1
+                Level lv  = pool.get(i)
+                float key = math.max(0.0, lv.distance(close)) / atrE - 3.0 * lv.tier() - (lv.isLiquidity() ? 0.5 * math.min(lv.eqCount, 4) : 0.0)
+                if key > tK
+                    tK := key
+                    tI := i
+            pool.remove(tI)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIVE READOUTS
 // ═══════════════════════════════════════════════════════════════════════════════
 bool  sweptNow  = liveSweep and not na(activeLv) and activeLv.id == liveId
 float activePoT = na
-if not na(activeLv) and nz(atr) > 0
+// needed on the live bar (display) and while an announcement waits for the PoT filter
+if not na(activeLv) and nz(atr) > 0 and (barstate.islast or annPend >= 0)
     activePoT := sweptNow ? 0.95 : f_potModel(math.max(0.0, activeLv.distance(close)), activeLv.side, potMu * activeLv.side)
 bool dolShown = not na(activePoT) and activePoT * 100.0 >= minPoT
+
+// announce a new DOL once it is actually shown (it may pass the PoT filter later)
+bool annNow = barstate.isconfirmed and annPend >= 0 and not na(activeLv) and activeLv.id == annPend and dolShown
+if annNow
+    lastAnnId := annPend
+    annPend   := -1
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
 // ═══════════════════════════════════════════════════════════════════════════════
-if newDolEvent and dolShown
+if annNow
     alert("DOL Engine ▸ new target: " + activeLv.tag() + " @ " + str.tostring(activeLv.price, format.mintick) + " · score " + str.tostring(activeLv.score, "0.0") +
       " · PoT " + str.tostring(activePoT * 100.0, "0") + "% · " + syminfo.ticker, alert.freq_once_per_bar_close)
 if newIfvgEvent
@@ -1845,7 +2024,7 @@ if drawFlip
     alert("DOL Engine ▸ draw direction flipped " + (lastDirSide == 1 ? "▲ BUY-SIDE" : "▼ SELL-SIDE") + " · D " + str.tostring(drawD, "0.00") + " · " + syminfo.ticker,
       alert.freq_once_per_bar_close)
 
-alertcondition(newDolEvent and dolShown, "New DOL Target Active", "DOL Engine: new Draw on Liquidity target active on {{ticker}} ({{interval}}) @ {{close}}")
+alertcondition(annNow, "New DOL Target Active", "DOL Engine: new Draw on Liquidity target active on {{ticker}} ({{interval}}) @ {{close}}")
 alertcondition(newIfvgEvent, "New iFVG Formed", "DOL Engine: an FVG inverted into a new iFVG on {{ticker}} ({{interval}})")
 alertcondition(liveSweep, "DOL Target Swept", "DOL Engine: active DOL target swept on {{ticker}} ({{interval}}) @ {{close}}")
 alertcondition(drawFlip, "Draw Direction Flip", "DOL Engine: order-flow draw direction flipped on {{ticker}} ({{interval}})")
@@ -1862,6 +2041,10 @@ float reachU20 = na
 float reachD50 = na
 float reachD20 = na
 float medHit   = na
+float etaHit   = na
+float invL     = na
+float invRR    = na
+float invWin   = na
 if barstate.islast
     reachU50 := f_reachD(sUp, htfBias + 1, 0.5)
     reachU20 := f_reachD(sUp, htfBias + 1, 0.2)
@@ -1869,6 +2052,19 @@ if barstate.islast
     reachD20 := f_reachD(sDn, 1 - htfBias, 0.2)
     if ttHit.size() > 0
         medHit := ttHit.median()
+    if not na(activeLv) and nz(atr) > 0
+        // typical bars-to-hit of past DOLs that were taken from a similar distance
+        float      dNow = math.max(0.0, activeLv.distance(close)) / atr
+        array<int> sim  = array.new<int>()
+        for [i, dd] in dHit
+            if math.abs(dd - dNow) <= 0.5
+                sim.push(ttHit.get(i))
+        if sim.size() >= 5
+            etaHit := sim.median()
+        [i0, i1, i2] = f_invalidation(activeLv)
+        invL   := i0
+        invRR  := i1
+        invWin := f_raceAdj(i2)
 
 if barstate.islast
     for b in dB
@@ -1950,19 +2146,17 @@ if barstate.islast
         string head = sweptNow ? "✕ SWEPT ▸ " : activeCtr ? "⚠ COUNTER-DRAW ▸ " : "◈ DOL ▸ "
         string txt  = head + activeLv.tag() +
           "\nSCORE " + str.tostring(activeLv.score, "0.0") + "  " + f_meter(activeLv.score, 10) +
-          "\nPoT   " + str.tostring(activePoT * 100.0, "0.0") + "%" + (cls == "" ? "" : " · " + cls) + (na(medHit) ? "" : " · ETA ~" + str.tostring(medHit, "0") + "b")
+          "\nPoT   " + str.tostring(activePoT * 100.0, "0.0") + "%" + (cls == "" ? "" : " · " + cls) + (na(etaHit) ? "" : " · ETA|hit ~" + str.tostring(etaHit, "0") + "b")
         if hudSize != "Compact"
             txt += "\nDRAW  " + (drawD >= 0 ? "▲ " : "▼ ") + f_signed(drawD, "0.00") + "  " + f_kzName(kz) +
               "\nDIST  " + str.tostring(dAtr, "0.00") + " ATR · AGE " + str.tostring(bar_index - activeSince) + "b"
-        if showInv
-            [lInv, lRR, lPm] = f_invalidation(activeLv)
-            float pWin = f_raceAdj(lPm)
-            float ev   = pWin * lRR - (1.0 - pWin)
-            dLn.push(line.new(bar_index, lInv, xR, lInv, color = color.new(cIBear, 40), style = line.style_dotted, width = 1))
-            dLb.push(label.new(xR, lInv, "⊗ INVALIDATION", style = label.style_label_left, color = color.new(cPanel, 100),
+        if showInv and not na(invL)
+            float ev = invWin * invRR - (1.0 - invWin)
+            dLn.push(line.new(bar_index, invL, xR, invL, color = color.new(cIBear, 40), style = line.style_dotted, width = 1))
+            dLb.push(label.new(xR, invL, "⊗ INVALIDATION", style = label.style_label_left, color = color.new(cPanel, 100),
               textcolor = color.new(cIBear, 20), size = size.tiny, text_font_family = font.family_monospace))
             if hudSize != "Compact"
-                txt += "\nR:R   " + str.tostring(lRR, "0.0") + " · WIN " + str.tostring(pWin * 100.0, "0") + "% · EV " + f_signed(ev, "0.00") + "R"
+                txt += "\nR:R   " + str.tostring(invRR, "0.0") + " · WIN≤H " + str.tostring(invWin * 100.0, "0") + "% · EV " + f_signed(ev, "0.00") + "R"
         dLb.push(label.new(xR, activeLv.price, txt, style = label.style_label_left, color = color.new(cPanel, 8), textcolor = c,
           size = hudTxS, textalign = text.align_left, text_font_family = font.family_monospace,
           tooltip = "Proximity " + str.tostring(activeLv.prox * 100.0, "0") + " · Freshness " + str.tostring(activeLv.fresh * 100.0, "0") +
@@ -2061,14 +2255,13 @@ if showTable and barstate.islast
         f_cell(dash, 2, row, cls == "" ? potModel : cls, cText, na)
         f_cell(dash, 3, row, str.tostring(dA, "0.00") + " ATR", cText, na)
         row += 1
-        [tInv, tRR, tPm] = f_invalidation(activeLv)
-        float tWin = f_raceAdj(tPm)
-        float tEV  = tWin * tRR - (1.0 - tWin)
-        f_cell(dash, 0, row, "R:R", dim, na)
-        f_cell(dash, 1, row, str.tostring(tRR, "0.0"), cText, na)
-        f_cell(dash, 2, row, "WIN " + str.tostring(tWin * 100.0, "0") + "%", cText, na)
-        f_cell(dash, 3, row, "EV " + f_signed(tEV, "0.00") + "R", tEV > 0.2 ? cIBull : tEV >= 0 ? cLVN : cIBear, na)
-        row += 1
+        if not na(invRR)
+            float tEV = invWin * invRR - (1.0 - invWin)
+            f_cell(dash, 0, row, "R:R", dim, na)
+            f_cell(dash, 1, row, str.tostring(invRR, "0.0"), cText, na)
+            f_cell(dash, 2, row, "WIN≤H " + str.tostring(invWin * 100.0, "0") + "%", cText, na)
+            f_cell(dash, 3, row, "EV " + f_signed(tEV, "0.00") + "R", tEV > 0.2 ? cIBull : tEV >= 0 ? cLVN : cIBear, na)
+            row += 1
     else
         f_cell(dash, 0, row, "TARGET", dim, na)
         f_cell(dash, 1, row, "scanning…", dim, na)
@@ -2087,9 +2280,13 @@ if showTable and barstate.islast
         f_cell(dash, 3, row, "", dim, hdr)
         row += 1
         if nA > 0
-            [ciLo, ciHi] = f_wilson(kA, nA)
+            // overlapping records share a price path: widen the interval by the design effect
+            float  vInd    = stPV.get(4)
+            float  vEdge   = math.max(vInd, cluSt.get(2) + cluSt.get(1) * cluSt.get(1))
+            float  deff    = vInd > 0 ? vEdge / vInd : 1.0
+            [ciLo, ciHi] = f_wilson(kA / deff, nA / deff)
             float  edgePP  = 100.0 * (kA - stPE.get(4)) / nA
-            float  zEdge   = stPV.get(4) > 0 ? (kA - stPE.get(4)) / math.sqrt(stPV.get(4)) : na
+            float  zEdge   = vEdge > 0 ? (kA - stPE.get(4)) / math.sqrt(vEdge) : na
             string verdict = nA < 20 or na(zEdge) ? "CALIBRATING" : zEdge >= 2.0 ? "✓ EDGE" : zEdge >= 1.0 ? "~ WEAK" : "✕ NO EDGE"
             color  vCol    = nA < 20 or na(zEdge) ? dim : zEdge >= 2.0 ? cIBull : zEdge >= 1.0 ? cLVN : cIBear
             f_cell(dash, 0, row, "DOL HIT", dim, na)

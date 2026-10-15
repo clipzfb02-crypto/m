@@ -43,16 +43,16 @@ External pools (STF/HTF swings and key levels) live in a **registry**. When pric
 - *Partial mitigation*.
 - *Killzone affinity*: London raids Asia; NY raids London and the previous day.
 - *Volume-profile path cost*: thin-volume paths score higher than high-volume walls.
-- *Adaptive calibration* from the accuracy ledger.
+- *Adaptive calibration* from the accuracy ledger: each family's hits against what random levels at the same distances would have scored.
 
 **Selection** first considers levels on the side D points to. If none qualifies, it shows a `⚠ COUNTER-DRAW` target. A challenger must beat the current DOL by the hysteresis (double that to flip sides) on **two consecutive bars**. Outside killzones the hysteresis widens. A target whose side no longer matches the draw is ghosted as `⊘ INVALIDATED`.
 
 ## On the chart
 
-- **DOL zone**: opacity follows the score. It has a neon core line, a tether from price, and a terminal HUD showing:
+- **DOL zone**: opacity follows the score. A liquidity pool counts as swept only when price trades *through* it; an exact equal high or low adds to the resting liquidity instead. An imbalance counts as reached on a touch. The zone has a neon core line, a tether from price, and a terminal HUD showing:
   - type and tags (`EQx2 · STK1 · T3`), the score meter, and PoT % with its reach class (`CORE`, `EXTENDED` or `STRETCH`);
-  - typical bars to hit, the draw vector, the current killzone, distance and age;
-  - **R:R · WIN % · EV** against an **invalidation** placed just beyond the nearest opposing pool.
+  - typical bars to hit for past targets taken from a similar distance (`ETA|hit`), the draw vector, the current killzone, distance and age;
+  - **R:R · WIN≤H % · EV** against an **invalidation** placed just beyond the nearest opposing pool. WIN≤H is the chance the target is hit before the invalidation, among races decided within the PoT horizon.
 - **HTF Objective**: the strongest pool on the draw side, ranked without proximity.
 - **Secondary targets**, the optional **candidate pool**, and optional **reach bands**: the empirical median and 80th-percentile move over the PoT horizon.
 - **iFVG** zones with a CE line, removed after too many body closes inside them.
@@ -68,7 +68,7 @@ External pools (STF/HTF swings and key levels) live in a **registry**. When pric
 - **Pool**: the scoring pool, external registry and iFVG counts.
 - **Accuracy**:
   - **DOL HIT %** with its Wilson 95% interval and the rolling last-50 rate.
-  - **EDGE**: hits above what a *random level at the same distance* would get, with a z-score and a verdict (`✓ EDGE`, `~ WEAK` or `✕ NO EDGE`).
+  - **EDGE**: hits above what a *random level at the same distance* would get, with a z-score and a verdict (`✓ EDGE`, `~ WEAK` or `✕ NO EDGE`). Overlapping records share one price path, so the interval and z-score use a cluster-robust variance.
   - **BARS→HIT**: average and median bars to hit, plus *heat*, the 80th-percentile adverse excursion in ATR.
   - The Full view adds per-family hit rates and race stats (win %, average R, profit factor).
 
