@@ -1070,10 +1070,13 @@ f_findLiq(array<Level> lvls, int kind, float px, float tol) =>
 // the density (the pool keeps maturing: its age is not reset); a print beyond the
 // stored one moves the level to the outermost extreme (stops sit beyond it) and
 // carries any open ledger record with it; a higher-tier source upgrades the level.
-// The candle that printed a PDH / PWH / session extreme confirming later as a
-// chart pivot is the same print, not an equal high / low.
-f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool countEq, int pivBar) =>
-    if countEq and (math.abs(px - lv.price) > syminfo.mintick * 0.5 or pivBar != lv.bornBar)
+// A chart pivot at the same price printed by the pool's own candle is the same
+// print, not an equal high / low: PDH / PWH / session pools are born on that
+// candle, STF / HTF pools on the chart bar their STF / HTF bar opened on.
+f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool countEq, int pivBar, int pivOpS, int pivOpH) =>
+    bool samePx = math.abs(px - lv.price) <= syminfo.mintick * 0.5
+    bool inBar  = pivBar == lv.bornBar or (lv.src == 1 and pivOpS == lv.bornBar) or (lv.src == 2 and (pivOpS == lv.bornBar or pivOpH == lv.bornBar))
+    if countEq and not (samePx and inBar)
         lv.eqCount += 1
     bool outer = kind == 0 ? px > lv.price + syminfo.mintick * 0.5 : px < lv.price - syminfo.mintick * 0.5
     if outer
@@ -1092,10 +1095,10 @@ f_mergeAt(Level lv, int kind, float px, int src, float prom, float hlm, bool cou
     lv.prom := math.max(lv.prom, nz(prom))
     outer
 
-f_mergeLiq(array<Level> lvls, int kind, float px, int src, float tol, float prom, float hlm, bool countEq, int pivBar) =>
+f_mergeLiq(array<Level> lvls, int kind, float px, int src, float tol, float prom, float hlm, bool countEq, int pivBar, int pivOpS, int pivOpH) =>
     int j = f_findLiq(lvls, kind, px, tol)
     if j >= 0
-        f_mergeAt(lvls.get(j), kind, px, src, prom, hlm, countEq, pivBar)
+        f_mergeAt(lvls.get(j), kind, px, src, prom, hlm, countEq, pivBar, pivOpS, pivOpH)
     j >= 0
 
 // Finds the nearest historical candle that printed `lvl`. Returns [anchorBar,
@@ -1133,10 +1136,20 @@ f_recOpen(int t) =>
         if tfOpenQ.size() > 4000
             tfOpenBar.remove(tfOpenQ.shift())
     true
+// Chart bar on which the current HTF / STF bar opened (-1 when the chart is not
+// below that timeframe): the same mapping f_barAtTime anchors MTF pivots with.
+int hOpenB = -1
+int sOpenB = -1
 if timeframe.in_seconds() < timeframe.in_seconds(tfH)
-    f_recOpen(time(tfH))
+    int tH = time(tfH)
+    f_recOpen(tH)
+    if not na(tH)
+        hOpenB := nz(tfOpenBar.get(tH), -1)
 if timeframe.in_seconds() < timeframe.in_seconds(tfS)
-    f_recOpen(time(tfS))
+    int tS = time(tfS)
+    f_recOpen(tS)
+    if not na(tS)
+        sOpenB := nz(tfOpenBar.get(tS), -1)
 
 // Chart bar that contains time t: recorded open bar, else a binary search over
 // the recent window, else a wall-clock estimate.
@@ -1702,7 +1715,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         obSwingHBar := bar_index - pivLen
         if useLiq
             float promH = (ph - llR) / atr
-            if not f_mergeLiq(pool, 0, ph, 0, eqPx, promH, 1.0, true, bar_index - pivLen)
+            if not f_mergeLiq(pool, 0, ph, 0, eqPx, promH, 1.0, true, bar_index - pivLen, nz(sOpenB[pivLen], -1), nz(hOpenB[pivLen], -1))
                 [aBH, okH] = f_anchorScan(ph, true, pivLen + 2)
                 if okH
                     nextId += 1
@@ -1714,7 +1727,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         obSwingLBar := bar_index - pivLen
         if useLiq
             float promL = (hhR - pl) / atr
-            if not f_mergeLiq(pool, 1, pl, 0, eqPx, promL, 1.0, true, bar_index - pivLen)
+            if not f_mergeLiq(pool, 1, pl, 0, eqPx, promL, 1.0, true, bar_index - pivLen, nz(sOpenB[pivLen], -1), nz(hOpenB[pivLen], -1))
                 [aBL, okL] = f_anchorScan(pl, false, pivLen + 2)
                 if okL
                     nextId += 1
@@ -1789,7 +1802,7 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                         best := gap
                         jx   := i
                 if jx >= 0
-                    f_mergeAt(pool.get(jx), k, e.px, e.src, e.prom, e.hlMult, false, -1)
+                    f_mergeAt(pool.get(jx), k, e.px, e.src, e.prom, e.hlMult, false, -1, -1, -1)
                 else
                     nextId += 1
                     Level ne = f_newLevel(nextId, k, e.src, e.isHigh ? e.px + wPx : e.px, e.isHigh ? e.px : e.px - wPx, e.px, e.anchorBar, e.bornBar, coilScore, indScore)
@@ -2007,8 +2020,9 @@ if barstate.isconfirmed and not na(atr) and atr > 0
 // ═══════════════════════════════════════════════════════════════════════════════
 bool  sweptNow  = liveSweep and not na(activeLv) and activeLv.id == liveId
 float activePoT = na
-// needed on the live bar (display) and while an announcement waits for the PoT filter
-if not na(activeLv) and nz(atr) > 0 and (barstate.islast or annPend >= 0)
+// needed on every bar: live HUD, the pending-announcement PoT filter and the
+// "DOL PoT %" data-window plot (f_potModel is O(1))
+if not na(activeLv) and nz(atr) > 0
     activePoT := sweptNow ? 0.95 : f_potModel(math.max(0.0, activeLv.distance(close)), activeLv.side, potMu * activeLv.side)
 bool dolShown = not na(activePoT) and activePoT * 100.0 >= minPoT
 
