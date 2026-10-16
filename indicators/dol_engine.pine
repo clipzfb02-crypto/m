@@ -604,7 +604,7 @@ f_kzAff(int k, int src) =>
 f_cell(table t, int c, int r, string txt, color tc, color bg) =>
     table.cell(t, c, r, txt, text_color = tc, bgcolor = bg, text_halign = text.align_left, text_size = size.small, text_font_family = font.family_monospace)
 
-// Clean-style table cell: centred, tiny, default font
+// Clean-style table cell: centred, small, default font
 f_cellC(table t, int c, int r, string txt, color tc, color bg) =>
     table.cell(t, c, r, txt, text_color = tc, bgcolor = bg, text_halign = text.align_center, text_size = size.small)
 
