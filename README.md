@@ -45,7 +45,7 @@ External pools (STF/HTF swings and key levels) live in a **registry**. When pric
 - *Volume-profile path cost*: thin-volume paths score higher than high-volume walls.
 - *Adaptive calibration* from the accuracy ledger: each family's hits against what random levels at the same distances would have scored.
 
-**Selection** first considers levels on the side D points to. If none qualifies, it shows a `⚠ COUNTER-DRAW` target. A challenger must beat the current DOL by the hysteresis (double that to flip sides) on **two consecutive bars**. Outside killzones the hysteresis widens. A target whose side no longer matches the draw is ghosted as `⊘ INVALIDATED`.
+**Selection** first considers levels on the side D points to. If none qualifies, it shows a `⚠ COUNTER-DRAW` target. A healthy counter-draw target is held until a draw-side level clears *Min Score* by the hysteresis. A challenger must beat the current DOL by the hysteresis (double that to flip sides) on **two consecutive bars**. Outside killzones the hysteresis widens. A target whose side no longer matches the draw is ghosted as `⊘ INVALIDATED`.
 
 ## On the chart
 
