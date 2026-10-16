@@ -12,6 +12,13 @@ An open-source TradingView indicator (Pine Script v6) that finds, scores and tra
 
 Keep the chart timeframe **at or below the Execution TF** of the selected Trading Mode. The panel shows a warning when it is higher.
 
+| Trading Mode | HTF / STF / Execution |
+|---|---|
+| Swing | W / D / 4H |
+| Day Trading (default) | D / 4H / 1H |
+| Scalping | 1H / 15m / 5m |
+| Custom | your choice (defaults to 4H / 1H / 15m) |
+
 ## What it looks at
 
 | Source | Details |
@@ -49,18 +56,29 @@ External pools (STF/HTF swings and key levels) live in a **registry**. When pric
 
 ## On the chart
 
+**Display Style** picks the look:
+
+- **Clean** (default): the DOL zone with a dashed border and a glowing core line, a dashed tether from price into a `Target: BEFVG` / `PoT: 70.1%` label, plain iFVG boxes, and a compact `Timeframe | Bias` table. Hover the label for the score breakdown. Target codes: `BSL`/`SSL` (or `PDH`, `PWL`, `ASIA H`, `HTF BSL`, …), `BUFVG`/`BEFVG`, `BUOB`/`BEOB`, `BUBRK`/`BEBRK`.
+- **Terminal**: the full HUD and accuracy panel described below.
+
+The rest of this section describes the Terminal style:
+
 - **DOL zone**: opacity follows the score. A liquidity pool counts as swept only when price trades *through* it; an exact equal high or low adds to the resting liquidity instead. An imbalance counts as reached on a touch. The zone has a neon core line, a tether from price, and a terminal HUD showing:
   - type and tags (`EQx2 · STK1 · T3`), the score meter, and PoT % with its reach class (`CORE`, `EXTENDED` or `STRETCH`);
   - typical bars to hit for past targets taken from a similar distance (`ETA|hit`), the draw vector, the current killzone, distance and age;
   - **R:R · WIN≤H % · EV** against an **invalidation** placed just beyond the nearest opposing pool. WIN≤H is the chance the target is hit before the invalidation, among races decided within the PoT horizon.
 - **HTF Objective**: the strongest pool on the draw side, ranked without proximity.
 - **Secondary targets**, the optional **candidate pool**, and optional **reach bands**: the empirical median and 80th-percentile move over the PoT horizon.
-- **iFVG** zones with a CE line, removed after too many body closes inside them.
+- **iFVG** zones (with a CE line in the Terminal style), removed after too many body closes inside them.
 - **LVN** zones from the 1H volume profile. They are off by default.
 - **Ghost trail** of targets marked `✕ SWEPT`, `⊘ EJECTED` or `⊘ INVALIDATED`.
-- **Themes**: Neon, Matrix, Ice, Mono or Custom.
+- **Themes**: Classic (lime / red on black, the default), Neon, Matrix, Ice, Mono or Custom.
+- Secondary targets, the HTF objective and the invalidation line are off by default; turn them on under *DOL Display*.
 
 ## Terminal panel
+
+In the Clean style the panel is the compact `Timeframe | Bias` table (swing bias, or internal bias while the swing is undecided). The Terminal style shows:
+
 
 - **Bias by timeframe**: swing bias and internal bias for the HTF, STF and Execution timeframes, plus where price sits in each dealing range (premium or discount, as a %).
 - **Draw**: the order-flow draw vector with a meter.
