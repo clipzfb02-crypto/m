@@ -72,8 +72,8 @@ The rest of this section describes the Terminal style:
 - **iFVG** zones (with a CE line in the Terminal style), removed after too many body closes inside them.
 - **LVN** zones from the 1H volume profile. They are off by default.
 - **Ghost trail** of targets marked `✕ SWEPT`, `⊘ EJECTED` or `⊘ INVALIDATED`.
-- **Themes**: Classic (lime / red on black, the default), Neon, Matrix, Ice, Mono or Custom.
-- Secondary targets, the HTF objective and the invalidation line are off by default; turn them on under *DOL Display*.
+- **Themes**: Classic (neon green / red on black, the default), Neon, Matrix, Ice, Mono or Custom.
+- Secondary targets, the HTF objective, the invalidation line and the ghost trail are off by default; turn them on under *DOL Display* and *Ghost Trail*.
 
 ## Terminal panel
 

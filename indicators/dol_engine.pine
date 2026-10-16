@@ -207,7 +207,7 @@ float lvnThr   = input.float(0.30, "LVN Threshold (x Peak)", minval = 0.05, maxv
 int   lvnN     = input.int(2, "LVNs Each Side", minval = 1, maxval = 5, group = G_LVN)
 
 // ── Ghost trail ───────────────────────────────────────────────────────────────
-bool showGhost = input.bool(true, "Show Ghost Trail", group = G_GHOST)
+bool showGhost = input.bool(false, "Show Ghost Trail", group = G_GHOST)
 int  ghostMax  = input.int(12, "Max Ghosts", minval = 1, maxval = 100, group = G_GHOST)
 
 // ── Terminal panel ────────────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ color cAbove = switch theme
     "Ice"    => #7DF9FF
     "Mono"   => #F5F5F5
     "Custom" => uAbove
-    => #00FF00
+    => #39FF14
 color cBelow = switch theme
     "Neon"   => #FF2BD6
     "Matrix" => #FFB000
@@ -257,14 +257,14 @@ color cIBull = switch theme
     "Ice"    => #64FFDA
     "Mono"   => #D0D0D0
     "Custom" => uBull
-    => #00FF00
+    => #00C864
 color cIBear = switch theme
     "Neon"   => #FF4D6D
     "Matrix" => #FF3131
     "Ice"    => #FF6E9C
     "Mono"   => #757575
     "Custom" => uBear
-    => #FF1744
+    => #E63C3C
 color cLVN = switch theme
     "Matrix" => #C6FF00
     "Ice"    => #FFD180
@@ -289,9 +289,14 @@ color cText = switch theme
     "Mono"   => #E0E0E0
     "Custom" => uText
     => #FFFFFF
-// solid blends of panel and text colour: label and table-header backgrounds
-color cLblBg = color.from_gradient(0.12, 0.0, 1.0, cPanel, cText)
-color cHdrBg = color.from_gradient(0.18, 0.0, 1.0, cPanel, cText)
+// solid blends of panel and text colour: Clean label, table body / header / grid / frame
+bool  classic = theme == "Classic"
+color cLblBg  = color.from_gradient(0.086, 0.0, 1.0, cPanel, cText)
+color cHdrBg  = classic ? #25272C : color.from_gradient(0.18, 0.0, 1.0, cPanel, cText)
+color cTblBg  = classic ? #1B1F24 : color.from_gradient(0.11, 0.0, 1.0, cPanel, cText)
+color cTblGrd = classic ? #3A3C43 : color.from_gradient(0.23, 0.0, 1.0, cPanel, cText)
+color cTblFrm = classic ? #303136 : color.from_gradient(0.19, 0.0, 1.0, cPanel, cText)
+color cHdrTx  = color.from_gradient(0.835, 0.0, 1.0, cPanel, cText)
 
 // ── Derived constants ─────────────────────────────────────────────────────────
 const int NB  = 60
@@ -601,7 +606,7 @@ f_cell(table t, int c, int r, string txt, color tc, color bg) =>
 
 // Clean-style table cell: centred, tiny, default font
 f_cellC(table t, int c, int r, string txt, color tc, color bg) =>
-    table.cell(t, c, r, txt, text_color = tc, bgcolor = bg, text_halign = text.align_center, text_size = size.tiny)
+    table.cell(t, c, r, txt, text_color = tc, bgcolor = bg, text_halign = text.align_center, text_size = size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LEVEL METHODS
@@ -1598,13 +1603,15 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                 bool inverted = z.dir == 1 ? close < z.bottom : close > z.top
                 if inverted
                     int   nd = -z.dir
-                    color ic = nd == 1 ? cIBull : cIBear
+                    // Classic Clean iFVGs use a teal-green, distinct from the bias-table green
+                    bool  icl = clean and classic
+                    color ic  = nd == 1 ? (icl ? #00B478 : cIBull) : cIBear
                     box   ib = na
                     line  il = na
                     if showIFVG
                         // Clean style: plain filled zone; Terminal style: tagged zone with a CE line
-                        ib := box.new(f_x(z.bornBar), z.top, bar_index + extBars, z.bottom, border_color = color.new(ic, clean ? 55 : 35), border_width = 1,
-                          bgcolor = color.new(ic, clean ? 85 : 86), text = clean ? "" : nd == 1 ? "iFVG ▲" : "iFVG ▼", text_size = size.tiny, text_color = color.new(ic, 15),
+                        ib := box.new(f_x(clean ? z.createdBar : z.bornBar), z.top, bar_index + extBars, z.bottom, border_color = color.new(ic, icl ? 50 : clean ? 55 : 35), border_width = 1,
+                          bgcolor = color.new(ic, icl ? 75 : clean ? 85 : 86), text = clean ? "" : nd == 1 ? "iFVG ▲" : "iFVG ▼", text_size = size.tiny, text_color = color.new(ic, 15),
                           text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
                         if not clean
                             il := line.new(f_x(z.bornBar), (z.top + z.bottom) / 2.0, bar_index + extBars, (z.top + z.bottom) / 2.0,
@@ -2134,6 +2141,12 @@ if barstate.islast
     dLb.clear()
     int    xR     = bar_index + extBars
     string hudTxS = hudSize == "Large" ? size.normal : size.small
+    // keep iFVG zones flush with the DOL zone on the live bar (the engine runs on confirmed bars only)
+    for z in ifvgs
+        if not na(z.bx)
+            box.set_right(z.bx, xR)
+        if not na(z.ce)
+            line.set_x2(z.ce, xR)
 
     // ── candidate pool ────────────────────────────────────────────────────────
     if showPool and pool.size() > 0
@@ -2200,14 +2213,17 @@ if barstate.islast
               textcolor = color.new(cIBear, 20), size = size.tiny, text_font_family = font.family_monospace))
         if clean
             // dashed zone, glowing core line, dashed tether into a Target / PoT label
-            dB.push(box.new(aX, activeLv.top, xR, activeLv.bottom, border_color = color.new(c, 40), border_width = 1,
-              border_style = line.style_dashed, bgcolor = color.new(c, 88)))
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 85), width = 7))
+            dB.push(box.new(aX, activeLv.top, xR, activeLv.bottom, border_color = color.new(c, 75), border_width = 1,
+              border_style = line.style_dashed, bgcolor = color.new(c, 92)))
+            // five-layer glow with a white-hot filament core
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 90), width = 10))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 80), width = 7))
             dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 60), width = 4))
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = c, width = 2))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 30), width = 2))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(color.white, 15), width = 1))
             dLn.push(line.new(bar_index, close, xR, activeLv.price, color = color.new(c, 30), style = line.style_dashed, width = 1))
             dLb.push(label.new(xR, activeLv.price, "Target: " + f_shortName(activeLv.kind, activeLv.src) + "\nPoT: " + str.tostring(activePoT * 100.0, "0.0") + "%",
-              style = label.style_label_left, color = cLblBg, textcolor = c, size = size.small, textalign = text.align_center, tooltip = tip))
+              style = label.style_label_left, color = cLblBg, textcolor = c, size = size.normal, textalign = text.align_center, tooltip = tip))
         else
             int zA = int(math.round(92.0 - activeLv.score * 0.12))
             dB.push(box.new(aX, activeLv.top, xR, activeLv.bottom, border_color = color.new(c, 45), border_width = 1, bgcolor = color.new(c, zA)))
@@ -2272,14 +2288,14 @@ if barstate.islast
 // ═══════════════════════════════════════════════════════════════════════════════
 // TERMINAL PANEL
 // ═══════════════════════════════════════════════════════════════════════════════
-var table dash = table.new(f_pos(tablePosIn), 4, 22, bgcolor = clean ? cPanel : color.new(cPanel, 4), frame_color = clean ? color.new(cText, 70) : color.new(cAbove, 55),
-  frame_width = 1, border_color = clean ? color.new(cText, 80) : color.new(cText, 88), border_width = 1)
+var table dash = table.new(f_pos(tablePosIn), 4, 22, bgcolor = clean ? cTblBg : color.new(cPanel, 4), frame_color = clean ? cTblFrm : color.new(cAbove, 55),
+  frame_width = 1, border_color = clean ? cTblGrd : color.new(cText, 88), border_width = 1)
 
 // Clean style: Timeframe | Bias (swing bias, internal bias while the swing is undecided)
 if showTable and barstate.islast and clean
     table.clear(dash, 0, 0, 3, 21)
-    f_cellC(dash, 0, 0, "Timeframe", cText, cHdrBg)
-    f_cellC(dash, 1, 0, "Bias", cText, cHdrBg)
+    f_cellC(dash, 0, 0, "Timeframe", cHdrTx, cHdrBg)
+    f_cellC(dash, 1, 0, "Bias", cHdrTx, cHdrBg)
     for k = 0 to 2
         int sb = k == 0 ? htfBias : k == 1 ? stfBias : exeBias
         int ib = k == 0 ? htfIB : k == 1 ? stfIB : exeIB
