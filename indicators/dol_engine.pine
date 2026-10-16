@@ -1400,7 +1400,7 @@ f_step(Trial t) =>
     t.bars := t.bars + 1
     bool hit = t.liq ? (t.side == 1 ? high > t.edge : low < t.edge) : (t.side == 1 ? high >= t.edge : low <= t.edge)
     bool stp = t.side == 1 ? low <= t.inv : high >= t.inv
-    bool tgtOpn = t.side == 1 ? open >= t.edge : open <= t.edge
+    bool tgtOpn = t.liq ? (t.side == 1 ? open > t.edge : open < t.edge) : (t.side == 1 ? open >= t.edge : open <= t.edge)
     bool stpOpn = t.side == 1 ? open <= t.inv : open >= t.inv
     // bar path: bull bar O-L-H-C, bear bar O-H-L-C; a gap beyond a barrier settles it at the open
     bool  advFirst = not tgtOpn and (stpOpn or (t.side == 1 ? close >= open : close < open))
@@ -1955,12 +1955,13 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         if curI >= 0
             curS    := pool.get(curI).score
             curSide := pool.get(curI).side
-        // a counter-draw DOL is only evicted once the draw side clears minScore by the hysteresis
-        float ctrGate = minScore + (curI >= 0 and dirSide != 0 and curSide != dirSide ? hyst : 0.0)
-        bool  useCtr  = aI < 0 or aS < ctrGate
+        // a counter-draw DOL is only evicted once the draw side clears minScore by the
+        // hysteresis; a NEW counter-draw target is only chosen when no draw-side level qualifies
+        bool  useCtr  = aI < 0 or aS < minScore
+        bool  ctrHold = curI >= 0 and dirSide != 0 and curSide != dirSide and aS < minScore + hyst
         int   bI      = useCtr ? gI : aI
         float bS      = useCtr ? gS : aS
-        bool curElig = curI >= 0 and (useCtr or dirSide == 0 or curSide == dirSide)
+        bool curElig = curI >= 0 and (useCtr or ctrHold or dirSide == 0 or curSide == dirSide)
         bool curOk   = curElig and curS >= minScore - hyst
         int  bId     = -1
         int  bSide   = 0
