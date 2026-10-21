@@ -7,19 +7,73 @@
  */
 
 window.DEALER = {
+  name: 'Meridian Motors',
+  phone: '(312) 555-0142',
+  email: 'sales@example.com',
+
+  // Your site's public address, used by "Copy link" on each car. Leave empty to use the current page address.
+  siteUrl: '',
+
   locale: 'en-US',
   currency: 'USD',
   distanceUnit: 'mi',
-  email: 'sales@example.com',
 
-  // Defaults for the "est. per month" figure on each car and the calculator.
+  // Defaults for the "est. per month" figure on each car and for the calculator.
   finance: {
     apr: 6.9,
     termMonths: 72,
     downPaymentPct: 10,
   },
+
+  // Budget choices offered in the search and inventory filters.
+  budgets: {
+    price: [25000, 30000, 40000, 60000, 100000],
+    monthly: [350, 450, 600, 800, 1200],
+  },
+
+  // Test-drive booking: length of each slot in minutes, and how many open days ahead to offer.
+  testDrive: {
+    slotMinutes: 60,
+    daysAhead: 6,
+  },
+
+  // "Shop by lifestyle" tiles. A car joins a collection by listing its id in the car's `tags`.
+  collections: [
+    {
+      id: 'family',
+      name: 'Family haulers',
+      blurb: 'Room for car seats, strollers and road-trip luggage.',
+      image: 'assets/img/cars/ford-expedition.jpg',
+      focus: '72% 70%',
+    },
+    {
+      id: 'weekend',
+      name: 'Weekend fun',
+      blurb: 'For taking the long way home.',
+      image: 'assets/img/cars/porsche-911-gt3.jpg',
+      focus: '42% 78%',
+    },
+    {
+      id: 'offroad',
+      name: 'Go anywhere',
+      blurb: 'Four-wheel drive and real ground clearance.',
+      image: 'assets/img/cars/toyota-tacoma.jpg',
+      focus: '62% 60%',
+    },
+    {
+      id: 'commuter',
+      name: 'Easy commuting',
+      blurb: 'Efficient, comfortable and cheap to run.',
+      image: 'assets/img/cars/tesla-model-3.jpg',
+      focus: '30% 70%',
+    },
+  ],
 };
 
+/*
+ * Fuel economy: use `mpg: { city, highway }` for gas and hybrid cars, or `range` (in distanceUnit) for electric cars.
+ * `history` is a short list of facts from the vehicle history report.
+ */
 window.INVENTORY = [
   {
     id: 'porsche-911-gt3',
@@ -35,9 +89,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: 'RWD',
     engine: '4.0L flat-six, 500 hp',
-    economy: '15 city / 20 hwy mpg',
+    mpg: { city: 15, highway: 20 },
     exterior: 'White',
     interior: 'Black leather / Race-Tex',
+    owners: 1,
+    history: ['No accidents reported', 'Full service records'],
+    tags: ['weekend'],
     badge: 'Just arrived',
     image: 'assets/img/cars/porsche-911-gt3.jpg',
     alt: 'White Porsche 911 GT3 parked in front of snowy mountains',
@@ -59,9 +116,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: 'RWD',
     engine: '3.0L twin-turbo inline-six, 503 hp',
-    economy: '16 city / 23 hwy mpg',
+    mpg: { city: 16, highway: 23 },
     exterior: 'Frozen Pure Grey',
     interior: 'Black Merino leather',
+    owners: 1,
+    history: ['No accidents reported', 'Factory warranty remaining'],
+    tags: ['weekend'],
     image: 'assets/img/cars/bmw-m3-competition.jpg',
     alt: 'Matte grey BMW M3 Competition sedan in a bright showroom',
     features: ['Carbon roof', 'Head-up display', 'Harman Kardon audio', 'Parking Assistant', 'Heated seats'],
@@ -82,9 +142,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: 'AWD',
     engine: 'Dual motor',
-    economy: '341 mi EPA range',
+    range: 341,
     exterior: 'Diamond Black',
     interior: 'Black vegan leather',
+    owners: 1,
+    history: ['No accidents reported', 'Battery warranty remaining'],
+    tags: ['commuter'],
     badge: 'Electric',
     image: 'assets/img/cars/tesla-model-3.jpg',
     alt: 'Black Tesla Model 3 charging at a Supercharger',
@@ -106,9 +169,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: '4WD',
     engine: '3.5L EcoBoost V6, 375 hp',
-    economy: '17 city / 22 hwy mpg',
+    mpg: { city: 17, highway: 22 },
     exterior: 'Oxford White',
     interior: 'Ebony cloth',
+    owners: 2,
+    history: ['No accidents reported', 'New tires and brakes'],
+    tags: ['family'],
     image: 'assets/img/cars/ford-expedition.jpg',
     alt: 'White Ford Expedition parked on a desert road beside red rocks',
     features: ['Seats 8', 'Trailer tow package', 'Power liftgate', 'Blind-spot monitoring', 'Apple CarPlay'],
@@ -130,9 +196,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: '4WD',
     engine: '3.6L V6, 285 hp',
-    economy: '16 city / 20 hwy mpg',
+    mpg: { city: 16, highway: 20 },
     exterior: 'Black',
     interior: 'Black cloth',
+    owners: 2,
+    history: ['No accidents reported', 'Underbody inspected'],
+    tags: ['offroad'],
     badge: 'Price drop',
     image: 'assets/img/cars/jeep-wrangler.jpg',
     alt: 'Black Jeep Wrangler Unlimited on a gravel trail at dusk',
@@ -154,9 +223,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: '4WD',
     engine: '3.5L V6, 278 hp',
-    economy: '18 city / 22 hwy mpg',
+    mpg: { city: 18, highway: 22 },
     exterior: 'Quicksand',
     interior: 'Black fabric',
+    owners: 1,
+    history: ['No accidents reported', 'Dealer-installed leveling kit'],
+    tags: ['offroad'],
     image: 'assets/img/cars/toyota-tacoma.jpg',
     alt: 'Tan Toyota Tacoma TRD pickup on a dirt road',
     features: ['Locking rear differential', 'Crawl Control', 'LED light bar', 'Leveling kit', 'Bed liner'],
@@ -177,9 +249,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: 'AWD',
     engine: '2.5L 4-cylinder, 203 hp',
-    economy: '25 city / 32 hwy mpg',
+    mpg: { city: 25, highway: 32 },
     exterior: 'Cavalry Blue / Ice Edge roof',
     interior: 'Black SofTex',
+    owners: 1,
+    history: ['No accidents reported', 'Local trade-in'],
+    tags: ['family', 'commuter'],
     badge: 'Popular',
     image: 'assets/img/cars/toyota-rav4.jpg',
     alt: 'Bright blue Toyota RAV4 Adventure with a silver roof parked by a house',
@@ -201,9 +276,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: 'FWD',
     engine: '2.0L turbo 4-cylinder, 241 hp',
-    economy: '25 city / 33 hwy mpg',
+    mpg: { city: 25, highway: 33 },
     exterior: 'Pure White',
     interior: 'Black leather',
+    owners: 1,
+    history: ['No accidents reported', 'Factory warranty remaining'],
+    tags: ['commuter', 'weekend'],
     image: 'assets/img/cars/vw-golf-gti.jpg',
     alt: 'White Volkswagen Golf GTI on a winding road',
     features: ['Digital cockpit', 'Sunroof', 'Harman Kardon audio', 'Adaptive cruise', 'Heated seats'],
@@ -224,9 +302,12 @@ window.INVENTORY = [
     transmission: 'Automatic',
     drivetrain: 'RWD',
     engine: '3.6L V6, 335 hp',
-    economy: '18 city / 27 hwy mpg',
+    mpg: { city: 18, highway: 27 },
     exterior: 'Black',
     interior: 'Jet Black leather',
+    owners: 2,
+    history: ['No accidents reported', 'Garage kept'],
+    tags: ['weekend'],
     image: 'assets/img/cars/chevrolet-camaro.jpg',
     alt: 'Black Chevrolet Camaro convertible in front of city towers',
     features: ['Power-folding top', 'Heated & ventilated seats', 'Bose audio', 'Remote start', 'Rear camera'],

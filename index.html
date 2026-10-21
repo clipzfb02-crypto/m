@@ -2,17 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Meridian Motors — Quality Pre-Owned Cars</title>
-  <meta name="description" content="Hand-picked, inspected pre-owned cars with upfront pricing, easy financing and real trade-in offers. Browse our inventory and book a test drive.">
-  <meta name="theme-color" content="#11121f">
+  <meta name="description" content="Hand-picked, inspected pre-owned cars with upfront pricing, easy financing and real trade-in offers. Browse our inventory, compare cars and book a test drive.">
+  <meta name="theme-color" content="#16181d">
   <meta property="og:title" content="Meridian Motors — Quality Pre-Owned Cars">
   <meta property="og:description" content="Inspected pre-owned cars, upfront pricing and financing for every credit.">
   <meta property="og:type" content="website">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap">
   <link rel="stylesheet" href="assets/css/style.css">
   <link rel="preload" as="image" href="assets/img/hero.jpg">
   <script>document.documentElement.classList.add('js');</script>
@@ -40,11 +40,16 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-compare" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
   </svg>
 
   <a class="skip-link" href="#main">Skip to content</a>
 
-  <!-- DEALERSHIP DETAILS — the address, phone and email also appear in the Visit section and footer. -->
+  <!-- DEALERSHIP DETAILS — the address, phone and email also appear in the Visit section, footer and inventory.js. -->
   <div class="topbar">
     <div class="container topbar-inner">
       <p><svg class="icon"><use href="#i-pin"/></svg> 1200 Meridian Avenue, Springfield</p>
@@ -65,12 +70,13 @@
           <li><a href="#inventory">Inventory</a></li>
           <li><a href="#financing">Financing</a></li>
           <li><a href="#trade-in">Trade-in</a></li>
+          <li><a href="#faq">FAQ</a></li>
           <li><a href="#contact">Visit us</a></li>
         </ul>
       </nav>
 
       <div class="header-actions">
-        <a class="btn btn-accent btn-small header-call" href="tel:+13125550142">
+        <a class="btn btn-lane btn-small header-call" href="tel:+13125550142">
           <svg class="icon"><use href="#i-phone"/></svg>
           <span>(312) 555-0142</span>
         </a>
@@ -92,27 +98,33 @@
         <h1>Great cars.<br> Fair prices.<br> <span>Zero pressure.</span></h1>
         <p class="hero-lede">Every car on our lot passes a 150-point inspection and wears one honest price, so you spend less time haggling and more time driving.</p>
         <div class="hero-actions">
-          <a class="btn btn-accent btn-large" href="#inventory">Browse inventory <svg class="icon"><use href="#i-arrow"/></svg></a>
-          <a class="btn btn-glass btn-large" href="#financing">Estimate payments</a>
+          <a class="btn btn-lane btn-large" href="#inventory">Browse inventory <svg class="icon"><use href="#i-arrow"/></svg></a>
+          <a class="btn btn-glass btn-large" href="#financing">What can I afford?</a>
         </div>
+        <div class="hero-lane" aria-hidden="true"></div>
+        <dl class="hero-stats">
+          <div><dt>In stock</dt><dd id="stat-count">9 cars</dd></div>
+          <div><dt>Prices from</dt><dd id="stat-from">$24,800</dd></div>
+          <div><dt>Average mileage</dt><dd id="stat-miles">27,700 mi</dd></div>
+        </dl>
       </div>
     </section>
 
     <div class="container">
       <form class="quick-search" id="quick-search" aria-label="Quick vehicle search">
         <label class="field">
-          <span class="field-label">Body type</span>
+          <span class="label">Body type</span>
           <select name="body" id="q-body"><option value="All">Any body type</option></select>
         </label>
         <label class="field">
-          <span class="field-label">Make</span>
+          <span class="label">Make</span>
           <select name="make" id="q-make"><option value="All">Any make</option></select>
         </label>
         <label class="field">
-          <span class="field-label">Max price</span>
-          <select name="price" id="q-price" class="price-select"></select>
+          <span class="label">Budget</span>
+          <select name="budget" id="q-budget" class="budget-select"></select>
         </label>
-        <button class="btn btn-accent btn-large" type="submit">
+        <button class="btn btn-lane btn-large" type="submit">
           <svg class="icon"><use href="#i-search"/></svg>
           <span id="q-count">Show cars</span>
         </button>
@@ -141,13 +153,26 @@
       </ul>
     </section>
 
+    <!-- COLLECTIONS — tiles come from DEALER.collections in assets/js/inventory.js. -->
+    <section class="section section-tight" id="collections" aria-labelledby="collections-title">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Shop by lifestyle</p>
+            <h2 id="collections-title">What's the car for?</h2>
+          </div>
+        </div>
+        <div class="collections" id="collection-grid"></div>
+      </div>
+    </section>
+
     <!-- INVENTORY — cars come from assets/js/inventory.js. -->
-    <section class="section" id="inventory">
+    <section class="section" id="inventory" aria-labelledby="inventory-title">
       <div class="container">
         <div class="section-head">
           <div>
             <p class="kicker">Inventory</p>
-            <h2>Find your next car</h2>
+            <h2 id="inventory-title">Find your next car</h2>
           </div>
           <p class="result-count">
             <span id="result-count" aria-live="polite"></span>
@@ -161,7 +186,7 @@
             <input type="search" id="f-search" placeholder="Search make, model or feature" aria-label="Search inventory">
           </label>
           <select id="f-make" aria-label="Make"><option value="All">All makes</option></select>
-          <select id="f-price" class="price-select" aria-label="Max price"></select>
+          <select id="f-budget" class="budget-select" aria-label="Budget"></select>
           <select id="f-sort" aria-label="Sort by">
             <option value="featured">Sort: Featured</option>
             <option value="price-asc">Price: low to high</option>
@@ -176,8 +201,11 @@
         <div class="car-grid" id="car-grid"></div>
 
         <div class="empty-state" id="empty-state" hidden>
-          <p><strong>No cars match those filters.</strong> Try widening your search, or tell us what you're after and we'll find it.</p>
-          <button class="btn btn-ghost" type="button" id="reset-filters">Reset filters</button>
+          <p><strong>Nothing on the lot matches yet.</strong> Widen your search, or tell us what you're after and we'll look for it at auction and from our trade-ins.</p>
+          <div class="empty-actions">
+            <button class="btn btn-ink" type="button" id="find-for-me">Ask us to find one</button>
+            <button class="btn btn-ghost" type="button" id="reset-filters">Reset filters</button>
+          </div>
         </div>
 
         <noscript>
@@ -187,59 +215,79 @@
     </section>
 
     <!-- FINANCING -->
-    <section class="section section-alt" id="financing">
+    <section class="section section-alt" id="financing" aria-labelledby="financing-title">
       <div class="container finance-grid">
         <div class="finance-copy">
           <p class="kicker">Financing</p>
-          <h2>Payments that fit your budget</h2>
-          <p class="section-lede">We work with a network of banks and credit unions to find you a competitive rate, whether your credit is spotless or still a work in progress.</p>
+          <h2 id="financing-title">Payments that fit your budget</h2>
+          <p class="section-lede">Start from a car and see the payment, or start from a monthly budget and see what you can afford. We work with banks and credit unions to find you a competitive rate, whatever your credit history.</p>
           <ul class="checks">
             <li><svg class="icon"><use href="#i-check"/></svg> Pre-approval in minutes, with no impact on your credit score</li>
             <li><svg class="icon"><use href="#i-check"/></svg> Terms from 36 to 84 months</li>
             <li><svg class="icon"><use href="#i-check"/></svg> Programs for first-time buyers and rebuilding credit</li>
           </ul>
-          <a class="btn btn-dark btn-large" href="#contact" data-topic="Financing">Get pre-approved</a>
+          <a class="btn btn-ink btn-large" href="#contact" data-topic="Financing">Get pre-approved</a>
         </div>
 
         <form class="calculator" id="calculator" aria-labelledby="calc-title">
-          <h3 id="calc-title">Payment calculator</h3>
+          <div class="calc-head">
+            <h3 id="calc-title">Payment calculator</h3>
+            <fieldset class="toggle">
+              <legend class="sr-only">What to calculate</legend>
+              <label><input type="radio" name="mode" id="mode-payment" value="payment" checked><span>Monthly payment</span></label>
+              <label><input type="radio" name="mode" id="mode-budget" value="budget"><span>What I can afford</span></label>
+            </fieldset>
+          </div>
+
           <div class="calc-fields">
-            <label class="field">
-              <span class="field-label">Vehicle price</span>
+            <label class="field" data-mode="payment">
+              <span class="label">Vehicle price</span>
               <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-price" value="30,000" autocomplete="off"></span>
             </label>
+            <label class="field" data-mode="budget" hidden>
+              <span class="label">Monthly budget</span>
+              <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-budget" value="450" autocomplete="off"></span>
+            </label>
             <label class="field">
-              <span class="field-label">Down payment</span>
+              <span class="label">Down payment</span>
               <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-down" value="3,000" autocomplete="off"></span>
             </label>
             <label class="field">
-              <span class="field-label">Trade-in value</span>
+              <span class="label">Trade-in value</span>
               <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-trade" value="0" autocomplete="off"></span>
             </label>
             <label class="field">
-              <span class="field-label">Interest rate (APR)</span>
+              <span class="label">Interest rate (APR)</span>
               <span class="affix affix-end"><input type="text" inputmode="decimal" id="c-apr" value="6.9" autocomplete="off"><span aria-hidden="true">%</span></span>
             </label>
           </div>
 
           <fieldset class="segmented">
-            <legend class="field-label">Loan term</legend>
+            <legend class="label">Loan term</legend>
             <div class="seg-options">
-              <label><input type="radio" name="term" value="36"><span>36 mo</span></label>
-              <label><input type="radio" name="term" value="48"><span>48 mo</span></label>
-              <label><input type="radio" name="term" value="60"><span>60 mo</span></label>
-              <label><input type="radio" name="term" value="72" checked><span>72 mo</span></label>
-              <label><input type="radio" name="term" value="84"><span>84 mo</span></label>
+              <label><input type="radio" name="term" id="term-36" value="36"><span>36 mo</span></label>
+              <label><input type="radio" name="term" id="term-48" value="48"><span>48 mo</span></label>
+              <label><input type="radio" name="term" id="term-60" value="60"><span>60 mo</span></label>
+              <label><input type="radio" name="term" id="term-72" value="72" checked><span>72 mo</span></label>
+              <label><input type="radio" name="term" id="term-84" value="84"><span>84 mo</span></label>
             </div>
           </fieldset>
 
-          <div class="calc-result" aria-live="polite">
-            <p class="calc-monthly"><span>Estimated monthly payment</span><output id="c-monthly">$0</output></p>
+          <div class="calc-result">
+            <p class="calc-headline">
+              <span class="label" id="c-label">Estimated monthly payment</span>
+              <span class="calc-figure" aria-live="polite"><span class="odo odo-lg" id="c-figure"></span><small id="c-suffix">/mo</small></span>
+            </p>
+            <div class="split" aria-hidden="true">
+              <span class="split-principal" id="c-split-principal"></span>
+              <span class="split-interest" id="c-split-interest"></span>
+            </div>
             <dl class="calc-breakdown">
-              <div><dt>Amount financed</dt><dd id="c-financed">$0</dd></div>
-              <div><dt>Total interest</dt><dd id="c-interest">$0</dd></div>
+              <div><dt><span class="dot dot-principal" aria-hidden="true"></span>Amount financed</dt><dd id="c-financed">$0</dd></div>
+              <div><dt><span class="dot dot-interest" aria-hidden="true"></span>Total interest</dt><dd id="c-interest">$0</dd></div>
               <div><dt>Total cost</dt><dd id="c-total">$0</dd></div>
             </dl>
+            <button class="btn btn-lane calc-shop" type="button" id="c-shop" hidden>Show cars in this budget <svg class="icon"><use href="#i-arrow"/></svg></button>
           </div>
           <p class="fineprint">This is an estimate only. It excludes taxes, title, registration and dealer fees, and your actual rate depends on credit approval.</p>
         </form>
@@ -247,38 +295,98 @@
     </section>
 
     <!-- TRADE-IN -->
-    <section class="trade" id="trade-in">
+    <section class="trade" id="trade-in" aria-labelledby="trade-title">
       <img class="trade-bg" src="assets/img/trade-in.jpg" alt="" width="1600" height="1066" loading="lazy">
       <div class="container trade-inner">
         <div class="trade-copy">
           <p class="kicker">Sell or trade</p>
-          <h2>Get a real offer for your car within 24 hours</h2>
+          <h2 id="trade-title">Get a real offer for your car within 24 hours</h2>
           <p class="section-lede">Selling privately means strangers, test drives and haggling. We'll make you a written offer and buy it outright, whether or not you buy from us.</p>
-          <a class="btn btn-accent btn-large" href="#contact" data-topic="Trade-in">Get my offer <svg class="icon"><use href="#i-arrow"/></svg></a>
+          <ol class="steps">
+            <li><span class="step-num">1</span><div><strong>Tell us about it</strong><p>Year, make, model and mileage.</p></div></li>
+            <li><span class="step-num">2</span><div><strong>Get your offer</strong><p>In writing, good for 7 days.</p></div></li>
+            <li><span class="step-num">3</span><div><strong>Get paid</strong><p>Same day, or toward your next car.</p></div></li>
+          </ol>
         </div>
-        <ol class="steps">
-          <li>
-            <span class="step-num">1</span>
-            <div><strong>Tell us about it</strong><p>Year, make, model and mileage. It takes two minutes.</p></div>
-          </li>
-          <li>
-            <span class="step-num">2</span>
-            <div><strong>Get your offer</strong><p>A written offer that's good for 7 days, with no obligation.</p></div>
-          </li>
-          <li>
-            <span class="step-num">3</span>
-            <div><strong>Get paid</strong><p>Same-day payment, or put it toward your next car.</p></div>
-          </li>
-        </ol>
+
+        <form class="trade-form" id="trade-form" novalidate aria-labelledby="trade-form-title">
+          <h3 id="trade-form-title">Tell us about your car</h3>
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">Year</span>
+              <select name="year" id="t-year"></select>
+            </label>
+            <label class="field">
+              <span class="label">Mileage</span>
+              <input type="text" inputmode="numeric" name="mileage" id="t-mileage" placeholder="e.g. 62,000" required autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label">Make</span>
+              <input type="text" name="make" id="t-make" placeholder="e.g. Honda" required autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label">Model</span>
+              <input type="text" name="model" id="t-model" placeholder="e.g. Accord EX" required autocomplete="off">
+            </label>
+            <fieldset class="segmented field-wide">
+              <legend class="label">Condition</legend>
+              <div class="seg-options seg-4">
+                <label><input type="radio" name="condition" id="t-cond-1" value="Excellent"><span>Excellent</span></label>
+                <label><input type="radio" name="condition" id="t-cond-2" value="Good" checked><span>Good</span></label>
+                <label><input type="radio" name="condition" id="t-cond-3" value="Fair"><span>Fair</span></label>
+                <label><input type="radio" name="condition" id="t-cond-4" value="Needs work"><span>Needs work</span></label>
+              </div>
+            </fieldset>
+          </div>
+          <button class="btn btn-lane btn-large" type="submit">Continue to your details <svg class="icon"><use href="#i-arrow"/></svg></button>
+          <p class="form-note" id="trade-note" role="status"></p>
+        </form>
       </div>
     </section>
 
-    <!-- VISIT & CONTACT — the hours table drives the "Open now" label; times are 24-hour. -->
-    <section class="section" id="contact">
+    <!-- FAQ — make sure every answer matches your real policies. -->
+    <section class="section section-alt" id="faq" aria-labelledby="faq-title">
+      <div class="container faq-grid">
+        <div class="faq-intro">
+          <p class="kicker">Questions</p>
+          <h2 id="faq-title">Good to know before you visit</h2>
+          <p class="section-lede">Can't find your answer? Call us on (312) 555-0142 or <a href="#contact">send us a message</a>.</p>
+        </div>
+        <div class="faq-list">
+          <details>
+            <summary>Is the price on the website the price I pay?</summary>
+            <p>Yes. The listed price is the price of the car. On top of it you'll only pay tax, title and registration, which the state sets, and our documentation fee, which is printed on every buyer's order. There are no add-ons you didn't ask for.</p>
+          </details>
+          <details>
+            <summary>Can my own mechanic inspect a car first?</summary>
+            <p>Of course. Take it to a shop near us, or have a mobile inspector meet you on the lot. Tell us when you book and we'll have the car ready.</p>
+          </details>
+          <details>
+            <summary>How does the 7-day money-back guarantee work?</summary>
+            <p>If the car isn't right, bring it back within 7 days and 250 miles in the condition you bought it, and we'll refund the purchase price.</p>
+          </details>
+          <details>
+            <summary>Do you take trade-ins that still have a loan?</summary>
+            <p>Yes. We pay off your lender directly. If the car is worth more than you owe, the difference goes toward your purchase or straight to you.</p>
+          </details>
+          <details>
+            <summary>Can I buy a car without coming in?</summary>
+            <p>Yes. We can handle the paperwork by phone and email, and deliver the car to your driveway within 50 miles.</p>
+          </details>
+          <details>
+            <summary>What do I need to bring to buy a car?</summary>
+            <p>Your driver's license, proof of insurance, and a down payment if you're financing. If you're trading in, bring the title or your loan details and all the keys.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- VISIT & CONTACT — the hours table drives "Open now" and the test-drive times; times are 24-hour. -->
+    <section class="section" id="contact" aria-labelledby="contact-title">
       <div class="container contact-grid">
         <div class="visit">
           <p class="kicker">Visit us</p>
-          <h2>Come see us in person</h2>
+          <h2 id="contact-title">Come see us in person</h2>
           <p class="section-lede">Coffee's on us. Browse at your own pace and drive anything on the lot, no appointment needed.</p>
 
           <ul class="contact-list">
@@ -301,7 +409,7 @@
           </ul>
 
           <div class="hours-head">
-            <h3 class="sub-label">Showroom hours</h3>
+            <h3 class="label">Showroom hours</h3>
             <span class="open-status" id="open-status" hidden></span>
           </div>
           <table class="hours" id="hours">
@@ -321,19 +429,19 @@
           <h3>Book a test drive or ask a question</h3>
           <div class="form-grid">
             <label class="field">
-              <span class="field-label">Name</span>
+              <span class="label">Name</span>
               <input type="text" name="name" id="name" autocomplete="name" required>
             </label>
             <label class="field">
-              <span class="field-label">Phone <span class="optional">(optional)</span></span>
-              <input type="tel" name="phone" autocomplete="tel">
+              <span class="label">Phone <span class="optional">(optional)</span></span>
+              <input type="tel" name="phone" id="phone" autocomplete="tel">
             </label>
             <label class="field field-wide">
-              <span class="field-label">Email</span>
-              <input type="email" name="email" autocomplete="email" required>
+              <span class="label">Email</span>
+              <input type="email" name="email" id="email" autocomplete="email" required>
             </label>
             <label class="field">
-              <span class="field-label">I'm interested in</span>
+              <span class="label">I'm interested in</span>
               <select name="topic" id="topic">
                 <option>Test drive</option>
                 <option>Financing</option>
@@ -342,26 +450,43 @@
               </select>
             </label>
             <label class="field">
-              <span class="field-label">Preferred date <span class="optional">(optional)</span></span>
-              <input type="date" name="date" id="date">
-            </label>
-            <label class="field field-wide">
-              <span class="field-label">Vehicle <span class="optional">(optional)</span></span>
+              <span class="label">Vehicle <span class="optional">(optional)</span></span>
               <select name="vehicle" id="vehicle"><option value="">Not sure yet</option></select>
             </label>
+            <fieldset class="slot-picker field-wide" id="slot-picker">
+              <legend class="label"><svg class="icon"><use href="#i-calendar"/></svg> Pick a time <span class="optional">(optional)</span></legend>
+              <div class="slot-row" id="slot-days"></div>
+              <div class="slot-row slot-times" id="slot-times"></div>
+            </fieldset>
             <label class="field field-wide">
-              <span class="field-label">Message <span class="optional">(optional)</span></span>
-              <textarea name="message" rows="4" placeholder="Anything we should know? For trade-ins, include the year, make, model and mileage."></textarea>
+              <span class="label">Message <span class="optional">(optional)</span></span>
+              <textarea name="message" id="message" rows="4" placeholder="Anything we should know before you come in?"></textarea>
             </label>
           </div>
-          <button class="btn btn-accent btn-large" type="submit">Send message <svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button class="btn btn-lane btn-large" type="submit">Send message <svg class="icon"><use href="#i-arrow"/></svg></button>
           <p class="form-note" id="form-note" role="status"></p>
         </form>
       </div>
     </section>
   </main>
 
-  <dialog class="car-dialog" id="car-dialog" aria-labelledby="dialog-title"></dialog>
+  <dialog class="sheet sticker-dialog" id="car-dialog" aria-labelledby="dialog-title"></dialog>
+  <dialog class="sheet compare-dialog" id="compare-dialog" aria-labelledby="compare-title"></dialog>
+
+  <div class="compare-tray" id="compare-tray" role="region" aria-label="Cars to compare" hidden>
+    <ul class="tray-items" id="tray-items"></ul>
+    <div class="tray-actions">
+      <button class="link-btn link-btn-light" type="button" id="tray-clear">Clear</button>
+      <button class="btn btn-lane btn-small" type="button" id="tray-compare"><svg class="icon"><use href="#i-compare"/></svg> <span id="tray-label">Compare</span></button>
+    </div>
+  </div>
+
+  <div class="action-bar" id="action-bar">
+    <a class="btn btn-glass" href="tel:+13125550142"><svg class="icon"><use href="#i-phone"/></svg> Call</a>
+    <a class="btn btn-lane" href="#contact" data-topic="Test drive"><svg class="icon"><use href="#i-calendar"/></svg> Book a test drive</a>
+  </div>
+
+  <p class="toast" id="toast" role="status" aria-live="polite"></p>
 
   <footer class="site-footer">
     <div class="container footer-grid">
@@ -378,6 +503,7 @@
           <li><a href="#inventory">Inventory</a></li>
           <li><a href="#financing">Financing</a></li>
           <li><a href="#trade-in">Sell or trade</a></li>
+          <li><a href="#faq">FAQ</a></li>
         </ul>
       </div>
       <div>

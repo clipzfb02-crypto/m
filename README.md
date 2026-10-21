@@ -2,22 +2,30 @@
 
 A website for a used-car dealership, written in plain HTML, CSS and JavaScript. There's no build step and nothing to install.
 
-It has:
+## What's on it
 
-- **Inventory** with live search, filters (body type, make, max price), sorting and a "Saved" list. Visitors save cars by tapping the heart, and the list is remembered in their browser.
-- **Vehicle details** in a pop-up with photos, specs, highlights, an estimated monthly payment, and buttons that book a test drive or open the payment calculator with that car's price.
-- **Quick search** in the hero, which shows how many cars match before the visitor searches.
-- **Payment calculator** for price, down payment, trade-in, APR and term, showing the monthly payment, total interest and total cost.
-- **Trade-in section**, plus a contact and test-drive form that can be pre-filled from any car.
-- **Showroom hours** with a live "Open now / Closed now" label and today's row highlighted.
-- A responsive layout with a mobile menu, an automatic dark mode, and accessibility basics: a skip link, labelled controls and a keyboard-friendly dialog.
+- **Hero** with a "headlights on" load moment, live stock stats, and a quick search by body type, make and budget. The budget can be a total price or a monthly payment, and the search shows how many cars match before you press it.
+- **Shop by lifestyle**: tiles for Family haulers, Weekend fun, Go anywhere and Easy commuting, each showing how many cars it has and the lowest price.
+- **Inventory**:
+  - Search, body-type chips, make and budget filters, and sorting.
+  - A **Saved** list: visitors save cars with the heart, and the list is remembered in their browser.
+  - When the budget is monthly, the cards switch to showing the monthly price first.
+  - When nothing matches, **Ask us to find one** turns the visitor's filters into a message to you.
+- **Window sticker**: each car opens as a price-sticker style sheet with price, estimated payment, fuel economy or range, an odometer, specs, highlights and history report. It has previous and next buttons (the arrow keys work too), **Copy link** (every car has its own link, `…#car-id`), and buttons to book a test drive, work out the payment or compare.
+- **Compare**: pick up to 3 cars to see them side by side, with the best price, mileage, year, economy and owner count marked.
+- **Payment calculator** with two modes. *Monthly payment* works out the payment for a price. *What I can afford* works out the most you can spend for a monthly budget, then **Show cars up to $X** filters the inventory to match. The result uses rolling odometer digits and a principal-versus-interest bar.
+- **Trade-in form** (year, make, model, mileage, condition) that carries the details into the contact form.
+- **FAQ** with answers to common questions.
+- **Contact form** with a **test-drive time picker** built from your showroom hours, plus a live "Open now / Closed now" label.
+- **On phones**, a sticky Call / Book a test drive bar.
+- An automatic dark mode, a responsive layout, keyboard-friendly dialogs and reduced-motion support.
 
 ## Structure
 
 ```
-index.html              Page layout and all fixed text (dealer name, address, hours, perks…)
-assets/js/inventory.js  Your cars, plus currency, units and finance defaults: edit this most often
-assets/js/main.js       Filters, dialog, calculator, form and hours logic
+index.html              Page layout and fixed text (address, hours, perks, FAQ…)
+assets/js/inventory.js  Your cars and dealership settings: edit this most often
+assets/js/main.js       Filters, sticker, compare, calculator, forms, hours logic
 assets/css/style.css    Styles. Colors and fonts are tokens at the top
 assets/img/             Hero image, trade-in background and car photos (cars/)
 ```
@@ -30,15 +38,19 @@ Open `assets/js/inventory.js`. Each car is one object in `window.INVENTORY`:
 
 ```js
 {
-  id: 'toyota-rav4',               // unique, used in links and the saved list
+  id: 'toyota-rav4',               // unique; also the car's link (#toyota-rav4)
   stock: 'M1046',
   year: 2021, make: 'Toyota', model: 'RAV4', trim: 'Adventure AWD',
   body: 'SUV',                     // SUV, Sedan, Truck, Coupe, Hatchback, Convertible, Wagon, Van…
   price: 30900, wasPrice: 32900,   // wasPrice is optional and shows as a struck-through price
   mileage: 28400,
   fuel: 'Gas', transmission: 'Automatic', drivetrain: 'AWD',
-  engine: '2.5L 4-cylinder, 203 hp', economy: '25 city / 32 hwy mpg',
+  engine: '2.5L 4-cylinder, 203 hp',
+  mpg: { city: 25, highway: 32 },  // electric cars use `range: 341` instead
   exterior: 'Cavalry Blue', interior: 'Black SofTex',
+  owners: 1,
+  history: ['No accidents reported', 'Local trade-in'],
+  tags: ['family', 'commuter'],    // which lifestyle collections it appears in
   badge: 'Popular',                // optional: 'Just arrived', 'Price drop', 'Electric', anything
   image: 'assets/img/cars/toyota-rav4.jpg',
   alt: 'Blue Toyota RAV4 parked by a house',
@@ -47,41 +59,35 @@ Open `assets/js/inventory.js`. Each car is one object in `window.INVENTORY`:
 }
 ```
 
-The filters, makes list, counts and contact-form vehicle list all build themselves from this data. Body-type filter chips only appear for body types you actually have.
+The filters, makes list, counts, collection tiles, hero stats and contact-form vehicle list all build themselves from this data.
 
 **Photos:** use 3:2 landscape images at about 1200×800 and put them in `assets/img/cars/`. The sample photos are placeholders, so replace them with photos of your real cars.
 
-### 2. Dealership details
+### 2. Dealership settings
 
-In `index.html`, search for and replace:
+At the top of `inventory.js`, `window.DEALER` holds:
 
-- `Meridian Motors` / `Meridian` with your name
-- `1200 Meridian Avenue`, `Springfield` and `ST 00000` with your address (also update the "Get directions" link)
-- `(312) 555-0142` and `+13125550142` with your phone number
-- `sales@example.com` with your email (also set `email` in `inventory.js`)
+- `name`, `phone` and `email`, used in messages and on the window sticker.
+- `siteUrl`: your public address, so **Copy link** gives out the right URL. Leave it empty to use the page's own address.
+- `locale`, `currency` and `distanceUnit`. For example, `'en-GB'`, `'GBP'`, `'mi'`, or `'de-DE'`, `'EUR'`, `'km'`.
+- `finance`: the APR, term and down payment used for every "est. /mo" figure and as the calculator's starting values.
+- `budgets`: the price and monthly-payment choices in the budget filters.
+- `testDrive`: how long each test-drive slot is and how many open days ahead to offer.
+- `collections`: the lifestyle tiles (name, blurb, image and which part of the photo to show). A car joins a collection by listing its `id` in the car's `tags`.
 
-**Hours:** edit the table in the "Visit us" section. The `data-open` and `data-close` times are 24-hour (`"09:00"`, `"19:00"`), and a day with neither is treated as closed. The open/closed label uses the visitor's local time.
+In `index.html`, also replace the address (`1200 Meridian Avenue`, `Springfield`, `ST 00000`, plus the "Get directions" link), the phone number (`(312) 555-0142`, `+13125550142`) and `sales@example.com`.
 
-**Perks and copy:** the four perks under the hero (inspection, returns, history report, financing) are examples. Change them to the guarantees you actually offer.
+**Hours:** edit the table in the "Visit us" section. The `data-open` and `data-close` times are 24-hour (`"09:00"`, `"19:00"`), and a day with neither is treated as closed. The hours drive both the open/closed label and the test-drive times. Both use the visitor's local time.
 
-### 3. Money, units and finance defaults
+**Perks and FAQ:** the four perks under the hero and the FAQ answers describe example policies (a 150-point inspection, 7-day returns, delivery within 50 miles…). Change them to match what you actually offer.
 
-At the top of `assets/js/inventory.js`:
+### 3. Colors and fonts
 
-```js
-locale: 'en-US', currency: 'USD', distanceUnit: 'mi',
-finance: { apr: 6.9, termMonths: 72, downPaymentPct: 10 },
-```
+Edit the variables at the top of `assets/css/style.css`. `--lane` is the road-marking yellow used for buttons and highlights, and `--asphalt` is the dark header, hero, trade-in and footer. All text uses **Archivo** from Google Fonts at three widths: expanded for headings, regular for body text, and condensed for spec-sheet labels.
 
-For example, `locale: 'en-GB', currency: 'GBP', distanceUnit: 'mi'` or `locale: 'de-DE', currency: 'EUR', distanceUnit: 'km'`. The finance values drive the "est. /mo" figure on every car and the calculator's starting values.
+## The forms
 
-### 4. Colors and fonts
-
-Edit the variables at the top of `assets/css/style.css`. `--btn` sets the main button color, `--accent` sets the link and icon color, and `--night` sets the dark header, hero and footer. Headings use Archivo and body text uses Inter, both from Google Fonts.
-
-## The contact form
-
-By default, **Send message** opens the visitor's email app with their message already written and addressed to you, so it works with no server.
+By default, **Send message** opens the visitor's email app with their message already written and addressed to you, so it works with no server. The trade-in form and **Ask us to find one** fill in this same contact form.
 
 To receive submissions directly instead, sign up for a form service such as [Formspree](https://formspree.io) or [Netlify Forms](https://docs.netlify.com/forms/setup/) and set the form's `action` in `index.html`:
 
@@ -106,7 +112,7 @@ Netlify, Vercel and Cloudflare Pages also work. The site is static, so you can p
 
 ## Sample content and photo credits
 
-The listings (prices, mileage, stock numbers, descriptions), dealership name, address and phone number are made up for demonstration. The phone number is in the 555-01xx range reserved for fictional use.
+The listings (prices, mileage, stock numbers, history, descriptions), dealership name, address and phone number are made up for demonstration. The phone number is in the 555-01xx range reserved for fictional use.
 
 The photos are from [Unsplash](https://unsplash.com/license) and are free to use under the Unsplash License:
 
