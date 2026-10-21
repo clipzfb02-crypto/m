@@ -3,50 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Your Name — Designer &amp; Developer</title>
-  <meta name="description" content="Personal website of Your Name: selected work, background, and how to get in touch.">
-  <meta name="theme-color" content="#f7f4ee" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#131210" media="(prefers-color-scheme: dark)">
-  <meta property="og:title" content="Your Name — Designer &amp; Developer">
-  <meta property="og:description" content="Selected work, background, and how to get in touch.">
+  <title>Meridian Motors — Quality Pre-Owned Cars</title>
+  <meta name="description" content="Hand-picked, inspected pre-owned cars with upfront pricing, easy financing and real trade-in offers. Browse our inventory and book a test drive.">
+  <meta name="theme-color" content="#11121f">
+  <meta property="og:title" content="Meridian Motors — Quality Pre-Owned Cars">
+  <meta property="og:description" content="Inspected pre-owned cars, upfront pricing and financing for every credit.">
   <meta property="og:type" content="website">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="assets/css/style.css">
-  <script>
-    // Runs before first paint so a saved theme never flashes the wrong colors.
-    document.documentElement.classList.add('js');
-    try {
-      const theme = localStorage.getItem('theme');
-      if (theme) document.documentElement.dataset.theme = theme;
-    } catch (e) {}
-  </script>
+  <link rel="preload" as="image" href="assets/img/hero.jpg">
+  <script>document.documentElement.classList.add('js');</script>
+  <script src="assets/js/inventory.js" defer></script>
   <script src="assets/js/main.js" defer></script>
 </head>
 <body>
+  <!-- Icon sprite: reference with <svg class="icon"><use href="#i-name"/></svg> -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2-1.5-1.5-2.7-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7z"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/></symbol>
+    <symbol id="i-gears" viewBox="0 0 24 24"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><path d="M5 7v10M12 7v10M19 7v5H5"/></symbol>
+    <symbol id="i-fuel" viewBox="0 0 24 24"><path d="M3 22h12M4 9h10M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 4 0V9.8a2 2 0 0 0-.6-1.4L18 5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+    <symbol id="i-wheel" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/><path d="M12 14v8M10 12H2.5M14 12h7.5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-return" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-percent" viewBox="0 0 24 24"><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  </svg>
+
   <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- DEALERSHIP DETAILS — the address, phone and email also appear in the Visit section and footer. -->
+  <div class="topbar">
+    <div class="container topbar-inner">
+      <p><svg class="icon"><use href="#i-pin"/></svg> 1200 Meridian Avenue, Springfield</p>
+      <p class="today-hours"><svg class="icon"><use href="#i-clock"/></svg> <span id="today-hours">Mon–Sat, 9 am – 7 pm</span></p>
+      <p class="topbar-end"><a href="mailto:sales@example.com">sales@example.com</a></p>
+    </div>
+  </div>
 
   <header class="site-header">
     <div class="container header-inner">
-      <a class="logo" href="#top" aria-label="Back to top">m<span>.</span></a>
+      <a class="logo" href="#top" aria-label="Meridian Motors, back to top">
+        <span class="logo-mark" aria-hidden="true">M</span>
+        <span class="logo-text">Meridian<span>Motors</span></span>
+      </a>
+
+      <nav aria-label="Primary">
+        <ul id="nav-links" class="nav-links">
+          <li><a href="#inventory">Inventory</a></li>
+          <li><a href="#financing">Financing</a></li>
+          <li><a href="#trade-in">Trade-in</a></li>
+          <li><a href="#contact">Visit us</a></li>
+        </ul>
+      </nav>
 
       <div class="header-actions">
-        <nav aria-label="Primary">
-          <ul id="nav-links" class="nav-links">
-            <li><a href="#about">About</a></li>
-            <li><a href="#work">Work</a></li>
-            <li><a href="#contact">Contact</a></li>
-          </ul>
-        </nav>
-
-        <button class="icon-btn theme-toggle" type="button" aria-label="Toggle dark mode">
-          <svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-          <svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-        </button>
-
-        <button class="icon-btn nav-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-links">
+        <a class="btn btn-accent btn-small header-call" href="tel:+13125550142">
+          <svg class="icon"><use href="#i-phone"/></svg>
+          <span>(312) 555-0142</span>
+        </a>
+        <button class="nav-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-links">
           <span class="bar" aria-hidden="true"></span>
           <span class="bar" aria-hidden="true"></span>
         </button>
@@ -55,129 +83,323 @@
   </header>
 
   <main id="main">
-    <!-- HERO — your name and a one-line summary of what you do. -->
-    <section class="hero container" id="top">
-      <p class="eyebrow reveal"><span class="status-dot" aria-hidden="true"></span> Available for new projects</p>
-      <h1 class="reveal">I design and build <em>thoughtful</em> things for the web.</h1>
-      <p class="lede reveal">Hi, I'm Your Name — a designer and developer based in Your City. I help people turn rough ideas into products that feel simple, fast, and a little bit delightful.</p>
-      <div class="hero-actions reveal">
-        <a class="btn btn-primary" href="#work">See my work <span class="arrow" aria-hidden="true">→</span></a>
-        <a class="btn btn-ghost" href="#contact">Get in touch</a>
+    <section class="hero" id="top">
+      <div class="hero-media" aria-hidden="true">
+        <img src="assets/img/hero.jpg" alt="" width="1640" height="1093" fetchpriority="high">
+      </div>
+      <div class="container hero-content">
+        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span> Inspected · Detailed · Priced upfront</p>
+        <h1>Great cars.<br> Fair prices.<br> <span>Zero pressure.</span></h1>
+        <p class="hero-lede">Every car on our lot passes a 150-point inspection and wears one honest price, so you spend less time haggling and more time driving.</p>
+        <div class="hero-actions">
+          <a class="btn btn-accent btn-large" href="#inventory">Browse inventory <svg class="icon"><use href="#i-arrow"/></svg></a>
+          <a class="btn btn-glass btn-large" href="#financing">Estimate payments</a>
+        </div>
       </div>
     </section>
 
-    <!-- ABOUT — a short bio, the tools you use, and where you've worked. -->
-    <section class="section" id="about">
-      <div class="container about-grid">
-        <div class="reveal">
-          <p class="section-label">01 — About</p>
-          <h2>A little about me</h2>
+    <div class="container">
+      <form class="quick-search" id="quick-search" aria-label="Quick vehicle search">
+        <label class="field">
+          <span class="field-label">Body type</span>
+          <select name="body" id="q-body"><option value="All">Any body type</option></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Make</span>
+          <select name="make" id="q-make"><option value="All">Any make</option></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Max price</span>
+          <select name="price" id="q-price" class="price-select"></select>
+        </label>
+        <button class="btn btn-accent btn-large" type="submit">
+          <svg class="icon"><use href="#i-search"/></svg>
+          <span id="q-count">Show cars</span>
+        </button>
+      </form>
+    </div>
+
+    <!-- PERKS — change these to match the guarantees your dealership actually offers. -->
+    <section class="perks container" aria-label="Why buy from us">
+      <ul class="perk-list">
+        <li>
+          <span class="perk-icon"><svg class="icon"><use href="#i-shield"/></svg></span>
+          <div><strong>150-point inspection</strong><span>Checked by certified technicians</span></div>
+        </li>
+        <li>
+          <span class="perk-icon"><svg class="icon"><use href="#i-return"/></svg></span>
+          <div><strong>7-day money back</strong><span>Not in love? Bring it back.</span></div>
+        </li>
+        <li>
+          <span class="perk-icon"><svg class="icon"><use href="#i-doc"/></svg></span>
+          <div><strong>Free history report</strong><span>Included with every vehicle</span></div>
+        </li>
+        <li>
+          <span class="perk-icon"><svg class="icon"><use href="#i-percent"/></svg></span>
+          <div><strong>Financing for all credit</strong><span>Pre-approval in minutes</span></div>
+        </li>
+      </ul>
+    </section>
+
+    <!-- INVENTORY — cars come from assets/js/inventory.js. -->
+    <section class="section" id="inventory">
+      <div class="container">
+        <div class="section-head">
+          <div>
+            <p class="kicker">Inventory</p>
+            <h2>Find your next car</h2>
+          </div>
+          <p class="result-count">
+            <span id="result-count" aria-live="polite"></span>
+            <button class="link-btn" type="button" id="clear-filters" hidden>Clear filters</button>
+          </p>
         </div>
 
-        <div class="about-body">
-          <p class="about-intro reveal">I care about the details — the spacing, the words, the 200&nbsp;ms transition nobody notices until it's missing.</p>
-          <p class="reveal">Over the past few years I've worked with startups, studios, and independent makers to design interfaces, build websites, and ship products from the first sketch to launch day. I like small teams, clear problems, and work that's honest about what it is.</p>
-          <p class="reveal">When I'm not at a screen you'll find me reading, cooking something ambitious, or out on a long walk with a camera.</p>
+        <div class="toolbar">
+          <label class="search-field">
+            <svg class="icon"><use href="#i-search"/></svg>
+            <input type="search" id="f-search" placeholder="Search make, model or feature" aria-label="Search inventory">
+          </label>
+          <select id="f-make" aria-label="Make"><option value="All">All makes</option></select>
+          <select id="f-price" class="price-select" aria-label="Max price"></select>
+          <select id="f-sort" aria-label="Sort by">
+            <option value="featured">Sort: Featured</option>
+            <option value="price-asc">Price: low to high</option>
+            <option value="price-desc">Price: high to low</option>
+            <option value="mileage">Mileage: lowest first</option>
+            <option value="year">Year: newest first</option>
+          </select>
+        </div>
 
-          <h3 class="sub-label reveal">Things I work with</h3>
-          <ul class="tag-list reveal">
-            <li>Product design</li>
-            <li>Figma</li>
-            <li>HTML &amp; CSS</li>
-            <li>JavaScript</li>
-            <li>React</li>
-            <li>Design systems</li>
-            <li>Accessibility</li>
-            <li>Prototyping</li>
+        <div class="chips" id="f-body" role="group" aria-label="Filter by body type"></div>
+
+        <div class="car-grid" id="car-grid"></div>
+
+        <div class="empty-state" id="empty-state" hidden>
+          <p><strong>No cars match those filters.</strong> Try widening your search, or tell us what you're after and we'll find it.</p>
+          <button class="btn btn-ghost" type="button" id="reset-filters">Reset filters</button>
+        </div>
+
+        <noscript>
+          <p class="empty-state">Turn on JavaScript to browse our inventory, or call us on <a href="tel:+13125550142">(312) 555-0142</a>.</p>
+        </noscript>
+      </div>
+    </section>
+
+    <!-- FINANCING -->
+    <section class="section section-alt" id="financing">
+      <div class="container finance-grid">
+        <div class="finance-copy">
+          <p class="kicker">Financing</p>
+          <h2>Payments that fit your budget</h2>
+          <p class="section-lede">We work with a network of banks and credit unions to find you a competitive rate, whether your credit is spotless or still a work in progress.</p>
+          <ul class="checks">
+            <li><svg class="icon"><use href="#i-check"/></svg> Pre-approval in minutes, with no impact on your credit score</li>
+            <li><svg class="icon"><use href="#i-check"/></svg> Terms from 36 to 84 months</li>
+            <li><svg class="icon"><use href="#i-check"/></svg> Programs for first-time buyers and rebuilding credit</li>
+          </ul>
+          <a class="btn btn-dark btn-large" href="#contact" data-topic="Financing">Get pre-approved</a>
+        </div>
+
+        <form class="calculator" id="calculator" aria-labelledby="calc-title">
+          <h3 id="calc-title">Payment calculator</h3>
+          <div class="calc-fields">
+            <label class="field">
+              <span class="field-label">Vehicle price</span>
+              <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-price" value="30,000" autocomplete="off"></span>
+            </label>
+            <label class="field">
+              <span class="field-label">Down payment</span>
+              <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-down" value="3,000" autocomplete="off"></span>
+            </label>
+            <label class="field">
+              <span class="field-label">Trade-in value</span>
+              <span class="affix"><span aria-hidden="true">$</span><input type="text" inputmode="numeric" id="c-trade" value="0" autocomplete="off"></span>
+            </label>
+            <label class="field">
+              <span class="field-label">Interest rate (APR)</span>
+              <span class="affix affix-end"><input type="text" inputmode="decimal" id="c-apr" value="6.9" autocomplete="off"><span aria-hidden="true">%</span></span>
+            </label>
+          </div>
+
+          <fieldset class="segmented">
+            <legend class="field-label">Loan term</legend>
+            <div class="seg-options">
+              <label><input type="radio" name="term" value="36"><span>36 mo</span></label>
+              <label><input type="radio" name="term" value="48"><span>48 mo</span></label>
+              <label><input type="radio" name="term" value="60"><span>60 mo</span></label>
+              <label><input type="radio" name="term" value="72" checked><span>72 mo</span></label>
+              <label><input type="radio" name="term" value="84"><span>84 mo</span></label>
+            </div>
+          </fieldset>
+
+          <div class="calc-result" aria-live="polite">
+            <p class="calc-monthly"><span>Estimated monthly payment</span><output id="c-monthly">$0</output></p>
+            <dl class="calc-breakdown">
+              <div><dt>Amount financed</dt><dd id="c-financed">$0</dd></div>
+              <div><dt>Total interest</dt><dd id="c-interest">$0</dd></div>
+              <div><dt>Total cost</dt><dd id="c-total">$0</dd></div>
+            </dl>
+          </div>
+          <p class="fineprint">This is an estimate only. It excludes taxes, title, registration and dealer fees, and your actual rate depends on credit approval.</p>
+        </form>
+      </div>
+    </section>
+
+    <!-- TRADE-IN -->
+    <section class="trade" id="trade-in">
+      <img class="trade-bg" src="assets/img/trade-in.jpg" alt="" width="1600" height="1066" loading="lazy">
+      <div class="container trade-inner">
+        <div class="trade-copy">
+          <p class="kicker">Sell or trade</p>
+          <h2>Get a real offer for your car within 24 hours</h2>
+          <p class="section-lede">Selling privately means strangers, test drives and haggling. We'll make you a written offer and buy it outright, whether or not you buy from us.</p>
+          <a class="btn btn-accent btn-large" href="#contact" data-topic="Trade-in">Get my offer <svg class="icon"><use href="#i-arrow"/></svg></a>
+        </div>
+        <ol class="steps">
+          <li>
+            <span class="step-num">1</span>
+            <div><strong>Tell us about it</strong><p>Year, make, model and mileage. It takes two minutes.</p></div>
+          </li>
+          <li>
+            <span class="step-num">2</span>
+            <div><strong>Get your offer</strong><p>A written offer that's good for 7 days, with no obligation.</p></div>
+          </li>
+          <li>
+            <span class="step-num">3</span>
+            <div><strong>Get paid</strong><p>Same-day payment, or put it toward your next car.</p></div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- VISIT & CONTACT — the hours table drives the "Open now" label; times are 24-hour. -->
+    <section class="section" id="contact">
+      <div class="container contact-grid">
+        <div class="visit">
+          <p class="kicker">Visit us</p>
+          <h2>Come see us in person</h2>
+          <p class="section-lede">Coffee's on us. Browse at your own pace and drive anything on the lot, no appointment needed.</p>
+
+          <ul class="contact-list">
+            <li>
+              <span class="perk-icon"><svg class="icon"><use href="#i-pin"/></svg></span>
+              <div>
+                <strong>1200 Meridian Avenue</strong>
+                <span>Springfield, ST 00000</span>
+                <a href="https://www.google.com/maps/search/?api=1&amp;query=1200+Meridian+Avenue+Springfield" rel="noopener">Get directions</a>
+              </div>
+            </li>
+            <li>
+              <span class="perk-icon"><svg class="icon"><use href="#i-phone"/></svg></span>
+              <div><strong><a href="tel:+13125550142">(312) 555-0142</a></strong><span>Sales &amp; service</span></div>
+            </li>
+            <li>
+              <span class="perk-icon"><svg class="icon"><use href="#i-mail"/></svg></span>
+              <div><strong><a href="mailto:sales@example.com">sales@example.com</a></strong><span>We reply within one business day</span></div>
+            </li>
           </ul>
 
-          <h3 class="sub-label reveal">Experience</h3>
-          <ol class="timeline reveal">
-            <li><span class="when">2023 — Now</span><span class="what"><strong>Senior Designer</strong> · Company Name</span></li>
-            <li><span class="when">2020 — 2023</span><span class="what"><strong>Product Designer</strong> · Studio Name</span></li>
-            <li><span class="when">2018 — 2020</span><span class="what"><strong>Front-end Developer</strong> · Agency Name</span></li>
-          </ol>
-        </div>
-      </div>
-    </section>
-
-    <!-- WORK — one <article> per project. --hue sets the color of its cover art. -->
-    <section class="section" id="work">
-      <div class="container">
-        <div class="section-head reveal">
-          <div>
-            <p class="section-label">02 — Work</p>
-            <h2>Selected projects</h2>
+          <div class="hours-head">
+            <h3 class="sub-label">Showroom hours</h3>
+            <span class="open-status" id="open-status" hidden></span>
           </div>
-          <p class="section-note">A few things I've made recently.</p>
+          <table class="hours" id="hours">
+            <tr data-day="1" data-open="09:00" data-close="19:00"><th scope="row">Monday</th><td>9:00 am – 7:00 pm</td></tr>
+            <tr data-day="2" data-open="09:00" data-close="19:00"><th scope="row">Tuesday</th><td>9:00 am – 7:00 pm</td></tr>
+            <tr data-day="3" data-open="09:00" data-close="19:00"><th scope="row">Wednesday</th><td>9:00 am – 7:00 pm</td></tr>
+            <tr data-day="4" data-open="09:00" data-close="19:00"><th scope="row">Thursday</th><td>9:00 am – 7:00 pm</td></tr>
+            <tr data-day="5" data-open="09:00" data-close="19:00"><th scope="row">Friday</th><td>9:00 am – 7:00 pm</td></tr>
+            <tr data-day="6" data-open="09:00" data-close="18:00"><th scope="row">Saturday</th><td>9:00 am – 6:00 pm</td></tr>
+            <tr data-day="0"><th scope="row">Sunday</th><td>Closed</td></tr>
+          </table>
         </div>
 
-        <div class="projects">
-          <article class="project reveal" style="--hue: 18">
-            <div class="project-thumb" aria-hidden="true"><span>01</span></div>
-            <div class="project-body">
-              <p class="project-meta"><span>Web app</span><span>2026</span></p>
-              <h3><a href="#">Project One</a></h3>
-              <p>A planning tool that helps small teams see the week ahead at a glance — designed and built end to end.</p>
-            </div>
-          </article>
-
-          <article class="project reveal" style="--hue: 210">
-            <div class="project-thumb" aria-hidden="true"><span>02</span></div>
-            <div class="project-body">
-              <p class="project-meta"><span>Brand &amp; website</span><span>2025</span></p>
-              <h3><a href="#">Project Two</a></h3>
-              <p>A new identity and marketing site for an independent coffee roaster, from logo to launch.</p>
-            </div>
-          </article>
-
-          <article class="project reveal" style="--hue: 150">
-            <div class="project-thumb" aria-hidden="true"><span>03</span></div>
-            <div class="project-body">
-              <p class="project-meta"><span>Design system</span><span>2025</span></p>
-              <h3><a href="#">Project Three</a></h3>
-              <p>A shared component library that cut design-to-dev handoff time and made the product feel like one thing.</p>
-            </div>
-          </article>
-
-          <article class="project reveal" style="--hue: 275">
-            <div class="project-thumb" aria-hidden="true"><span>04</span></div>
-            <div class="project-body">
-              <p class="project-meta"><span>Mobile app</span><span>2024</span></p>
-              <h3><a href="#">Project Four</a></h3>
-              <p>A calm, offline-first habit tracker focused on gentle streaks instead of guilt.</p>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <!-- CONTACT — swap in your real email address and profile links. -->
-    <section class="section contact" id="contact">
-      <div class="container">
-        <p class="section-label reveal">03 — Contact</p>
-        <h2 class="contact-title reveal">Let's make something good together.</h2>
-        <p class="lede reveal">Have a project in mind, a question, or just want to say hi? My inbox is always open.</p>
-
-        <div class="email-row reveal">
-          <a class="email-link" href="mailto:hello@example.com">hello@example.com</a>
-          <button class="btn btn-ghost btn-small" type="button" data-copy="hello@example.com">Copy</button>
-        </div>
-
-        <ul class="socials reveal">
-          <li><a href="https://github.com/" rel="noopener">GitHub <span aria-hidden="true">↗</span></a></li>
-          <li><a href="https://www.linkedin.com/" rel="noopener">LinkedIn <span aria-hidden="true">↗</span></a></li>
-          <li><a href="https://www.instagram.com/" rel="noopener">Instagram <span aria-hidden="true">↗</span></a></li>
-          <li><a href="https://dribbble.com/" rel="noopener">Dribbble <span aria-hidden="true">↗</span></a></li>
-        </ul>
+        <!-- With no action set, the form opens the visitor's email app with the message filled in.
+             To receive submissions directly, set action="" to a form service URL (see README). -->
+        <form class="contact-form" id="contact-form" method="post" novalidate>
+          <h3>Book a test drive or ask a question</h3>
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">Name</span>
+              <input type="text" name="name" id="name" autocomplete="name" required>
+            </label>
+            <label class="field">
+              <span class="field-label">Phone <span class="optional">(optional)</span></span>
+              <input type="tel" name="phone" autocomplete="tel">
+            </label>
+            <label class="field field-wide">
+              <span class="field-label">Email</span>
+              <input type="email" name="email" autocomplete="email" required>
+            </label>
+            <label class="field">
+              <span class="field-label">I'm interested in</span>
+              <select name="topic" id="topic">
+                <option>Test drive</option>
+                <option>Financing</option>
+                <option>Trade-in</option>
+                <option>General question</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Preferred date <span class="optional">(optional)</span></span>
+              <input type="date" name="date" id="date">
+            </label>
+            <label class="field field-wide">
+              <span class="field-label">Vehicle <span class="optional">(optional)</span></span>
+              <select name="vehicle" id="vehicle"><option value="">Not sure yet</option></select>
+            </label>
+            <label class="field field-wide">
+              <span class="field-label">Message <span class="optional">(optional)</span></span>
+              <textarea name="message" rows="4" placeholder="Anything we should know? For trade-ins, include the year, make, model and mileage."></textarea>
+            </label>
+          </div>
+          <button class="btn btn-accent btn-large" type="submit">Send message <svg class="icon"><use href="#i-arrow"/></svg></button>
+          <p class="form-note" id="form-note" role="status"></p>
+        </form>
       </div>
     </section>
   </main>
 
+  <dialog class="car-dialog" id="car-dialog" aria-labelledby="dialog-title"></dialog>
+
   <footer class="site-footer">
-    <div class="container footer-inner">
-      <p>© <span id="year">2026</span> Your Name</p>
-      <a href="#top">Back to top ↑</a>
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <a class="logo" href="#top" aria-label="Meridian Motors, back to top">
+          <span class="logo-mark" aria-hidden="true">M</span>
+          <span class="logo-text">Meridian<span>Motors</span></span>
+        </a>
+        <p>Hand-picked pre-owned cars, honest prices and people who'd rather earn your trust than make a quick sale.</p>
+      </div>
+      <div>
+        <h3 class="footer-title">Shop</h3>
+        <ul>
+          <li><a href="#inventory">Inventory</a></li>
+          <li><a href="#financing">Financing</a></li>
+          <li><a href="#trade-in">Sell or trade</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3 class="footer-title">Contact</h3>
+        <ul>
+          <li><a href="tel:+13125550142">(312) 555-0142</a></li>
+          <li><a href="mailto:sales@example.com">sales@example.com</a></li>
+          <li>1200 Meridian Avenue, Springfield</li>
+        </ul>
+      </div>
+      <div>
+        <h3 class="footer-title">Hours</h3>
+        <ul>
+          <li>Mon–Fri: 9 am – 7 pm</li>
+          <li>Saturday: 9 am – 6 pm</li>
+          <li>Sunday: Closed</li>
+        </ul>
+      </div>
+    </div>
+    <div class="container footer-bottom">
+      <p>© <span id="year">2026</span> Meridian Motors. Prices exclude tax, title, registration and dealer fees. Monthly payments are estimates for illustration only.</p>
+      <p>Photos from <a href="https://unsplash.com/" rel="noopener">Unsplash</a>.</p>
     </div>
   </footer>
 </body>
