@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your Name — Designer &amp; Developer</title>
+  <meta name="description" content="Personal website of Your Name: selected work, background, and how to get in touch.">
+  <meta name="theme-color" content="#f7f4ee" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#131210" media="(prefers-color-scheme: dark)">
+  <meta property="og:title" content="Your Name — Designer &amp; Developer">
+  <meta property="og:description" content="Selected work, background, and how to get in touch.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <script>
+    // Runs before first paint so a saved theme never flashes the wrong colors.
+    document.documentElement.classList.add('js');
+    try {
+      const theme = localStorage.getItem('theme');
+      if (theme) document.documentElement.dataset.theme = theme;
+    } catch (e) {}
+  </script>
+  <script src="assets/js/main.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="logo" href="#top" aria-label="Back to top">m<span>.</span></a>
+
+      <div class="header-actions">
+        <nav aria-label="Primary">
+          <ul id="nav-links" class="nav-links">
+            <li><a href="#about">About</a></li>
+            <li><a href="#work">Work</a></li>
+            <li><a href="#contact">Contact</a></li>
+          </ul>
+        </nav>
+
+        <button class="icon-btn theme-toggle" type="button" aria-label="Toggle dark mode">
+          <svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+
+        <button class="icon-btn nav-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-links">
+          <span class="bar" aria-hidden="true"></span>
+          <span class="bar" aria-hidden="true"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- HERO — your name and a one-line summary of what you do. -->
+    <section class="hero container" id="top">
+      <p class="eyebrow reveal"><span class="status-dot" aria-hidden="true"></span> Available for new projects</p>
+      <h1 class="reveal">I design and build <em>thoughtful</em> things for the web.</h1>
+      <p class="lede reveal">Hi, I'm Your Name — a designer and developer based in Your City. I help people turn rough ideas into products that feel simple, fast, and a little bit delightful.</p>
+      <div class="hero-actions reveal">
+        <a class="btn btn-primary" href="#work">See my work <span class="arrow" aria-hidden="true">→</span></a>
+        <a class="btn btn-ghost" href="#contact">Get in touch</a>
+      </div>
+    </section>
+
+    <!-- ABOUT — a short bio, the tools you use, and where you've worked. -->
+    <section class="section" id="about">
+      <div class="container about-grid">
+        <div class="reveal">
+          <p class="section-label">01 — About</p>
+          <h2>A little about me</h2>
+        </div>
+
+        <div class="about-body">
+          <p class="about-intro reveal">I care about the details — the spacing, the words, the 200&nbsp;ms transition nobody notices until it's missing.</p>
+          <p class="reveal">Over the past few years I've worked with startups, studios, and independent makers to design interfaces, build websites, and ship products from the first sketch to launch day. I like small teams, clear problems, and work that's honest about what it is.</p>
+          <p class="reveal">When I'm not at a screen you'll find me reading, cooking something ambitious, or out on a long walk with a camera.</p>
+
+          <h3 class="sub-label reveal">Things I work with</h3>
+          <ul class="tag-list reveal">
+            <li>Product design</li>
+            <li>Figma</li>
+            <li>HTML &amp; CSS</li>
+            <li>JavaScript</li>
+            <li>React</li>
+            <li>Design systems</li>
+            <li>Accessibility</li>
+            <li>Prototyping</li>
+          </ul>
+
+          <h3 class="sub-label reveal">Experience</h3>
+          <ol class="timeline reveal">
+            <li><span class="when">2023 — Now</span><span class="what"><strong>Senior Designer</strong> · Company Name</span></li>
+            <li><span class="when">2020 — 2023</span><span class="what"><strong>Product Designer</strong> · Studio Name</span></li>
+            <li><span class="when">2018 — 2020</span><span class="what"><strong>Front-end Developer</strong> · Agency Name</span></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- WORK — one <article> per project. --hue sets the color of its cover art. -->
+    <section class="section" id="work">
+      <div class="container">
+        <div class="section-head reveal">
+          <div>
+            <p class="section-label">02 — Work</p>
+            <h2>Selected projects</h2>
+          </div>
+          <p class="section-note">A few things I've made recently.</p>
+        </div>
+
+        <div class="projects">
+          <article class="project reveal" style="--hue: 18">
+            <div class="project-thumb" aria-hidden="true"><span>01</span></div>
+            <div class="project-body">
+              <p class="project-meta"><span>Web app</span><span>2026</span></p>
+              <h3><a href="#">Project One</a></h3>
+              <p>A planning tool that helps small teams see the week ahead at a glance — designed and built end to end.</p>
+            </div>
+          </article>
+
+          <article class="project reveal" style="--hue: 210">
+            <div class="project-thumb" aria-hidden="true"><span>02</span></div>
+            <div class="project-body">
+              <p class="project-meta"><span>Brand &amp; website</span><span>2025</span></p>
+              <h3><a href="#">Project Two</a></h3>
+              <p>A new identity and marketing site for an independent coffee roaster, from logo to launch.</p>
+            </div>
+          </article>
+
+          <article class="project reveal" style="--hue: 150">
+            <div class="project-thumb" aria-hidden="true"><span>03</span></div>
+            <div class="project-body">
+              <p class="project-meta"><span>Design system</span><span>2025</span></p>
+              <h3><a href="#">Project Three</a></h3>
+              <p>A shared component library that cut design-to-dev handoff time and made the product feel like one thing.</p>
+            </div>
+          </article>
+
+          <article class="project reveal" style="--hue: 275">
+            <div class="project-thumb" aria-hidden="true"><span>04</span></div>
+            <div class="project-body">
+              <p class="project-meta"><span>Mobile app</span><span>2024</span></p>
+              <h3><a href="#">Project Four</a></h3>
+              <p>A calm, offline-first habit tracker focused on gentle streaks instead of guilt.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONTACT — swap in your real email address and profile links. -->
+    <section class="section contact" id="contact">
+      <div class="container">
+        <p class="section-label reveal">03 — Contact</p>
+        <h2 class="contact-title reveal">Let's make something good together.</h2>
+        <p class="lede reveal">Have a project in mind, a question, or just want to say hi? My inbox is always open.</p>
+
+        <div class="email-row reveal">
+          <a class="email-link" href="mailto:hello@example.com">hello@example.com</a>
+          <button class="btn btn-ghost btn-small" type="button" data-copy="hello@example.com">Copy</button>
+        </div>
+
+        <ul class="socials reveal">
+          <li><a href="https://github.com/" rel="noopener">GitHub <span aria-hidden="true">↗</span></a></li>
+          <li><a href="https://www.linkedin.com/" rel="noopener">LinkedIn <span aria-hidden="true">↗</span></a></li>
+          <li><a href="https://www.instagram.com/" rel="noopener">Instagram <span aria-hidden="true">↗</span></a></li>
+          <li><a href="https://dribbble.com/" rel="noopener">Dribbble <span aria-hidden="true">↗</span></a></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>© <span id="year">2026</span> Your Name</p>
+      <a href="#top">Back to top ↑</a>
+    </div>
+  </footer>
+</body>
+</html>
