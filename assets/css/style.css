@@ -40,8 +40,9 @@
   color-scheme: light;
 }
 
+/* Dark theme: follows the OS setting, unless a host page sets data-theme explicitly. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0b0c13;
     --surface: #151622;
     --surface-2: #11121c;
@@ -58,6 +59,24 @@
     --shadow-lg: 0 24px 60px rgb(0 0 0 / 0.55);
     color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b0c13;
+  --surface: #151622;
+  --surface-2: #11121c;
+  --text: #eceef3;
+  --muted: #9ea3b3;
+  --line: #272939;
+  --hover: rgb(255 255 255 / 0.06);
+  --accent: #ff7a4d;
+  --accent-soft: #3a1d13;
+  --success: #34c48b;
+  --danger: #ff8577;
+  --shadow-sm: none;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.35);
+  --shadow-lg: 0 24px 60px rgb(0 0 0 / 0.55);
+  color-scheme: dark;
 }
 
 /* ==========================================================================
@@ -370,9 +389,19 @@ input[aria-invalid="true"] {
   }
 }
 
+/* On phones with a notch, keeps the status-bar strip dark while the page scrolls under it. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 60;
+  height: env(safe-area-inset-top, 0px);
+  background: var(--night);
+}
+
 .site-header {
   position: sticky;
-  top: 0;
+  top: env(safe-area-inset-top, 0px);
   z-index: 50;
   border-bottom: 1px solid var(--night-line);
   background: var(--night);
@@ -943,7 +972,6 @@ input[aria-invalid="true"] {
 
 @keyframes card-in {
   from {
-    opacity: 0;
     transform: translateY(12px);
   }
 }
