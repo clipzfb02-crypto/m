@@ -1,0 +1,11 @@
+# Obsidian per-device state (changes constantly, causes merge conflicts)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/workspaces.json
+.obsidian/cache
+.trash/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
