@@ -62,6 +62,23 @@ See `dev-notes/brief/CONTEXT.md`. In short:
    - Then a completeness critic, synthesis into `STUDY.md`, a 3-judge panel (trader, quant, engineer) and `ROADMAP.md`.
    - Outputs are synced into `dev-notes/study/`.
 
+4. **2026-11-23 22:10 UTC:** the study hit the account's 5-hour usage limit after researcher A had finished all 22 lenses plus 4 B passes.
+   - It was resumed from cache once the limit reset (run `wf_ff97c5ca-f34`).
+   - The usage limit is the main bottleneck. Expect pauses, and resume after the reset.
+   - Headline findings so far (researchers B ran their own replications on local CME/BTC/SPX data):
+     - **Distance and volatility explain almost all of "which pool is hit next".**
+       - EQ, prominence and test counts add about 0 pp.
+       - FVG and OB reach is about the same as a random level at the same distance.
+     - **The raid → D mapping is wrong** (line ~1581). A rejected sweep shows no reversal edge, only a small continuation lean.
+     - **The engine's displacement "quality" is not a positive target signal.** Make the array density pillar neutral.
+     - **Breaker definition:** the `tookL` gate is too strict and reproduces only 11-24% of template breakers.
+     - **Untouched opposing FVGs between price and a pool** cut reach by 2-3 pp. This is the only ICT path claim with support.
+     - **Time:** the intraday and weekly volatility clock is the dominant timing effect, but the engine's σ and PoT are time-blind.
+       - Session membership uses `time()` on bar open, which is wrong on 1H for NY AM.
+       - The 10:00-11:00 ET hour is classed OFF-KZ.
+     - **Midnight open** is the only time anchor with a measured excess revisit rate.
+   - These point Round 2 toward: a learned volatility clock for PoT, honest neutral pillars, the shadow-ledger feature grading per chart, the breaker fix, and opposing-FVG path cost.
+
 ## Next steps (in order)
 1. When the study finishes, copy `STUDY.md` and `ROADMAP.md` into `dev-notes/study/` and add a pointer to them in `CONTEXT.md`. Commit and push.
 2. Resume or re-run the overhaul (verify → plan → integrate → syntax gate → final review → fix). Then review the diff, run `pine_parse.sh` against the baseline, commit and push.
