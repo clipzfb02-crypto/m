@@ -3,6 +3,7 @@
 SP=/tmp/claude-0/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a/scratchpad
 S=/root/.claude/projects/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a
 cd /home/user/m || exit 1
+python3 /home/user/m/dev-notes/progress.py >/dev/null 2>&1
 cp $SP/brief/study/*.md dev-notes/study/ 2>/dev/null
 cp $SP/brief/STUDY.md $SP/brief/ROADMAP.md dev-notes/study/ 2>/dev/null
 cp $S/workflows/scripts/*.js dev-notes/workflows/ 2>/dev/null

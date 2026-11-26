@@ -1,0 +1,7 @@
+[
+ {"name": "1 Study (2 agents/topic)", "run": "wf_ff97c5ca-f34", "total": 50},
+ {"name": "2 Bug-fix overhaul", "run": "wf_97652ad5-f56", "total": 46},
+ {"name": "3 Upgrades (roadmap)", "total": 40},
+ {"name": "4 Audit until clean", "total": 30},
+ {"name": "5 Final paste", "total": 2}
+]
