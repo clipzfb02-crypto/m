@@ -79,6 +79,10 @@ See `dev-notes/brief/CONTEXT.md`. In short:
      - **Midnight open** is the only time anchor with a measured excess revisit rate.
    - These point Round 2 toward: a learned volatility clock for PoT, honest neutral pillars, the shadow-ledger feature grading per chart, the breaker fix, and opposing-FVG path cost.
 
+5. **2026-11-23 23:00 UTC:** the study then hit the account's WEEKLY usage limit, which reset on Nov 25 at 21:00 UTC.
+   - At that point 30 of the 48 agent calls had finished: all 22 A passes plus 6 B passes.
+   - On 2026-11-26 the user said "Try again" and "continue from exactly where we left". I resumed `wf_ff97c5ca-f34` from cache (task `wlb9fhedu`), so only the remaining B passes, the critic, the synthesis, the judges and the roadmap re-run.
+
 ## Next steps (in order)
 1. When the study finishes, copy `STUDY.md` and `ROADMAP.md` into `dev-notes/study/` and add a pointer to them in `CONTEXT.md`. Commit and push.
 2. Resume or re-run the overhaul (verify → plan → integrate → syntax gate → final review → fix). Then review the diff, run `pine_parse.sh` against the baseline, commit and push.
