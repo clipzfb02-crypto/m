@@ -16,13 +16,14 @@ def done(run):
 extra=json.load(open(os.path.join(os.path.dirname(__file__),'progress_stages.json')))
 rows=[];D=T=0
 for st in extra:
-    d=min(st['total'], st.get('done', done(st['run']) if st.get('run') else 0))
+    auto=sum(done(r) for r in st.get('runs',[]))+(done(st['run']) if st.get('run') else 0)
+    d=min(st['total'], st.get('done', auto))
     rows.append((st['name'],d,st['total'])); D+=d; T+=st['total']
 def bar(d,t,w=30):
     f=int(round(w*d/t)) if t else 0
     return '█'*f+'░'*(w-f)
 pct=100*D/T
 out=[f'OVERALL  [{bar(D,T)}] {pct:5.1f}%']
-for n,d,t in rows: out.append(f'{n:<26}[{bar(d,t,20)}] {d}/{t}')
+for n,d,t in rows: out.append(f'{n:<31}[{bar(d,t,20)}] {d}/{t}')
 txt='\n'.join(out); print(txt)
 open(os.path.join(os.path.dirname(__file__),'PROGRESS.md'),'w').write(f'# Progress ({datetime.datetime.now(datetime.timezone.utc):%Y-%m-%d %H:%M} UTC)\n\n```\n{txt}\n```\n')

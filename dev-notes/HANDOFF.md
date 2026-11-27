@@ -1,6 +1,42 @@
-# DOL Engine v2 · development handoff (the project "database")
+# APEX ULTIMATE / DOL Engine · development handoff (the project "database")
 
-Read this first if you are a new session picking up the work. Everything needed to continue is in `dev-notes/`.
+Read this first if you are a new session picking up the work. Everything needed to continue is in `dev-notes/` and `apex/`.
+
+## ⚠️ GOVERNING SPEC (since 2026-11-27)
+- The user gave the **APEX ULTIMATE master specification**: `dev-notes/brief/APEX_ULTIMATE_SPEC.md`, saved verbatim. It is now the governing requirements and supersedes the "DOL Engine Round 2" plan below.
+- Deliverables, all under `apex/`:
+  - `APEX_ULTIMATE.pine`, `ARCHITECTURE.md`, `MATHEMATICAL_SPECIFICATION.md`, `MARKET_KNOWLEDGE_BASE/` (18 docs plus the methodology matrix), `FEATURE_DATA_MATRIX.md`;
+  - `VALIDATION_REPORT.md`, `REPAINT_AUDIT.md`, `BACKTEST_REPORT.md`, `USER_GUIDE.md`, `CHANGELOG.md`.
+- Phases, in order:
+  1. inspect;
+  2-3. research and knowledge atlas;
+  4. architecture;
+  5. development (single writer at a time on the .pine);
+  6. validation (real data, walk-forward, bootstrap, costs, PBO/DSR; PineTS prefix repaint test; red team);
+  7. delivery: paste the final script in ONE code block and send the file.
+- Honesty rules: no fabricated probabilities, order flow, institutional claims or backtests. Call it a "Draw Score" until calibrated. Mark untestable items NOT RUN.
+- Team: 10 specialist roles. R1 structure, R2 liquidity/DOL, R3 ICT/SMC/Wyckoff/AMT, R4 microstructure/execution, R5 quant/stats (+ data lab), R6 volatility/momentum, R7 MTF/intermarket, R8 forecasting/calibration, R9 Pine (+ offline toolchain), R10 red team.
+  - Workflow concurrency is 2 agents per workflow (4 CPUs), so several workflows run in parallel.
+- **Offline toolchain (new):** `$SP/pine_harness` has `pinets` 0.13.1 (an offline Pine runtime) and `pinescript-v6-validator` 0.4.3.
+  - To rebuild: `cd $SP/pine_harness && npm install pinets pinescript-v6-validator`.
+  - The DOL v2 baseline validates with 0 errors.
+- **Data:** `$SP/brief/study/amt_data/cme` (a clone of github axb0306/cme-futures-ohlc: CL, ES, GC, NQ, RTY, YM), `$SP/brief/study/smt_data/cme` (ticks), and NQ 1m 2022-2025 from github s-k-28/nq-es-trader-5k-payout.
+  - The data lab standardises these into `apex/validation/data/` (git-ignored); the loader is `apex/validation/python/apexdata.py`.
+- **Earlier projects** found on other branches are copied to `apex/legacy/` (see its README): an XAUUSD FAST/BALANCED system, an MNQ ORB project with a backtest and PineTS harness, Liquidity Flow Pro, an early DOL_Engine, and a buy/sell indicator.
+- **APEX status log:**
+  - 2026-11-27 ~09:45 UTC: launched Phases 1-3.
+    - Part A, task `wik2t4qnu`, run `wf_2133809a-df0`: inspection, then docs 01-08, 16, 17 and the data lab, each red-teamed.
+    - Part B, task `wcq1uafgm`, run `wf_aff5b328-560`: docs 09-15, 18, the methodology matrix and the offline toolchain, each red-teamed.
+    - Still running: the study (`wgq8qzz33`) and the DOL v2 bug-fix overhaul (`wk0k75i3a`). The overhauled `indicators/dol_engine.pine` becomes the preserved core that APEX evolves from (`indicators/dol_engine.pine` stays as legacy v2).
+- **APEX next steps:**
+  1. When Parts A and B finish:
+     - write `MARKET_KNOWLEDGE_BASE/README.md` (the index) and `FEATURE_DATA_MATRIX.md`;
+     - compile the pre-registered experiment registry from every role's `experiments`;
+     - run a completeness critic against spec sections 2-22.
+  2. Phase 4 architecture workflow (drafts → judge panel → synthesis).
+  3. Phase 5 development.
+  4. Phase 6 validation.
+  5. Phase 7 delivery.
 
 ## Goal (from the user)
 - Build the best possible open-source Pine Script v6 TradingView indicator, **"DOL Engine v2 · Draw on Liquidity"**, in `indicators/dol_engine.pine`. It implements the feature set of the invite-only "TradeAxis DOL" (spec: `dev-notes/brief/tradeaxis_description.md`). Never copy that product's name or branding.

@@ -1,6 +1,6 @@
 # Project notes for Claude
 
-Before doing any work in this repo, read `dev-notes/HANDOFF.md`. It holds the goal, the user's preferences, the hard constraints, the current status, and the next steps for the DOL Engine v2 indicator (`indicators/dol_engine.pine`).
+Before doing any work in this repo, read `dev-notes/HANDOFF.md`. The governing requirements are now the APEX ULTIMATE spec in `dev-notes/brief/APEX_ULTIMATE_SPEC.md`; all APEX deliverables live in `apex/`. It holds the goal, the user's preferences, the hard constraints, the current status, and the next steps for the DOL Engine v2 indicator (`indicators/dol_engine.pine`).
 
 - Research knowledge base: `dev-notes/study/` (`STUDY.md` and `ROADMAP.md` once they exist).
 - Agent brief: `dev-notes/brief/CONTEXT.md`.

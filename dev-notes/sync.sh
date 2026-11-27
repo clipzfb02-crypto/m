@@ -8,11 +8,11 @@ cp $SP/brief/study/*.md dev-notes/study/ 2>/dev/null
 cp $SP/brief/STUDY.md $SP/brief/ROADMAP.md dev-notes/study/ 2>/dev/null
 cp $S/workflows/scripts/*.js dev-notes/workflows/ 2>/dev/null
 for d in $S/subagents/workflows/wf_*; do [ -f $d/journal.jsonl ] && cp $d/journal.jsonl dev-notes/runs/$(basename $d)-journal.jsonl; done
-git add dev-notes CLAUDE.md
-if ! git diff --cached --quiet -- dev-notes CLAUDE.md; then
+git add dev-notes CLAUDE.md apex
+if ! git diff --cached --quiet -- dev-notes CLAUDE.md apex; then
   git commit -q -m "dev-notes: sync research and workflow state
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01LHSxJrY7ayMCWKn7R95Bj9" -- dev-notes CLAUDE.md
+Claude-Session: https://claude.ai/code/session_01LHSxJrY7ayMCWKn7R95Bj9" -- dev-notes CLAUDE.md apex
   for i in 1 2 3 4; do git push -q -u origin claude/determined-lovelace-erktyz && break; sleep $((2**i)); done
 fi

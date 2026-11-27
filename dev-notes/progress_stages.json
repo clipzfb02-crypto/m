@@ -1,24 +1,36 @@
 [
  {
-  "name": "1 Study (2 agents/topic)",
+  "name": "0 DOL study (research base)",
   "run": "wf_ff97c5ca-f34",
   "total": 66
  },
  {
-  "name": "2 Bug-fix overhaul",
+  "name": "0 DOL v2 bug-fix overhaul",
   "run": "wf_97652ad5-f56",
   "total": 46
  },
  {
-  "name": "3 Upgrades (roadmap)",
+  "name": "1-3 Inspect + knowledge atlas",
+  "runs": [
+   "wf_2133809a-df0",
+   "wf_aff5b328-560"
+  ],
+  "total": 31
+ },
+ {
+  "name": "4 Architecture + math spec",
+  "total": 10
+ },
+ {
+  "name": "5 Build APEX_ULTIMATE.pine",
   "total": 40
  },
  {
-  "name": "4 Audit until clean",
+  "name": "6 Validation + red team",
   "total": 30
  },
  {
-  "name": "5 Final paste",
-  "total": 2
+  "name": "7 Delivery",
+  "total": 4
  }
 ]
