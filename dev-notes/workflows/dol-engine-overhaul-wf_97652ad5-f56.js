@@ -311,7 +311,9 @@ Your job:
 6. Order the items within each region so that later patches still find their text after earlier ones are applied. Prefer non-overlapping finds.
 7. Verify every final 'find' string mechanically with python: it must occur exactly once in ${BASE}.
 
-Priorities: all P0, then the highest-impact P1s; P2 only when cheap and safe. Prefer quality over quantity: a smaller set of correct changes beats a large risky one.
+Priorities: all P0, then the highest-impact P1s; P2 only when cheap and safe.
+
+RESEARCH CONTEXT. A separate study (combined per-domain reports in ${SP}/brief/study/*.final.md) found, with replications on market data, that a later Round 2 will redesign these areas: the raid-to-draw-vector mapping (REJECT=reversal is wrong), the array-density pillar (displacement quality is not a positive target signal; make it neutral), the breaker definition (tookL gate too strict), session/killzone membership and a time-aware PoT, opposing-FVG path cost, and EQ merging. Do NOT drop genuine bug fixes in those areas, but keep them minimal and avoid elaborate new tuning there that Round 2 would throw away. Skim ict_liq.final.md, ict_pd.final.md and ict_time.final.md (Engine gap analysis sections) if a finding touches those areas. Prefer quality over quantity: a smaller set of correct changes beats a large risky one.
 
 VERIFIED FINDINGS (JSON):
 ${JSON.stringify(confirmed)}`, { label: 'plan:merge', phase: 'Plan', schema: PLAN })
@@ -362,7 +364,7 @@ const syntax1 = await agent(`${PRE}
 You are the SYNTAX GATE.
 1. Run: bash ${PARSE} ${FILE} ${BASE}. It parses only the changed top-level statements; this can take up to about 15 minutes, so give the command a long timeout, e.g. 1500000 ms.
 2. For every FAIL line, inspect the corresponding code in ${FILE}, fix the syntax with minimal Edit changes that keep the intended behaviour, and re-run the parser on the file again (with the baseline argument) until there are no FAIL lines.
-3. Also do a quick manual review of 'git -C /home/user/m diff -- indicators/dol_engine.pine'. Look for obvious problems a parser would not catch: duplicated declarations, a name used before it is declared, a removed variable that is still used. Fix those too.
+3. Also do a quick manual review of 'git -C /home/user/m diff 00a405a -- indicators/dol_engine.pine' (00a405a = baseline). Look for obvious problems a parser would not catch: duplicated declarations, a name used before it is declared, a removed variable that is still used. Fix those too.
 Report what you fixed.`, { label: 'integrate:syntax-gate', phase: 'Integrate', schema: SYNTAX })
 
 phase('Final review')
@@ -387,7 +389,7 @@ const FR = {
   },
   required: ['findings', 'checkedOk'],
 }
-const DIFF = `Get the integrated change with: git -C /home/user/m diff -- indicators/dol_engine.pine (the baseline is the last commit). The current live file is ${FILE}.`
+const DIFF = `Get the integrated change with: git -C /home/user/m diff 00a405a -- indicators/dol_engine.pine (commit 00a405a is the baseline, identical to ${BASE}; work-in-progress commits may exist after it, so always diff against 00a405a, not HEAD). The current live file is ${FILE}.`
 const FINAL = [
   { key: 'cmpA', prompt: `FINAL COMPILE REVIEW, first half: every changed or added line in the diff that lies in lines 1 to 1300 of the CURRENT file. ${DIFF}
 Check each changed construct against the docs (signatures, qualifiers, types, declaration order, forward references, v6 rules, := on globals inside functions). Also check that every call site of a changed function matches its new signature anywhere in the file. Report only real compile errors, each with a doc quote and an exact fix.` },

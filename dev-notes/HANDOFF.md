@@ -85,6 +85,11 @@ See `dev-notes/brief/CONTEXT.md`. In short:
 
 6. **2026-11-26 17:00 UTC:** all 23 lenses finished both passes (A and B), plus critic round 1. The 5-hour limit then stopped the 6 extra gap lenses (x1_positioning, x1_internals, x1_tv_validation, x1_retail_schools, x1_behavioral, x1_implied_vol), critic round 2 and the synthesis.
    - On 2026-11-27 08:44 UTC the user said "Try again". I resumed `wf_ff97c5ca-f34` from cache (task `wgq8qzz33`).
+7. **2026-11-27 08:50 UTC:** the user said "take more agents if needed and start working max effort make it perfect".
+   - I resumed the overhaul `wf_97652ad5-f56` (task `wk0k75i3a`) IN PARALLEL with the study. The study reads only the frozen `baseline_v2.pine`, so the two cannot collide. Running both doubles the agents working at once.
+   - Before resuming I edited the overhaul script:
+     - the final-review DIFF and the syntax gate now diff against baseline commit `00a405a` instead of HEAD, so work-in-progress commits of the .pine file are safe;
+     - the Plan prompt now carries the study's Round 2 areas, so fixes there stay minimal.
 
 ## Next steps (in order)
 1. When the study finishes, copy `STUDY.md` and `ROADMAP.md` into `dev-notes/study/` and add a pointer to them in `CONTEXT.md`. Commit and push.
