@@ -291,7 +291,7 @@ def integrity(a):
 
 
 # ---------------------------------------------------------------- datasets
-def datasets(fam):
+def datasets(fam, include_excluded=False):
     """returns list of (name, arrays dict, tod_minutes)"""
     out = []
     if fam == "1h":
@@ -303,10 +303,34 @@ def datasets(fam):
             out.append((s + "_5m", to_arrays(d, "America/New_York"), 30))
     elif fam == "btc":
         out.append(("BTC_1h", to_arrays(load_btc(), "UTC"), 60))
+    if not include_excluded:
+        out = [x for x in out if x[0] not in EXCLUDE]
     return out
 
 
-EXCLUDE = {"GC_1h"}  # study: corrupted. CL_1h decided by integrity check (see check_data.py)
+BPD = {"1h": 18.8, "5m": 226.8, "btc": 24.0}  # measured bars per calendar day (check_data.py)
+FAMS = ("1h", "5m", "btc")
+
+
+_FEAT_CACHE = {}
+
+
+def features(name, a, mins):
+    """volatility features at bar t (bars <= t only)."""
+    if name in _FEAT_CACHE:
+        return _FEAT_CACHE[name]
+    H, L, C = a["H"], a["L"], a["C"]
+    f = {}
+    f["A14"] = atr(H, L, C, 14); f["A100"] = atr(H, L, C, 100)
+    f["p_atr"] = pct_rank(f["A14"])
+    f["p_rv"] = pct_rank(rv(C, 20))
+    f["p_bbw"] = pct_rank(bbw(C, 20))
+    f["p_des"] = pct_rank(tod_deseason_atr(a, mins))
+    _FEAT_CACHE[name] = f
+    return f
+
+
+EXCLUDE = {"GC_1h", "CL_1h"}  # GC_1h: 2.1% bars flagged (study: corrupted). CL_1h: data holes of 23, 10, 7 days (check_data.py)
 
 
 def split_idx(n, H, frac=0.6, warm=WARM):
