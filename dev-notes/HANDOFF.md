@@ -28,6 +28,7 @@ Read this first if you are a new session picking up the work. Everything needed 
     - Part A, task `wik2t4qnu`, run `wf_2133809a-df0`: inspection, then docs 01-08, 16, 17 and the data lab, each red-teamed.
     - Part B, task `wcq1uafgm`, run `wf_aff5b328-560`: docs 09-15, 18, the methodology matrix and the offline toolchain, each red-teamed.
     - Still running: the study (`wgq8qzz33`) and the DOL v2 bug-fix overhaul (`wk0k75i3a`). The overhauled `indicators/dol_engine.pine` becomes the preserved core that APEX evolves from (`indicators/dol_engine.pine` stays as legacy v2).
+  - 2026-11-27 09:45 UTC: added Phase 2 empirical research on real data, each track re-run by a red-team verifier. Task `wc8esoejw` (run `wf_484e4943-9ab`): forecast-path methods, signals vs baselines after costs, and the stats library apexstats.py. Task `wi5b0on2p` (run `wf_84a2c4d5-7fa`): DOL hypotheses H1-H6 and regime/calibration. Reports go to `apex/research/experiments/`.
 - **APEX next steps:**
   1. When Parts A and B finish:
      - write `MARKET_KNOWLEDGE_BASE/README.md` (the index) and `FEATURE_DATA_MATRIX.md`;

@@ -10,12 +10,14 @@
   "total": 46
  },
  {
-  "name": "1-3 Inspect + knowledge atlas",
+  "name": "1-3 Inspect + atlas + experiments",
   "runs": [
    "wf_2133809a-df0",
-   "wf_aff5b328-560"
+   "wf_aff5b328-560",
+   "wf_484e4943-9ab",
+   "wf_84a2c4d5-7fa"
   ],
-  "total": 31
+  "total": 41
  },
  {
   "name": "4 Architecture + math spec",
