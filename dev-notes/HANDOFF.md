@@ -83,6 +83,9 @@ See `dev-notes/brief/CONTEXT.md`. In short:
    - At that point 30 of the 48 agent calls had finished: all 22 A passes plus 6 B passes.
    - On 2026-11-26 the user said "Try again" and "continue from exactly where we left". I resumed `wf_ff97c5ca-f34` from cache (task `wlb9fhedu`), so only the remaining B passes, the critic, the synthesis, the judges and the roadmap re-run.
 
+6. **2026-11-26 17:00 UTC:** all 23 lenses finished both passes (A and B), plus critic round 1. The 5-hour limit then stopped the 6 extra gap lenses (x1_positioning, x1_internals, x1_tv_validation, x1_retail_schools, x1_behavioral, x1_implied_vol), critic round 2 and the synthesis.
+   - On 2026-11-27 08:44 UTC the user said "Try again". I resumed `wf_ff97c5ca-f34` from cache (task `wgq8qzz33`).
+
 ## Next steps (in order)
 1. When the study finishes, copy `STUDY.md` and `ROADMAP.md` into `dev-notes/study/` and add a pointer to them in `CONTEXT.md`. Commit and push.
 2. Resume or re-run the overhaul (verify → plan → integrate → syntax gate → final review → fix). Then review the diff, run `pine_parse.sh` against the baseline, commit and push.

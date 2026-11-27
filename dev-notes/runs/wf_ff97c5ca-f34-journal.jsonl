@@ -149,3 +149,5 @@
 {"type":"started","key":"v2:b8cf7ffc48fe98c89b847be65db87432377eb3d1f0f0a77c13bbde570e016223","agentId":"aa9caf93e1117c642","label":"study2:x1_behavioral","phase":"Gaps"}
 {"type":"started","key":"v2:a1dc65a766b463933fbb3a6dfe05d5efaa60f08276b3838d96ae7f31cdf40866","agentId":"aef8b8a17d062f8b2","label":"critic:round2","phase":"Gaps"}
 {"type":"started","key":"v2:b152d0c58f91831db4c38bb7c3c7e342ae6072dd10ef6ff7a2b5e1161b61e329","agentId":"a75e3b42cda8a59a7","label":"synthesize","phase":"Synthesis"}
+{"type":"started","key":"v2:c212204bdd3e0142f889a46cda20dcddac86360c6c01ad87ac70df6601b74416","agentId":"af3f88f0aa5ad75dc","label":"study:x1_implied_vol","phase":"Gaps"}
+{"type":"started","key":"v2:327300d26f5c25a14e982fd75e17cdfea6d2e093950f11a8de087073b4b97c9c","agentId":"a469fccfb4c9dd0ab","label":"study:x1_positioning","phase":"Gaps"}
