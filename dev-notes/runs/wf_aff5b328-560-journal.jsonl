@@ -1,3 +1,8 @@
 {"type":"launched"}
 {"type":"started","key":"v2:f887148c2410cc29ca8de59b8e1c9c4b8c8d8fd63870f36bba7eb785b9fbe1de","agentId":"ad0fb0fb035afa782","label":"write:R5_stats","phase":"Research"}
 {"type":"started","key":"v2:09ee65c3ecdaeab920ee015772b64d885b62ed0839a4ed7912cc122592637af7","agentId":"abef04a30ed2e727a","label":"write:R6_vol_mom","phase":"Research"}
+{"type":"started","key":"v2:3b78a4938d7b185aa3aca48d33796311bada3dd892ba1046f68b60b2d95ca7e6","agentId":"a8e6e3975cc13f072","label":"write:R7_mtf_inter","phase":"Research"}
+{"type":"started","key":"v2:700d6b8176d6607e50acb397f6be9dcd27d3a1a970758b3a2d3580fa2204a4f7","agentId":"a4252e2a1e011df56","label":"write:R8_forecast_calib","phase":"Research"}
+{"type":"started","key":"v2:bd86935441dc251c71d47d07e0141539ca8f10460545b30244873672b76e2b02","agentId":"a3966b48222559e37","label":"write:R9_pine","phase":"Research"}
+{"type":"started","key":"v2:575d282df0fd87a9ddf35f776c598c69cf06d574dcbb80a063a0c567fb59d113","agentId":"a5be72dac68da9c9e","label":"write:R5b_methods","phase":"Research"}
+{"type":"started","key":"v2:ea524611fc8eccca56353f81f36a7da168ef479b8b7f4b850f49f73df0cc08e0","agentId":"a2e068452ca9f607b","label":"write:R9b_toolchain","phase":"Research"}

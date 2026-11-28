@@ -376,3 +376,89 @@ def p_from_ci(m, se):
     if not np.isfinite(se) or se <= 0:
         return np.nan
     return 2 * (1 - norm.cdf(abs(m / se)))
+
+
+# ----------------------------------------------------------------------------- race surface (random-start baseline)
+class RaceSurface:
+    """Distance-matched random-level baseline. From random start bars s (decision at close s), measure in TICKS the
+    running max up-excursion U_k and down-excursion D_k over bars s+1..s+k. A phantom level at distance d (ATR_s units)
+    is placed at q = round(d*ATR_s/tick) ticks and is HIT when the excursion EXCEEDS it (strict trade-through, the same
+    rule as real pools on the same tick grid). Gives P(up first | d_up, d_dn), P(none), P(tie), and single-level reach."""
+
+    def __init__(self, df, starts, H, tick, grid=None):
+        h, l, c, atr, seg = df.high.values, df.low.values, df.close.values, df.atr.values, df.seg.values
+        n = len(df)
+        self.g = grid if grid is not None else np.exp(np.linspace(np.log(0.05), np.log(25.0), 56))
+        self.lg = np.log(self.g)
+        G = len(self.g)
+        st = [s for s in starts if s + H < n and seg[s + H] == seg[s] and np.isfinite(atr[s]) and atr[s] > 0]
+        self.starts = np.array(st)
+        Tu = np.full((len(st), G), H + 1, dtype=np.int32)
+        Td = np.full((len(st), G), H + 1, dtype=np.int32)
+        for i, s in enumerate(st):
+            up = np.round((np.maximum.accumulate(h[s + 1:s + H + 1]) - c[s]) / tick)
+            dn = np.round((c[s] - np.minimum.accumulate(l[s + 1:s + H + 1])) / tick)
+            q = np.round(self.g * atr[s] / tick)
+            Tu[i] = np.searchsorted(up, q, side="right") + 1   # first k with up > q (1-based); H+1 = never
+            Td[i] = np.searchsorted(dn, q, side="right") + 1
+        self.H = H
+        # pair matrices
+        U = Tu[:, :, None]; D = Td[:, None, :]
+        upf = (U < D) & (U <= H)
+        dnf = (D < U) & (D <= H)
+        tie = (U == D) & (U <= H)
+        none = (U > H) & (D > H)
+        res = upf.sum(0) + dnf.sum(0)
+        self.PU = np.where(res > 0, upf.sum(0) / np.maximum(res, 1), np.nan)   # P(up first | resolved, no tie)
+        self.PN = none.mean(0)
+        self.PT = tie.mean(0)
+        self.single_up = (Tu <= H).mean(0)
+        self.single_dn = (Td <= H).mean(0)
+        self.n = len(st)
+
+    def _interp1(self, arr, d):
+        x = np.log(np.clip(d, self.g[0], self.g[-1]))
+        return np.interp(x, self.lg, arr)
+
+    def _interp2(self, M, du, dd):
+        xu = np.log(np.clip(du, self.g[0], self.g[-1])); xd = np.log(np.clip(dd, self.g[0], self.g[-1]))
+        iu = np.clip(np.searchsorted(self.lg, xu) - 1, 0, len(self.g) - 2)
+        idd = np.clip(np.searchsorted(self.lg, xd) - 1, 0, len(self.g) - 2)
+        fu = (xu - self.lg[iu]) / (self.lg[iu + 1] - self.lg[iu])
+        fd = (xd - self.lg[idd]) / (self.lg[idd + 1] - self.lg[idd])
+        m00 = M[iu, idd]; m10 = M[iu + 1, idd]; m01 = M[iu, idd + 1]; m11 = M[iu + 1, idd + 1]
+        return (m00 * (1 - fu) * (1 - fd) + m10 * fu * (1 - fd) + m01 * (1 - fu) * fd + m11 * fu * fd)
+
+    def p_up_first(self, du, dd):
+        return self._interp2(self.PU, np.asarray(du, float), np.asarray(dd, float))
+
+    def p_none(self, du, dd):
+        return self._interp2(self.PN, np.asarray(du, float), np.asarray(dd, float))
+
+    def p_reach(self, d, side):
+        return self._interp1(self.single_up if side > 0 else self.single_dn, np.asarray(d, float))
+
+
+def race(h, l, seg, t, up_lvl, dn_lvl, H):
+    """First-passage race from decision bar t over bars t+1..t+H: +1 up level traded first, -1 down first,
+    0 tie (same bar), 9 none, -9 window leaves segment/data."""
+    n = len(h)
+    if t + H >= n or seg[t + H] != seg[t]:
+        e = t + 1
+        while e < n and e <= t + H and seg[e] == seg[t]:
+            e += 1
+        # partial window: only valid if resolved before the hole
+        hi = h[t + 1:e] > up_lvl; lo = l[t + 1:e] < dn_lvl
+        iu = np.argmax(hi) if hi.any() else 10 ** 9
+        idn = np.argmax(lo) if lo.any() else 10 ** 9
+        if iu == idn == 10 ** 9:
+            return -9, -1
+    else:
+        hi = h[t + 1:t + H + 1] > up_lvl; lo = l[t + 1:t + H + 1] < dn_lvl
+        iu = np.argmax(hi) if hi.any() else 10 ** 9
+        idn = np.argmax(lo) if lo.any() else 10 ** 9
+    if iu == idn == 10 ** 9:
+        return 9, -1
+    if iu == idn:
+        return 0, iu + 1
+    return (1, iu + 1) if iu < idn else (-1, idn + 1)
