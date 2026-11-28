@@ -2351,9 +2351,10 @@ if showTable and barstate.islast and not clean
             float pos = f_clamp((close - rl) / (rh - rl), 0.0, 1.0)
             zn := (pos >= 0.5 ? "PREM " : "DISC ") + str.tostring(pos * 100.0, "0") + "%"
         f_cell(dash, 0, row, nm, cText, na)
-        f_cell(dash, 1, row, f_biasTxt(sb), f_biasCol(sb), na)
-        f_cell(dash, 2, row, f_biasTxt(ib), f_biasCol(ib), na)
-        f_cell(dash, 3, row, zn, cText, na)
+        bool rowNa = k == 0 ? tfNaH : k == 1 ? tfNaS : tfWarn
+        f_cell(dash, 1, row, rowNa ? "— N/A" : f_biasTxt(sb), rowNa ? cGhost : f_biasCol(sb), na)
+        f_cell(dash, 2, row, rowNa ? "— N/A" : f_biasTxt(ib), rowNa ? cGhost : f_biasCol(ib), na)
+        f_cell(dash, 3, row, rowNa ? "—" : zn, rowNa ? cGhost : cText, na)
         row += 1
     int dS = drawD >= dGate ? 1 : drawD <= -dGate ? -1 : 0
     f_cell(dash, 0, row, "DRAW", dim, na)
