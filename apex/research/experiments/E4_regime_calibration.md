@@ -4,6 +4,18 @@ Key: `E4_regime_calibration`. Code: `apex/validation/python/experiments/E4_regim
 
 Status: PRE-REGISTRATION written 2026-11-27 ~09:55 UTC, before any result of this experiment was computed. The results section is appended below it later; nothing in this section is edited after the results are seen (any later change is listed in "Deviations from the pre-registration").
 
+Status update 2026-11-28: the first attempt was interrupted by a usage limit after its scripts had run once. On resume the code was audited, two data defects were handled, the unregistered R4 changes were listed, the missing pre-registered pieces were added (R4 cross-market prior and grid design, Holm tables, OOS persistence), and everything was re-run. Sections 2-7 below hold the deviations, the results and the design implications. Section 1 is unchanged.
+
+**One-paragraph summary.**
+- Volatility states are real, persistent states. ATR-percentile states last 1.6-3.9× longer than in shuffled data.
+- Bollinger-bandwidth "compression" is barely more persistent than chance.
+- The states carry only small out-of-sample information about the absolute next-20-bar range (R² ≤ 0.085), and none at 60 bars.
+- Conditioning the hit-probability surface on the volatility state removes a ±4-8 pp state-specific bias and lowers log loss by 0.4-1.5%. It fails the pre-registered "marginal reliability falls" leg, because that metric cannot see state-specific bias, so R2 is **mixed**.
+- A single surface in a blended volatility unit, sqrt(ATR14·ATR100), does as well as or better than regime rows on 1h and BTC, and is simpler.
+- Compression breakouts do not behave differently from expansion extensions in failure rate or follow-through (R3 **not supported**).
+- On-chart calibration is feasible only with a shipped prior: per-bucket frequencies need about 100-200 resolved outcomes for ±10 pp, and sample size must be counted in bars, not probes.
+- Trend/range labels are no more persistent than on direction-randomised data, and do not set the sign of momentum vs reversion on CME. BTC ER is a near-miss after Holm (R5 **not supported**).
+
 ---
 
 ## 1. Pre-registration (frozen before results)

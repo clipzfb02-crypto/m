@@ -18,13 +18,15 @@
    "wf_84a2c4d5-7fa",
    "wf_73dd7a02-79d",
    "wf_5ef068e4-d8b",
-   "wf_0c009486-2f8"
+   "wf_0c009486-2f8",
+   "wf_9cb39709-38b",
+   "wf_eb0e7df7-4f5"
   ],
-  "total": 59
+  "total": 81
  },
  {
-  "name": "4 Architecture + math spec",
-  "total": 10
+  "name": "3b-4 Synthesis + architecture",
+  "total": 20
  },
  {
   "name": "5 Build APEX_ULTIMATE.pine",

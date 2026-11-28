@@ -19,6 +19,7 @@ H0 = 12
 CANDS = [f"{c}|{m}" for c in ["C1_STRUCT_MOM", "C2_SWEEP_RECLAIM", "C3_DOL_DIR", "C4_COMPOSITE"] for m in ["FAST", "BALANCED"]]
 BASES = ["B1_EMA20_50", "B2_TSMOM48"]
 N_PREREG = 60
+SUFFIX = "" if D.GUARD_VERSION == 1 else f"_g{D.GUARD_VERSION}"
 
 
 def state_held_daily(state, F, meta, cb, sess, lo, hi, days):
@@ -61,7 +62,7 @@ def run(name, slip_stress=2.0):
     n = len(df)
     i60 = int(0.6 * n)
     ann = meta["ann"]
-    res = dict(name=name, n_bars=n, start=str(df.ts.iloc[0]), end=str(df.ts.iloc[-1]), i60=i60,
+    res = dict(name=name, guard_version=D.GUARD_VERSION, n_bars=n, start=str(df.ts.iloc[0]), end=str(df.ts.iloc[-1]), i60=i60,
                split_ts=str(df.ts.iloc[i60]), meta={k: (float(v) if isinstance(v, (float, np.floating)) else v) for k, v in meta.items()},
                n_guard=int(df.guard.sum()), n_gap4=int((df.gap_days > 4).sum()), variants={})
     trades_keep = {}
@@ -86,9 +87,14 @@ def run(name, slip_stress=2.0):
                 if sg in ("OOS", "IS") and H == H0 and v in CANDS:
                     trades_keep[v if sg == "OOS" else v + "|IS"] = tr
                 if len(tr):
-                    cbp = np.array([E.cost_rt(meta, a, b) for a, b in zip(tr[:, 3], tr[:, 4])]) / tr[:, 3]
+                    cpt = np.array([E.cost_rt(meta, a, b) for a, b in zip(tr[:, 3], tr[:, 4])])
+                    cbp = cpt / tr[:, 3]
+                    cR = cpt / F["atr"][tr[:, 0].astype(int)]
                     m["gross_bp"] = float((tr[:, 6] + cbp).mean() * 1e4)
+                    m["gross_bp_ci"] = tuple(np.array(E.mean_ci(tr[:, 6] + cbp)) * 1e4)
                     m["cost_bp"] = float(cbp.mean() * 1e4)
+                    m["gross_R"] = float((tr[:, 7] + cR).mean())
+                    m["cost_R"] = float(cR.mean())
         # state-held (H independent): use H0 embargo for OOS
         for sg, (lo, hi, ef) in segs[H0].items():
             a = ef if ef else lo
@@ -192,10 +198,10 @@ def run(name, slip_stress=2.0):
         res["buyhold"][sg] = dict(sharpe=E.sharpe(d, ann), sharpe_ci=E.sharpe_ci(d, ann), maxdd_pct=100 * E.max_dd(d),
                                   total_ret_pct=100 * float(d.sum()), days=len(days))
     res["runtime_s"] = time.time() - t0
-    with open(os.path.join(OUT, f"res_{name}.json"), "w") as f:
+    with open(os.path.join(OUT, f"res_{name}{SUFFIX}.json"), "w") as f:
         json.dump(res, f, default=lambda x: None if (isinstance(x, float) and not np.isfinite(x)) else (x.tolist() if hasattr(x, "tolist") else str(x)))
-    np.savez_compressed(os.path.join(OUT, f"trades_{name}.npz"), **{k.replace("|", "__"): v for k, v in trades_keep.items()})
-    print(name, "done", round(res["runtime_s"], 1), "s", flush=True)
+    np.savez_compressed(os.path.join(OUT, f"trades_{name}{SUFFIX}.npz"), **{k.replace("|", "__"): v for k, v in trades_keep.items()})
+    print(name + SUFFIX, "done", round(res["runtime_s"], 1), "s", flush=True)
     return res
 
 

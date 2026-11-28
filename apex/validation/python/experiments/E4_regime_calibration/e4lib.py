@@ -333,18 +333,27 @@ def integrity(a):
 
 
 # ---------------------------------------------------------------- datasets
+REPAIR = os.environ.get("E4_NOREPAIR", "0") != "1"
+
+
+def _rep(d, name):
+    return repair_spikes(d, name) if REPAIR else d
+
+
 def datasets(fam, include_excluded=False):
     """returns list of (name, arrays dict, tod_minutes)"""
     out = []
     if fam == "1h":
         for s in ("ES", "NQ", "RTY", "YM", "CL", "GC"):
-            out.append((s + "_1h", to_arrays(load_cme(s, "1h"), "America/New_York"), 60))
+            if not include_excluded and s + "_1h" in EXCLUDE:
+                continue
+            out.append((s + "_1h", to_arrays(_rep(load_cme(s, "1h"), s + "_1h"), "America/New_York"), 60))
     elif fam == "5m":
         for s in ("ES", "NQ", "RTY", "YM", "CL", "GC"):
             d = resample(load_cme(s, "1min"), 5)
-            out.append((s + "_5m", to_arrays(d, "America/New_York"), 30))
+            out.append((s + "_5m", to_arrays(_rep(d, s + "_5m"), "America/New_York"), 30))
     elif fam == "btc":
-        out.append(("BTC_1h", to_arrays(load_btc(), "UTC"), 60))
+        out.append(("BTC_1h", to_arrays(_rep(load_btc(), "BTC_1h"), "UTC"), 60))
     if not include_excluded:
         out = [x for x in out if x[0] not in EXCLUDE]
     return out

@@ -3,9 +3,17 @@
 Author role: R6, volatility, momentum and regime specialist. Spec coverage: APEX_ULTIMATE_SPEC section 8 (and the parts of sections 10, 13, 14 and 25 about redundant features, drift and "supporting features, not independent votes").
 
 **Evidence tags** (same conventions as `09_volatility.md`):
-- **[R6-Tn]**: a test I ran in this session. Code and raw outputs: `/tmp/claude-0/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a/scratchpad/r6_tools/` (`mom_redund.py` T4 → `out_mom_{5m,5m_H48,1h,btc,eur,d}.txt`; `mom_factors.py` T5 → `out_factors_*.txt`; `kernels.py` T6 → `out_kernels.txt`).
+- **[R6-Tn]**: a test run by the R6 role in this workflow session. Code and raw outputs are in `/tmp/claude-0/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a/scratchpad/r6_tools/`:
+  - `mom_redund.py` T4 → `out_mom_{5m,5m_H48,1h,btc,eur,d}.txt`;
+  - `mom_factors.py` T5 → `out_factors_*.txt`;
+  - `kernels.py` T6 → `out_kernels.txt`;
+  - `gapfill_t7.py` T7 → `out_t7_*.txt`, the "causal factors" lines.
+- **Resume pass.** T4-T6 come from an earlier, interrupted R6 pass. I re-read the scripts and checked every quoted number against the raw outputs.
+  - T5 residualised S on T and M with a **full-sample** OLS on ranks, which is in-sample by construction.
+  - **T7** rebuilds the factors exactly as Pine would: bounded transforms with rolling scales, and 500-bar rolling betas that use past bars only.
+  - It then measures orthogonality and ICs out of sample. Where T7 changes a statement, the entry says so.
 - **[study: key]**: a number from a combined study report, replicated by its researcher B unless stated.
-- **[verified]**: I opened the source (abstract or publisher page via search) in this session; **[study-verified]**: a study report re-opened it; **[unverified]**: neither.
+- **[verified]**: the source record (abstract or RePEc page) was opened in this session; the resume pass re-opened Levine & Pedersen (2016) and Patton (2011); **[study-verified]**: a study report re-opened it; **[unverified]**: neither.
 
 **Datasets for R6-T4..T6:** CME ES, NQ, RTY, YM, CL, GC 5-minute (2026-01-20 → 2026-04-15, about 16,500 bars each); CME ES, NQ, RTY, YM, CL 1-hour (2025-03 → 2026-04, 4,500-6,270 bars); BTCUSD 1-hour (2017-2025, 70,273 bars); EURUSD 1-hour (2017-18, 5,000 bars); S&P 500 and NASDAQ daily (1999-2018, 5,031 bars). Each paired with a sign-flip null (bar shapes, gaps and volatility kept, direction destroyed).
 
@@ -20,9 +28,14 @@ Line numbers refer to the frozen DOL Engine v2 copy `brief/baseline_v2.pine`.
 Spec section 8 lists EMA 20/50/100/200, EMA slope, EMA separation, RSI, MACD, ROC, DMI, ADX, VWAP, regression slope, acceleration, deceleration, divergence, persistence, trend strength and mean-reversion conditions, and says they are "supporting features, not independent votes by default" and that correlation and redundancy must be detected.
 
 This document shows three things:
-1. **Almost all of them are the same few numbers.** Every signed trend or momentum indicator in the list is (exactly or nearly) a weighted sum of past price changes, differing only in the shape and length of the weighting kernel and in normalisation. Their mutual correlations follow from kernel overlap, and the theory predicts the measured correlations within ±0.04 on futures, crypto and equity indices [R6-T6]. Three principal components carry 88-92% of the variance of 15 indicators [R6-T4].
+1. **Almost all of them are the same few numbers.**
+   - Every signed trend or momentum indicator in the list is (exactly or nearly) a weighted sum of past price changes. They differ only in the shape and length of the weighting kernel and in normalisation.
+   - Their mutual correlations follow from kernel overlap. On the four intraday series (ES/NQ 5m, ES 1H, BTC 1H), the iid-increment theory predicts the measured Spearman correlation within ±0.05 for all 11 pairs tested. On S&P 500 daily it does so for 10 of 11; the exception is ROC20 vs EMA50−200, measured 0.13 above theory, a sign that daily increments are not iid [R6-T6].
+   - Three principal components carry 88-92% of the variance of 15 indicators [R6-T4].
 2. **Their directional information at intraday horizons is close to zero.** ICs are within ±0.03 on 5-minute futures, negative on one year of 1H index futures, and small positive on daily indices, consistent with the study's finding that direction is close to a random walk at DOL horizons and with the academic split between daily-to-monthly time-series momentum and intraday noise.
-3. **A small orthogonal set is enough:** a trend-level factor T, a momentum-change factor M, and a stretch (mean-reversion) factor S residualised on T and M. After residualisation their pairwise correlations are |ρ| ≤ 0.02 on every family [R6-T5].
+3. **A small orthogonal set is enough:** a trend-level factor T, a momentum-change factor M, and a stretch (mean-reversion) factor S residualised on T and M.
+   - With full-sample residualisation, their pairwise correlations are |ρ| ≤ 0.02 on every family [R6-T5].
+   - With the causal Pine construction (bounded transforms, 500-bar rolling betas), the out-of-sample correlations are |ρ(T, S⊥)| ≤ 0.06 and |ρ(M, S⊥)| ≤ 0.04 on all 15 series [R6-T7].
 
 **Modules fed:**
 - **BIAS** (Directional Bias Score B): T, M, S⊥ as *candidate* features of a per-chart learned model with zero prior weight; never as fixed votes.
@@ -110,7 +123,7 @@ Notation: Δ_t = C_t − C_{t−1} (price change); r_t = ln(C_t/C_{t−1}); EMA_
   - **Return-kernel identities** (derivation: write C_{t−k} = C_t − Σ_{i<k} Δ_{t−i}, use that EMA weights sum to 1):
     - C_t − E_n,t = Σ_{i≥0} (1 − α_n)^{i+1} Δ_{t−i} (an exponential kernel on past changes).
     - E_f,t − E_s,t = Σ_{i≥0} [(1 − α_s)^{i+1} − (1 − α_f)^{i+1}] Δ_{t−i} (a hump-shaped kernel, zero at lag 0, peaking at lag i* = ln(ln b / ln a)/ln(a/b) − 1 with a = 1 − α_s, b = 1 − α_f; i* ≈ 7.6 bars for 12/26 and ≈ 14 bars for 20/50).
-  - Levine & Pedersen (2016) show the same equivalence between moving-average crossovers and time-series momentum in general form.
+  - Levine & Pedersen (2016) show the same equivalence between moving-average crossovers and time-series momentum in general form, and state that OLS trend regressions and other linear filters are special cases (abstract and summary opened in the resume pass).
   - Knowable at close t.
 - **Required data:** closes.
 - **Pine v6 availability:** `ta.ema`. O(1). Feasible.
@@ -120,7 +133,7 @@ Notation: Δ_t = C_t − C_{t−1} (price change); r_t = ln(C_t/C_{t−1}); EMA_
 - **Validation experiment:** MOM-X1.
 - **Existing evidence:** [R6-T6] theory vs measured Spearman correlation (ES 5m / NQ 5m / ES 1H / BTC 1H / SPX daily): EMA20−50 vs MACD 0.89 vs 0.87-0.90; price−EMA20 vs EMA20−50 0.56 vs 0.55-0.58; price−EMA200 vs EMA50−200 0.90 vs 0.89-0.93. [R6-T4] separation and distance ICs are within ±0.03 on 5m, −0.06 to −0.07 on 1H (index futures, one year), +0.04 to +0.06 on daily.
 - **APEX recommendation:** **INCLUDE-CORE** only as one member of the averaged T factor (EMA20−50 separation); price−EMA20 distance goes into S (stretch). Redundancy: medium-trend cluster (separation, slope, MACD line, 50-bar regression t) and fast cluster (distance, RSI, DMI, ROC).
-- **Sources:** Levine, A. & Pedersen, L. H. (2016), "Which Trend Is Your Friend?", *Financial Analysts Journal* 72(3), 51-66 [verified: abstract via search, https://ideas.repec.org/a/taf/ufajxx/v72y2016i3p51-66.html]. Pine v6 reference `ta.ema` (opened). R6-T4, R6-T6.
+- **Sources:** Levine, A. & Pedersen, L. H. (2016), "Which Trend Is Your Friend?", *Financial Analysts Journal* 72(3), 51-66 [verified in the resume pass: IDEAS abstract, https://ideas.repec.org/a/taf/ufajxx/v72y2016i3p51-66.html]. Pine v6 reference `ta.ema` (opened). R6-T4, R6-T6.
 
 ### MACD (line, signal, histogram)
 - **Classification:** D; weak.
@@ -273,7 +286,16 @@ Notation: Δ_t = C_t − C_{t−1} (price change); r_t = ln(C_t/C_{t−1}); EMA_
 - **Useful when:** as M in a learned model; describing "trend slowing" in reason codes.
 - **Fails when:** as an exhaustion trigger. The study found that the speed of a reversal does not predict how far the new leg runs, with the sign flipping between timeframes (price_action finding 7), and that leg-end features seen in hindsight appear identically in random walks (Filimonov & Sornette 2011; study-verified).
 - **Validation experiment:** MOM-X3.
-- **Existing evidence:** [R6-T5] corr(T, M) −0.05 to −0.14 on every family: M is nearly orthogonal to the trend level without any adjustment. IC of M⊥T: 5m H = 12 +0.009 to +0.032 on ES/NQ/RTY/YM/GC, −0.034 on CL; 1H −0.006 to −0.069; BTC **+0.047 ± 0.009**; daily −0.012 to −0.028. Δ_5 t20 alone: BTC +0.050 ± 0.008 (null +0.005); 5m H = 48 +0.019 ± 0.005.
+- **Existing evidence:**
+  - [R6-T5] corr(T, M) is −0.05 to −0.14 on every family, so M is nearly orthogonal to the trend level without any adjustment.
+  - [R6-T5] IC of M⊥T: 5m H = 12 +0.009 to +0.032 on ES/NQ/RTY/YM/GC and −0.034 on CL; 1H −0.006 to −0.069; BTC **+0.047 ± 0.009**; daily −0.012 to −0.028. Per-series SEs on 5m are about 0.02, so no 5m series is individually significant.
+  - [R6-T4] Δ_5 t20 alone: BTC +0.050 ± 0.008 (null +0.005); 5m H = 48 +0.019 ± 0.005.
+  - [R6-T7] Causal M, out of sample after warm-up:
+    - 5m −0.026 to +0.022 (CL negative again);
+    - 1H −0.061 to +0.037 (SE 0.04-0.05);
+    - BTC **+0.046 ± 0.009**, which replicates T5;
+    - EUR +0.059 ± 0.050; daily −0.059 and −0.077 (SE 0.044).
+  - BTC is the only series where M is consistently and significantly non-zero.
 - **APEX recommendation:** **INCLUDE-CORE** as the M factor (candidate, zero prior weight; learned per chart). Redundancy: acceleration cluster (histogram, Δt).
 - **Sources:** Study: price_action findings 7 and 12. R6-T4, R6-T5.
 
@@ -380,7 +402,11 @@ Notation: Δ_t = C_t − C_{t−1} (price change); r_t = ln(C_t/C_{t−1}); EMA_
 - **Useful when:** as a learned feature on instruments with measured short-horizon reversal (BTC 1H in our data); as a location descriptor in SETUP.
 - **Fails when:** as a fixed fade rule on index futures (no effect) or in trending regimes.
 - **Validation experiment:** MOM-X4.
-- **Existing evidence:** [R6-T5] IC of S⊥ (H = 12): 5m −0.019 to +0.014 (n.s.); 1H −0.022 to +0.040 (n.s.); **BTC 1H −0.053 ± 0.007** (mean reversion; a single 8-year series); daily −0.003 to −0.023. Consistent with BTC's VR < 1 and runs z +21 [R6-T4]. Study: short-term mean reversion confined to exchange-traded equity baskets and sovereign bonds at daily horizons; credit, commodities, FX and crypto random-walk-like in that sample (Portnaya 2026, study-verified); our BTC 1H result is an intraday-horizon exception that needs replication.
+- **Existing evidence:**
+  - [R6-T5] IC of S⊥ (H = 12, in-sample residuals): 5m −0.019 to +0.014 (n.s.); 1H −0.022 to +0.040 (n.s.); **BTC 1H −0.053 ± 0.007** (mean reversion, from a single 8-year series); daily −0.003 to −0.023.
+  - [R6-T7] Causal S⊥ with 500-bar rolling betas: 5m −0.019 to +0.014; 1H −0.043 to +0.033; **BTC −0.054 ± 0.0075**, which replicates T5 almost exactly; EUR +0.075 ± 0.042 (n.s., 2,388 bars); daily −0.031 and −0.036 (SE 0.035).
+  - Consistent with BTC's VR < 1 and runs z +21 [R6-T4].
+  - Study: short-term mean reversion was confined to exchange-traded equity baskets and sovereign bonds at daily horizons; credit, commodities, FX and crypto were random-walk-like in that sample (Portnaya 2026, study-verified). Our BTC 1H result is an intraday-horizon exception that needs replication.
 - **APEX recommendation:** **INCLUDE-CORE** as the S⊥ factor (candidate feature, zero prior weight, learned per chart); the "EXTENDED" descriptor in SETUP and UI. Redundancy: fast cluster, after residualisation on T and M.
 - **Sources:** Heston, Korajczyk & Sadka (2010) [study-verified]; Portnaya (2026) [study-verified]. Study: price_action finding 3. R6-T4, R6-T5.
 
@@ -434,12 +460,22 @@ Notation: Δ_t = C_t − C_{t−1} (price change); r_t = ln(C_t/C_{t−1}); EMA_
   - **Use in FCST:** forecast drift μ = 0 by default. If a chart-validated drift exists, shrink it: μ_eff = μ̂·max(0, 1 − 1/t²) (positive-part James-Stein; zero unless |t| > 1; study: quant_pot 1.10).
   - Knowable at close t (all inputs are confirmed-bar values).
 - **Required data:** OHLC.
-- **Pine v6 availability:** `ta.ema`, `ta.macd`, `ta.rsi`, rolling sums for t-statistics, `ta.sma` of products for betas, `math.tanh` is not a built-in in every version, so use φ(x) = x/√(1 + x²) or 2/(1 + e^{−2x}) − 1 via `math.exp` (built-in). O(1) per bar, about 15 series. Feasible.
+- **Pine v6 availability:** `ta.ema`, `ta.macd`, `ta.rsi`; rolling sums for the t-statistics; `ta.sma` of products for the betas.
+  - Pine v6 has **no `math.tanh`**: the v6 `math` namespace lists abs, acos, asin, atan, avg, ceil, cos, exp, floor, log, log10, max, min, pow, random, round, round_to_mintick, sign, sin, sqrt, sum, tan, todegrees and toradians (local docs mirror, `reference/math.md`). Compute tanh(x) as 2/(1 + `math.exp`(−2x)) − 1, clamping x to ±20 first so that `math.exp` cannot overflow.
+  - The robust scale c needs a rolling median of |x| over 2,000 bars. `ta.median` costs O(N) per bar. A cheaper equivalent is an EWMA of |x| × 1.2533, which is σ for Gaussian x; the choice barely matters, because the transform only bounds outliers.
+  - About 15 series and O(1) per bar apart from the median. Feasible.
 - **Proxy limitations:** none.
 - **Useful when:** whenever momentum context is wanted without double counting.
 - **Fails when:** treated as a signal with fixed weights intraday; the ICs are small and unstable in sign across instruments and years.
 - **Validation experiment:** MOM-X1 (orthogonality), MOM-X6 (learned block value).
-- **Existing evidence:** [R6-T5] corr(T, M) −0.05 to −0.14; corr(T, S) +0.57 to +0.64; corr(M, S) +0.51 to +0.57; after residualisation corr(T, M⊥) ≈ 0.00, corr(T, S⊥) ≤ +0.02, corr(M⊥, S⊥) ≤ ±0.01 on all 14 series. The endpoint residual of a 20-bar regression is not a clean alternative: corr with t₅₀ −0.15 to −0.21 and with the MACD histogram +0.40 to +0.43 [R6-T6]. Study: an unregularised online logistic lost 3.6-5.5% log-loss; gated learners cost ≤ 0.3% where the base is good (calib_ml via quant_pot 1.15).
+- **Existing evidence:**
+  - [R6-T5], full-sample rank OLS (in-sample, so near-orthogonality is guaranteed by construction): corr(T, M) −0.05 to −0.14; corr(T, S) +0.57 to +0.64; corr(M, S) +0.51 to +0.57. After residualisation, corr(T, M⊥) ≈ 0.00, corr(T, S⊥) ≤ +0.02 and corr(M⊥, S⊥) ≤ ±0.01 on all 14 series.
+  - [R6-T7], the **causal Pine construction** (tanh transforms with rolling robust scales, 500-bar rolling betas), measured out of sample after a 2,600-bar warm-up on 15 series (6 × 5m, 5 × 1H, BTC, EUR, 2 daily):
+    - corr(T, S⊥) +0.01 to +0.06 and corr(M, S⊥) −0.04 to +0.01, so the rolling residualisation holds up out of sample;
+    - corr(T, M) −0.05 to −0.14, so M needs no residualisation;
+    - the tanh-based T agrees with the rank-based T at Spearman 0.997-1.000, so bounded transforms and ranks are interchangeable.
+  - The endpoint residual of a 20-bar regression is not a clean alternative: it correlates −0.15 to −0.21 with t₅₀ and +0.40 to +0.43 with the MACD histogram [R6-T6].
+  - Study: an unregularised online logistic lost 3.6-5.5% log-loss, while gated learners cost ≤ 0.3% where the base is good (calib_ml via quant_pot 1.15).
 - **APEX recommendation:** **INCLUDE-CORE** as the only momentum representation (BIAS candidate features with zero prior weight; FCST zero drift by default; SETUP stretch descriptor; CAL grading). Redundancy: replaces EMA stack, slope, separation, MACD, ROC, RSI, DMI, regression slope and VWAP-as-vote.
 - **Sources:** R6-T4, R6-T5, R6-T6. Study: quant_pot 1.10, 1.15; quant_regime REG-3, REG-6; bias_dol BIAS-1/2 (via quant_regime).
 
@@ -479,7 +515,9 @@ Under independent increments, the correlation of two such features is ρ(a, b) =
 | ROC20 vs EMA50−200 | 0.21 | 0.17 | 0.19 | 0.20 | 0.20 | 0.34 |
 | price − EMA20 vs EMA20−50 | 0.56 | 0.55 | 0.55 | 0.55 | 0.56 | 0.58 |
 
-(The OLS rows compare the slope kernel with the measured t-statistic, which divides by residual noise; hence the slightly lower measured values.) The agreement on futures, crypto and equity indices shows that the redundancy is **mathematical**: it would hold on any market, and no amount of "confluence" from these indicators adds independent evidence.
+(The OLS rows compare the slope kernel with the measured t-statistic, which divides by residual noise; hence the measured values are 0.02-0.05 lower.)
+
+The agreement on futures, crypto and equity indices shows that the redundancy is **mathematical**: it would hold on any market, and no amount of "confluence" from these indicators adds independent evidence. The one material deviation is the slow pair on S&P 500 daily (+0.13 above theory). With serially dependent increments, kernels far apart in lag can correlate *more* than the iid theory says. That strengthens the case for consolidation; it does not weaken it.
 
 ### 4.2 Measured clusters (Spearman, averaged over series) [R6-T4]
 
@@ -496,7 +534,7 @@ PCA of 15 rank-normalised signed features: PC1 61% / 58% / 61% / 59% / 64%, PC2 
 
 ### 4.3 How to consolidate so evidence is never counted twice
 1. **One representative per cluster** (or an average of members, which is nearly the same number): T, S, M (and T_slow only on daily/HTF).
-2. **Gram-Schmidt order T → M → S.** M is already nearly orthogonal to T (−0.05 to −0.14). S is not (0.57-0.64 with T; 0.51-0.57 with M), so S is replaced by S⊥ = S − β_T T − β_M M with rolling betas. After this step all pairwise |ρ| ≤ 0.02 [R6-T5].
+2. **Gram-Schmidt order T → M → S.** M is already nearly orthogonal to T (−0.05 to −0.14). S is not (0.57-0.64 with T; 0.51-0.57 with M), so S is replaced by S⊥ = S − β_T T − β_M M with rolling betas. After this step all pairwise |ρ| ≤ 0.02 in-sample [R6-T5], and |ρ| ≤ 0.06 out of sample with the causal 500-bar betas [R6-T7].
 3. **Bounded, volatility-scaled inputs** so no single instrument's scale dominates (spec 13.1).
 4. **No fixed votes.** The legacy pattern "signal when k of {MA cross, MACD, RSI} agree" (`buy_sell_indicator.pine`) and the averaged RSI+MACD+DMI composite (`XAUUSD_Fast_Balanced_Pro.pine`, lines 206-218) count one or two factors several times. APEX replaces both with T, M, S⊥ and learned weights that start at zero.
 5. **Separate the volatility and structure modules.** Displacement bars, breakouts and squeeze fires are volatility events (09_volatility.md); market-structure bias (BOS/CHoCH) belongs to the structure module. Momentum features must not re-enter through those modules: if the structure module already uses a swing-trend state, T is a candidate only if the learned model shows incremental skill over it.
@@ -554,7 +592,7 @@ PCA of 15 rank-normalised signed features: PC1 61% / 58% / 61% / 59% / 64%, PC2 
 
 | Rank | Recommendation | Decision | Module | Why |
 |---|---|---|---|---|
-| 1 | Replace all section-8 indicators by the consolidated set T (trend level), M (momentum change), S⊥ (residual stretch), volatility-scaled and bounded | INCLUDE-CORE | BIAS (candidates), SETUP, CAL | 15 indicators ≈ 3 factors (PC1-3 = 88-92%); theory matches measured correlations within ±0.04; residual correlations ≤ 0.02 |
+| 1 | Replace all section-8 indicators by the consolidated set T (trend level), M (momentum change), S⊥ (residual stretch), volatility-scaled and bounded | INCLUDE-CORE | BIAS (candidates), SETUP, CAL | 15 indicators ≈ 3 factors (PC1-3 = 88-92%). Kernel theory matches measured correlations within ±0.05 (all intraday pairs). Causal residual correlations are ≤ 0.06 out of sample [R6-T4, R6-T6, R6-T7] |
 | 2 | Momentum weights in BIAS start at zero and are learned per chart (shrunk online logistic over geometry, prequential gate: skill > 0 with z ≥ 2 after ≥ 200 events) | INCLUDE-CORE | BIAS, CAL | Intraday ICs ≈ 0 and unstable in sign; study: trend adds ≤ 0.25% to side choice; ungated learners lose 3.6-5.5% |
 | 3 | Zero forecast drift by default; only a shrunk, chart-validated drift (James-Stein) may enter FCST | INCLUDE-CORE | FCST, DOL | The engine's drift was the largest single probability error (+3.66% log-loss) |
 | 4 | Direction-free strength = |sER20| with noise-floor thresholds, for REG display and ledger stratification only | INCLUDE-CORE | REG, CAL | Efficiency labels persist no more than a random walk's; useful for honest description and per-chart testing |
@@ -575,18 +613,20 @@ PCA of 15 rank-normalised signed features: PC1 61% / 58% / 61% / 59% / 64%, PC2 
 
 ## 8. Open questions and Phase 6 experiments
 
-Pre-registered as in 09_volatility.md: 2-fold or walk-forward time splits, block bootstraps (block = max(H, bars per day)), the sign-flip null for every directional claim, Benjamini-Hochberg control across cells, and the Phase 6 data matrix (CME ES, NQ, RTY, YM, CL, GC clean months; EURUSD, GBPUSD; SPY or a large-cap stock; BTCUSD spot and a BTC perpetual, plus ETH; 5m, 15m, 1H, 4H, D).
+Pre-registered as in 09_volatility.md: 2-fold or walk-forward time splits, block bootstraps (block = max(H, bars per day)), the sign-flip null for every directional claim, Benjamini-Hochberg control across cells, and the Phase 6 data matrix (CME ES, NQ, RTY, YM, CL, GC clean months; EURUSD, GBPUSD; SPY or a large-cap stock; BTCUSD spot and a BTC perpetual, plus ETH and SOL; 5m, 15m, 1H, 4H, D).
 
-| ID | Hypothesis | Outcome | Horizon | Baseline | Metric | Pass criterion |
-|---|---|---|---|---|---|---|
-| MOM-X1 | The kernel identity predicts the correlation of every indicator pair within ±0.05, and T, M⊥, S⊥ have pairwise |ρ| ≤ 0.05 out of sample | Pairwise Spearman correlations | — | Theory ρ(a, b) under iid increments | Max |measured − theory| and max |ρ| among T, M⊥, S⊥ | ≤ 0.05 on ≥ 90% of pairs × series; residual |ρ| ≤ 0.05 on all series |
-| MOM-X2 | Intraday, T has no directional information (|IC| < 0.02); on daily charts T has IC > 0 | Volatility-normalised forward return | H = 12, 48 (intraday); 5, 20 (D) | Sign-flip null IC distribution | Spearman IC with block SE; BH-adjusted | Intraday: pooled |IC| < 0.02 (confirms zero prior); daily: IC > 0 with BH q < 0.05 on ≥ 3 asset classes |
-| MOM-X3 | M⊥ (MACD histogram/Δt) has positive IC at about 4 hours on 5m futures and at 12 h on crypto, out of sample (data after 2026-04-15 and new symbols) | Volatility-normalised forward return | H = 48 (5m), 12 (1H) | Null; IC = 0 | IC with block SE | IC > 0 with z ≥ 2 on ≥ 70% of out-of-sample series; otherwise M keeps zero prior |
-| MOM-X4 | S⊥ shows mean reversion on crypto 1H (BTC, ETH, SOL) and not on index futures | Volatility-normalised forward return | H = 12 | Null; IC = 0 | IC with block SE | Crypto IC < 0 with z ≤ −2 on ≥ 2 of 3 coins; index |IC| < 0.02 |
-| MOM-X5 | Confirmed-pivot RSI divergence does not beat confirming pivots or the null | ±1 u race in the divergence direction | H = 12 (intraday), 10 (D) | Confirming-pivot control; null | Race difference with SE; BH-adjusted | Expected outcome: |div − control| < 3 pp on ≥ 80% of cells (keeps RESEARCH-ONLY); an effect ≥ 3 pp with q < 0.05 on ≥ 3 asset classes would promote it to a learned feature |
-| MOM-X6 | The learned momentum block (T, M⊥, S⊥) improves the prequential log-loss of the BIAS side model over distance geometry | Which of the two nearest pools is taken first | until decided, ≤ H | Geometry b/(a+b) | Prequential log-loss difference, cluster-robust z | Improvement ≥ 0.5% with z ≥ 2 on a chart → weights switch on for that chart; report the share of charts where it happens |
-| MOM-X7 | A shrunk T-based drift does not improve the forecast-direction Brier score intraday over zero drift | Sign of C_{t+H} − C_t | H = 20, 60, 120 | Zero drift | Brier score and calibration slope | Expected: no improvement intraday (keeps μ = 0); daily improvement ≥ 0.5% with z ≥ 2 would allow a daily drift |
-| MOM-X8 | Full-sample variance ratios are stable in sign between halves of the sample per instrument | VR(q) for q = 2, 4, 8, 16 | — | VR = 1 | Robust z* in each half; sign agreement | Same sign and |z*| ≥ 2 in both halves before the diagnostic is shown as "mean-reverting" or "trending" |
+"Sample" names the slice of the Phase 6 matrix each test uses. "In-sample status" reports what the study data show. Those data were used to form the hypotheses, so confirmation must come from data after 2026-04-15 or from symbols not used here (ETH, SOL, GBPUSD, SPY, 15m and 4H charts).
+
+| ID | Hypothesis | Outcome | Sample | Horizon | Baseline | Metric and statistical test | Pass criterion | In-sample status |
+|---|---|---|---|---|---|---|---|---|
+| MOM-X1 | The kernel identity predicts the correlation of every indicator pair within ±0.05 on intraday data, and the causal T, M, S⊥ have pairwise |ρ| ≤ 0.06 out of sample | Pairwise Spearman correlations | All series; causal construction only | — | Theory ρ(a, b) under iid increments | Max |measured − theory|; max |ρ| among T, M, S⊥ | Intraday: ≤ 0.05 on ≥ 90% of pairs × series. Residual |ρ| ≤ 0.06 on all series | Passes: intraday 11/11 pairs, daily 10/11 [R6-T6]; residual ≤ 0.06 [R6-T7] |
+| MOM-X2 | Intraday, T has no directional information; on daily charts the slow trend has IC > 0 | Volatility-normalised forward return | Intraday futures, FX and crypto; daily indices, stocks and futures | H = 12, 48 (intraday); 5, 20 (D) | Sign-flip null IC distribution | Spearman IC, block SE (block = max(H, bars/day)); BH across cells | Intraday: pooled |IC| < 0.02 (confirms the zero prior). Daily: IC > 0 with BH q < 0.05 on ≥ 3 asset classes | Intraday 5m ±0.03, 1H −0.05 to −0.07 (null −0.05 for slow features); daily +0.05 to +0.07 on 2 correlated series [R6-T4] |
+| MOM-X3 | M⊥ (MACD histogram / Δt) has positive IC at about 4 hours on 5m futures and at 12 hours on crypto, out of sample | Volatility-normalised forward return | New data on the same futures; ETH and SOL 1H | H = 48 (5m), 12 (1H) | Null; IC = 0 | IC with block SE | IC > 0 with z ≥ 2 on ≥ 70% of the out-of-sample series; otherwise M keeps a zero prior | 5m H = 48 macdH +0.031 ± 0.009; BTC +0.046 ± 0.009 [R6-T4, R6-T7] |
+| MOM-X4 | Causal S⊥ shows mean reversion on crypto 1H and not on index futures | Volatility-normalised forward return | BTC (new period), ETH, SOL 1H; ES, NQ, RTY, YM 5m/1H | H = 12 | Null; IC = 0 | IC with block SE | Crypto IC < 0 with z ≤ −2 on ≥ 2 of 3 coins; index |IC| < 0.02 | BTC −0.054 ± 0.0075; index 5m −0.019 to +0.014 [R6-T7] |
+| MOM-X5 | Confirmed-pivot RSI divergence does not beat confirming pivots or the null | ±1 u race in the divergence direction from the confirmation bar p + L | All series | H = 12 (intraday), 10 (D) | Confirming-pivot control; null | Race difference with binomial SE; BH across cells | No-effect outcome if |div − control| < 3 pp on ≥ 80% of cells (stays RESEARCH-ONLY). An effect ≥ 3 pp with q < 0.05 on ≥ 3 asset classes would promote it to a learned feature | No consistent effect; one +9 pp cell of 10 [R6-T4] |
+| MOM-X6 | The learned momentum block (T, M, S⊥) improves the prequential log-loss of the BIAS side model over distance geometry *and over the structure module's swing bias* | Which of the two nearest pools is taken first | Every chart in the matrix, prequential (online) | Until decided, ≤ H | Geometry b/(a + b); geometry + structure bias | Prequential log-loss difference, cluster-robust (by day) z | Improvement ≥ 0.5% with z ≥ 2 on a chart switches the weights on for that chart; report the share of charts where this happens | Study: trend features add ≤ 0.25% over geometry on 23 series |
+| MOM-X7 | A shrunk T-based drift does not improve the forecast-direction Brier score intraday over zero drift | Sign of C_{t+H} − C_t | All series | H = 20, 60, 120 | Zero drift | Brier score and calibration slope; block bootstrap | Expected: no improvement intraday (keeps μ = 0). A daily improvement ≥ 0.5% with z ≥ 2 would allow a daily drift | Study: the engine's drift cost +3.66% log-loss |
+| MOM-X8 | Full-sample variance ratios are stable in sign between the two halves of the sample per instrument | VR(q) for q = 2, 4, 8, 16 | All series, split in halves | — | VR = 1 | Heteroskedasticity-robust z* in each half; sign agreement | Same sign and |z*| ≥ 2 in both halves before the diagnostic says "mean-reverting" or "trending" | Full samples: BTC 1H and SPX daily z* −2.3 to −4.1; others n.s. [R6-T4] |
 
 **Open questions**
 1. Is the BTC 1H pattern (M⊥ positive, S⊥ negative) a crypto-wide microstructure effect (funding, liquidations) or one asset's history?
@@ -600,9 +640,11 @@ Pre-registered as in 09_volatility.md: 2-fold or walk-forward time splits, block
 ## 9. Sources
 
 **Opened or verified in this session**
-- Pine Script v6 reference (local mirror `docsrc/jabez4jc_pinescriptv6/reference/ta.md`): `ta.ema`, `ta.rma`, `ta.rsi` (uses `ta.rma` of up and down changes), `ta.macd`, `ta.roc` (100·change/src[length]), `ta.dmi` ([+DI, −DI, ADX]), `ta.linreg`, `ta.vwap` (hlc3 default, anchor, stdev_mult), `ta.stdev`, `ta.percentrank`, `ta.pivothigh`/`ta.pivotlow`; `reference/request.md` (40 unique requests).
-- Levine, A. & Pedersen, L. H. (2016). Which Trend Is Your Friend? *Financial Analysts Journal* 72(3), 51-66. https://ideas.repec.org/a/taf/ufajxx/v72y2016i3p51-66.html ; https://rpc.cfainstitute.org/research/financial-analysts-journal/2016/which-trend-is-your-friend [verified: abstract via search; full text paywalled].
-- Patton, A. J. (2011). *J. Econometrics* 160(1), 246-256 (robust loss for noisy volatility proxies; used for the volatility unit in R6-T1) [verified: abstract via search].
+- Pine Script v6 reference (local mirror `docsrc/jabez4jc_pinescriptv6/reference/math.md`: the `math` namespace has no `tanh`; `reference/ta.md`): `ta.ema`, `ta.rma`, `ta.rsi` (uses `ta.rma` of up and down changes), `ta.macd`, `ta.roc` (100·change/src[length]), `ta.dmi` ([+DI, −DI, ADX]), `ta.linreg`, `ta.vwap` (hlc3 default, anchor, stdev_mult), `ta.stdev`, `ta.percentrank`, `ta.pivothigh`/`ta.pivotlow`; `reference/request.md` (40 unique requests).
+- Levine, A. & Pedersen, L. H. (2016). Which Trend Is Your Friend? *Financial Analysts Journal* 72(3), 51-66, DOI 10.2469/faj.v72.n3.3. https://ideas.repec.org/a/taf/ufajxx/v72y2016i3p51-66.html [verified in the resume pass: IDEAS record, abstract and CFA summary opened; full text paywalled].
+  - Abstract: time-series momentum and moving-average crossovers "are equivalent representations in their most general forms" and "capture many other types of filters, such as the Hodrick-Prescott (HP) filter, the Kalman filter, and all other linear filters".
+  - Summary: an OLS trend regression is equivalent to a generalised TSMOM or MACROSS signal; the empirical test covers 58 instruments, 1985-2015.
+- Patton, A. J. (2011). Volatility forecast comparison using imperfect volatility proxies. *J. Econometrics* 160(1), 246-256 (robust loss for noisy volatility proxies; used for the volatility unit in R6-T1) [verified in the resume pass: EconPapers record and abstract opened].
 
 **Verified by the study reports**
 - quant_regime.final.md: Moskowitz, Ooi & Pedersen (2012), *JFE* 104(2); Kurth, Eisler, Rej & Bouchaud (2026), arXiv:2607.01550; Safari & Schmidhuber (2025), arXiv:2501.16772; Gao, Han, Li & Zhou (2018), *JFE* 129(2); Baltussen, Da, Lammers & Martens (2021), *JFE* 142(1); Li, Sakkas & Urquhart (2022), *J. Financial Markets* 57; Heston, Korajczyk & Sadka (2010), *J. Finance* 65(4); Lo & MacKinlay (1988), *RFS* 1(1); Portnaya (2026), arXiv:2606.29591; Le (2026), arXiv:2610.11028; Mesfin (2026), arXiv:2605.04004; LeBaron (1992), *J. Business* 65(2); Campbell, Grossman & Wang (1993), *QJE* 108(4); Wilder (1978); Gurrib (2018), *Banks and Bank Systems* 13(3); Kaufman (efficiency ratio).
@@ -614,6 +656,7 @@ Pre-registered as in 09_volatility.md: 2-fold or walk-forward time splits, block
 - R6-T4 `mom_redund.py` → `out_mom_{5m,5m_H48,1h,btc,eur,d}.txt`: correlation matrices, PCA, ICs vs null, divergence, variance ratios, runs tests.
 - R6-T5 `mom_factors.py` → `out_factors_{5m,1h,btc,d}.txt`: the T, M, S trio, residualisation, strength correlations, trio ICs.
 - R6-T6 `kernels.py` → `out_kernels.txt`: kernel theory vs measured correlations; regression-residual check.
+- R6-T7 `gapfill_t7.py` → `out_t7_{5m,1h,btc,eur,d}.txt` (resume pass), "causal factors" lines: the Pine-equivalent causal T, M, S⊥ (tanh transforms, rolling robust scales, 500-bar rolling betas); out-of-sample orthogonality and ICs; tanh vs rank agreement.
 
 **Unverified in this session**
 - Appel's original MACD specification (the formula used is Pine's documented `ta.macd`).

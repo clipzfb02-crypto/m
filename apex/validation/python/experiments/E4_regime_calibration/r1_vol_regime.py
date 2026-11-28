@@ -38,7 +38,7 @@ def run_family(fam, use_null=False):
     for H in HS:
         for d in DEFS:
             for c in CLS:
-                per = dict(dwell=[], sw1000=[], pstay=[], occ=[])
+                per = dict(dwell=[], sw1000=[], pstay=[], occ=[], dwell_oos=[], sw1000_oos=[], pstay_oos=[])
                 eS = {"Y": [], "Ya": []}; e0 = {"Y": [], "Ya": []}; eL = {"Y": [], "Ya": []}
                 eSi = {"Y": [], "Ya": []}; e0i = {"Y": [], "Ya": []}
                 blocks = []; means = {"Y": [], "Ya": []}
@@ -50,6 +50,12 @@ def run_family(fam, use_null=False):
                     pr = E.persistence(s, H, mask=pm & (s >= 0))
                     for k in ("dwell", "sw1000", "pstay"):
                         per[k].append(pr[k])
+                    # persistence on the OOS segment only (added on resume; no fitting is involved, but the
+                    # pre-registration asks for OOS figures)
+                    pmo = np.zeros(len(s), bool); pmo[E.split_idx(len(s), H)[2]:] = True
+                    pro = E.persistence(s, H, mask=pmo & (s >= 0))
+                    for k in ("dwell", "sw1000", "pstay"):
+                        per[k + "_oos"].append(pro[k])
                     per["occ"].append(pr["occ"])
                     iv = isx[valid[isx]]; ov = oos[valid[oos]]
                     blocks.append(E.day_blocks(a, ov, H, E.BPD[fam]))
@@ -70,6 +76,8 @@ def run_family(fam, use_null=False):
                 row = dict(fam=fam, H=H, defn=d, cls=c, null=use_null,
                            dwell=float(np.nanmean(per["dwell"])), sw1000=float(np.nanmean(per["sw1000"])),
                            pstay=float(np.nanmean(per["pstay"])),
+                           dwell_oos=float(np.nanmean(per["dwell_oos"])), sw1000_oos=float(np.nanmean(per["sw1000_oos"])),
+                           pstay_oos=float(np.nanmean(per["pstay_oos"])),
                            occ=[float(np.nanmean([o[k] for o in per["occ"]])) for k in range(3)],
                            n_oos=int(len(bl)))
                 for key in ("Y", "Ya"):

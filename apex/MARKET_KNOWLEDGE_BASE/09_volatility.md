@@ -3,9 +3,10 @@
 Author role: R6, volatility, momentum and regime specialist. Spec coverage: APEX_ULTIMATE_SPEC section 9 (and the parts of sections 10, 13.1, 14.3 and 16 that depend on volatility).
 
 **How to read the evidence tags**
-- **[R6-Tn]** is a test I ran in this session on the study's local data. The scripts and raw outputs are in `/tmp/claude-0/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a/scratchpad/r6_tools/` (`vol_est.py` T1, `vol_regime.py` T2/T3, `mom_redund.py` T4, `mom_factors.py` T5, `kernels.py` T6; outputs `out_*.txt`). Every number is quoted with its dataset and sample size.
+- **[R6-Tn]** is a test run by the R6 role in this workflow session on the study's local data. The scripts and raw outputs are in `/tmp/claude-0/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a/scratchpad/r6_tools/` (`vol_est.py` T1, `vol_regime.py` T2/T3, `mom_redund.py` T4, `mom_factors.py` T5, `kernels.py` T6, `gapfill_t7.py` T7; outputs `out_*.txt`). Every number is quoted with its dataset and sample size.
+- **Resume pass.** T1-T6 were written by an earlier, interrupted R6 pass. In the resume pass I re-read every script and checked every quoted number against the raw output files. The pass found that T2/T3 had tested simpler versions of three recommended constructs: the raw (not deseasonalised) volatility state, ER thresholds of 0.40/0.32 without the 2-bar confirmation, and a linear (not log, not deseasonalised) shock z. **T7** (`gapfill_t7.py` → `out_t7_{5m,1h,btc,eur,d,rw}.txt`) tests the documented forms directly and fully causally, with the clock learned from past bars only. Where T7 changes a conclusion, the entry says so.
 - **[study: key]** is a number from a combined study report (`brief/study/<key>.final.md`). It was replicated by the study's researcher B unless the tag says "as reported by A".
-- **[verified]** means I opened the source (abstract or publisher page via search) in this session. **[study-verified]** means a study report says it re-opened the source. **[unverified]** means neither.
+- **[verified]** means the source record (abstract or publisher/RePEc page) was opened in this workflow session; the resume pass re-opened Patton (2011), Bollerslev (1986), Engle (1982) and Levine & Pedersen (2016). **[study-verified]** means a study report says it re-opened the source. **[unverified]** means neither.
 
 **Datasets used by R6-T1..T6**
 - CME futures, 5-minute bars resampled from 1-minute: ES, NQ, RTY, YM, CL, GC, 2026-01-20 → 2026-04-15, about 16,500 bars each (GC 13,900).
@@ -49,7 +50,7 @@ E = established mechanics or exchange documentation; A = academic or statistical
 | True range (gap-aware) | E | strong | yes | Definition (Wilder). Includes the gap from the prior close. |
 | ATR, RMA smoothing | E | strong | yes | Pine `ta.atr` = RMA of TR. Mean age n−1 bars. |
 | ATR, SMA smoothing | E | strong (definition) | yes | Mean age (n−1)/2. Intraday it forecasts 4-29% worse than RMA [R6-T1]. |
-| ATR percentile (raw) | D | weak | yes | Intraday it measures the time of day unless deseasonalised [R6-T3]. |
+| ATR percentile (raw) | D | weak | yes | Intraday it measures the time of day unless deseasonalised [R6-T3, R6-T7]. |
 | Close-to-close realised vol | A | strong | yes | Unbiased but noisiest. Worst forecaster in every family [R6-T1]. |
 | Parkinson estimator | A | strong (theory), moderate (practice) | yes | Efficiency ≈5.2 in theory, 1.2-5 in practice. Breaks on gappy or thin data. |
 | Garman-Klass estimator | A | strong (theory), moderate (practice) | yes | Efficiency ≈7.4 in theory. Same gap problem; fix with the gap term. |
@@ -58,19 +59,19 @@ E = established mechanics or exchange documentation; A = academic or statistical
 | GK + gap per-bar proxy | A | moderate | yes | The input of the study's volatility clock (TIME-3). |
 | Horizon-matched unit (HAR/GARCH logic) | A | strong (concept), moderate (test) | yes | √(ATR14·ATR100) or the clock-based V(H). |
 | Range percentile | D | weak | yes | Context only. ADR-remaining caps are refuted (study: session_stats). |
-| Volatility expansion / contraction state | A | strong (persistence) | yes | Must be deseasonalised intraday [R6-T3]. |
+| Volatility expansion / contraction state | A | strong (persistence) | yes | Must be deseasonalised intraday. Deseasonalised state: kappa +0.24 to +0.55 at lag 12; raw state on 1H: −0.05 to −0.20 [R6-T3, R6-T7]. |
 | Volatility clustering (EWMA, GARCH, CARR) | A | strong | yes (fixed-parameter forms) | GARCH maximum likelihood is not feasible in Pine; EWMA pairs are. |
 | Volatility of volatility | A | moderate (finance), none (for DOL) | yes (proxy) | Untested for this engine. |
 | NR7 / NR4 / inside bar | D | none (direction), weak (magnitude) | yes | Breaks do not continue (study: quant_regime T5). |
 | Bollinger bandwidth percentile | D | none (direction) | yes | Mixes trend and volatility (close dispersion). |
 | TTM-squeeze proxy (BB inside KC) | D | none (direction) | yes | Equivalent to σ_close/ATR < 0.75; partly an efficiency measure. |
-| Breakout from compression vs extension in expansion | C (direction), A (magnitude) | none (direction), moderate (magnitude) | yes | The difference is a volatility-path and unit difference, not a directional one [R6-T2]. |
+| Breakout from compression vs extension in expansion | C (direction), A (magnitude) | none (direction), weak-moderate (magnitude) | yes | The difference is a volatility-path and unit difference, not a directional one. Much of it is estimator noise: a constant-volatility random walk gives a 1.13× ratio [R6-T2, R6-T7]. |
 | Gaps (session, weekend, roll) | E | strong (mechanics) | yes | Variance and gap-through are real; magnet effects are contested. |
-| Abnormal move (robust z of TR) | A | moderate | yes | Fat tails: P(z ≥ 5) is 1.5-4.0% of bars vs 0.15% on a random walk [R6-T2]. |
+| Abnormal move (robust z of TR) | A | moderate (magnitude); none (direction, except one BTC cell) | yes | Fat tails. Linear z: P(z ≥ 5) is 0.9-4.0% of bars vs 0.15% on a random walk. Deseasonalised log z: P(z ≥ 3) is 0.5-1.3% vs 0.10% [R6-T2, R6-T7]. |
 | Trend / range / transition regime (efficiency axis) | C (as a forecast), E (as a description) | weak | yes | No next-window persistence beyond a random walk [study; R6-T3]. |
 | ADX / CHOP / Hurst / VR as regime switches | C | none | yes | Fire on 7-38% of random-walk bars (study: quant_regime). |
 | Hidden-Markov / Markov-switching regime | A (in sample) | weak (out of sample, intraday) | partial | The states that persist are volatility states. |
-| Hysteresis and minimum dwell | E (engineering) | strong (display stability) | yes | Cuts flips by about 2.4× without changing information [R6-T3]. |
+| Hysteresis and minimum dwell | E (engineering) | strong (display stability) | yes | Cuts flips 2.4× (tested 0.40/0.32 rule) to 3.1× (documented 0.46/0.36 rule with 2-bar confirmation). Label information stays at random-walk level [R6-T3, R6-T7]. |
 | Intraday volatility clock | A | strong | yes | The largest measured improvement to touch probability in the study. |
 | Scheduled-event variance | A | strong (mechanism), moderate (multiples) | partial (manual input) | Pine has no calendar. |
 | Low-liquidity periods | E (existence) | moderate | proxy | No bid/ask in Pine; clock, volume and time-gap proxies only. |
@@ -137,11 +138,18 @@ Notation used throughout:
   - Knowable at close t.
 - **Required data:** OHLC.
 - **Pine v6 availability:** `ta.percentrank` is O(N) per bar (N = 250 is cheap). `ta.percentile_nearest_rank` and `ta.percentile_linear_interpolation` give thresholds (docs; the nearest-rank method "ignores na"; linear interpolation propagates na). Feasible.
-- **Proxy limitations:** On intraday charts the raw percentile mostly measures **time of day**. [R6-T3]: the raw ATR5/ATR100 state on CME 1H has negative label persistence 12 bars later (kappa −0.05 to −0.20 on 5 series) because 12 hours later it is the other half of the day. The percentile of a non-stationary series (trending price level) is also biased.
+- **Proxy limitations:** On intraday charts the raw percentile mostly measures **time of day**.
+  - [R6-T3] On CME 1H, the raw ATR5/ATR100 state has negative label persistence 12 bars later (kappa −0.05 to −0.20 on 5 series), because 12 hours later it is the other half of the day.
+  - [R6-T7] On CME 5m the raw state looks persistent at a lag of exactly one day (kappa +0.28 to +0.39 on ES/NQ/RTY/YM/CL) and anti-persistent at half a day (−0.20 to −0.25). That is the clock repeating, not volatility persisting. The deseasonalised state gives +0.02 to +0.13 at one day and +0.06 to +0.11 at half a day.
+  - The percentile of a non-stationary series (a trending price level) is also biased.
 - **Useful when:** daily charts; deseasonalised intraday; as a display.
 - **Fails when:** intraday without deseasonalising; after structural breaks (a 3× volatility regime shift such as GC Jan-Mar 2026 makes the window's history irrelevant; study: ict_time 2.2).
 - **Validation experiment:** Hypothesis: "The percentile of the deseasonalised log variance level has positive label persistence at lag H (kappa ≥ 0.2) on every intraday timeframe, while the raw percentile does not on 1H." Outcome: tercile label at t and t+H. Sample: Phase 6 intraday matrix. Baseline: raw ATR percentile. Metric: Cohen's kappa at lag H. Pass: deseasonalised kappa ≥ 0.2 on ≥ 80% of series and above raw kappa on 1H.
-- **Existing evidence:** R6-T3 as above. Legacy `DOL_Engine_early.pine` used `ta.percentrank(atr, 200)` with fixed 20/80/95 cut-offs as a trade filter, untested.
+- **Existing evidence:**
+  - R6-T3 and R6-T7 as above.
+  - [R6-T7] Deseasonalised-state kappa at lag 12, with the clock learned causally: 5m +0.46 to +0.55 (6 series); 1H +0.24 to +0.33 (5 series); BTC 1H +0.32; EURUSD 1H +0.21.
+  - On the same data this hypothesis already passes. Phase 6 must replicate it on new data.
+  - Legacy `DOL_Engine_early.pine` (line 1022) used `ta.percentrank(atr, 200)` with fixed 20/80/95 cut-offs as a trade filter, untested.
 - **APEX recommendation:** **INCLUDE-OPTIONAL** as a display of the deseasonalised state only. Do not use the raw ATR percentile anywhere. Redundancy: it duplicates the V-axis z of REG; show one, not both.
 - **Sources:** Pine v6 reference `ta.percentrank`, `ta.percentile_*` (opened this session). Corsi (2009) [study-verified]. R6-T3.
 
@@ -162,7 +170,7 @@ Notation used throughout:
 - **Validation experiment:** Covered by VOL-X1 (forward-variance unit) in section 8.
 - **Existing evidence:** R6-T1 above. The study found that switching the PoT σ from close-to-close to Yang-Zhang gains only +0.28% log-loss (CI −0.10 to +0.66%); the large gains come from seasonality and clustering, not from the estimator (study: quant_pot finding 7).
 - **APEX recommendation:** **EXCLUDE** as a forecaster (replace `potSig`). Keep r² as the evaluation target in CAL and in Phase 6. Redundancy: superseded by the GK+gap proxy and u_H.
-- **Sources:** Patton, A. (2011), "Volatility forecast comparison using imperfect volatility proxies", *J. Econometrics* 160(1), 246-256 [verified: abstract via search]. Pine v6 reference `ta.stdev` (opened). R6-T1. Study: quant_pot 1.7.
+- **Sources:** Patton, A. (2011), "Volatility forecast comparison using imperfect volatility proxies", *J. Econometrics* 160(1), 246-256 [verified in the resume pass: EconPapers abstract]. Pine v6 reference `ta.stdev` (opened). R6-T1. Study: quant_pot 1.7.
 
 ### Range-based estimators: Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang (and the GK + gap proxy)
 - **Classification:** A; strong in theory, moderate in practice.
@@ -201,7 +209,7 @@ Notation used throughout:
 - **Definition:** A forecast of the price movement expected over the next H bars, used as the unit for distances, touch probabilities and forecast bands.
 - **Market mechanism:** Volatility is persistent but mean-reverting. A 14-bar ATR is a good estimate of the last 14 bars and a biased estimate of the next H bars: too high after an expansion, too low after a compression. The fix is to forecast the horizon, not to describe the past.
 - **Mathematical implementation:**
-  - **GARCH(1,1) term structure** (Bollerslev 1986): E_t[σ²_{t+j}] = σ̄² + φ^j (σ²_{t+1} − σ̄²), φ = α + β. Average over the horizon: σ̄²_H = σ̄² + (σ²_{t+1} − σ̄²)·w_H, with w_H = (1 − φ^H) / (H(1 − φ)). Example: a half-life of 30 bars (φ = 0.5^{1/30}) and H = 30 give w_H = 0.73.
+  - **GARCH(1,1) term structure** (Bollerslev 1986): E_t[σ²_{t+j}] = σ̄² + φ^{j−1} (σ²_{t+1} − σ̄²) for j ≥ 1, φ = α + β. Average over the horizon: σ̄²_H = (1/H) Σ_{j=1}^{H} E_t[σ²_{t+j}] = σ̄² + (σ²_{t+1} − σ̄²)·w_H, with w_H = (1 − φ^H) / (H(1 − φ)). Example: a half-life of 30 bars (φ = 0.5^{1/30} ≈ 0.977) and H = 30 give w_H = 0.73.
   - **HAR** (Corsi 2009): ln RV_{t→t+H} = b₀ + b_d ln RV_d + b_w ln RV_w + b_m ln RV_m, with daily, weekly and monthly components.
   - **Cheap Pine form (study: quant_regime REG-1):** u_t = A14_t^a · A100_t^{1−a}, a = 0.5, i.e. u = √(A14 · A100). In logs it shrinks the fast level halfway toward the slow level. Intraday only; on daily charts keep A14.
   - **Clock form (study: ict_time TIME-3; preferred when it wins the per-chart scorecard):** V_t(H) = Σ_{k=1}^{H} s²(τ_{t+k}) · [L_s + φ^k (L_f − L_s)], where s(·) is the seasonal factor, L_f and L_s are fast and slow deseasonalised levels, φ = 0.5^{1/30}. Then u_H = C_t·√V_t(H) (price units) and the per-bar equivalent is σ_eff = u_H/√H.
@@ -217,9 +225,17 @@ Notation used throughout:
   - Study: blended unit OOS log-loss on pool-touch events −0.40% (5m), **−2.79%** (15m), −0.45% (1H), **−1.21%** (BTC 1H), **+0.66% (daily: worse)**; with time-of-day rows −3.04 / −5.82 / −0.65 / −1.23%. It cut the expanded-volatility calibration bias from −5.5..−8.2 pp to −1.3..−3.2 pp (quant_regime 2.6).
   - Study: clock (clkB) Brier vs the engine +3.86% (5m H = 30), +5.45% (5m H = 60), +3.86% (1H H = 12), −1.05% (1H H = 30); mean absolute hour bias 7.3 → 2.1 pp (ict_time 2.2).
   - Study: race WIN≤H with σ_eff from the forward variance has calibration slope 1.00 vs 0.89 (constant σ) and 0.69 (engine with drift) (quant_pot 2.3).
-  - [R6-T1] QLIKE vs ATR14-RMA: blended unit 5m H = 12 +1.8%, 5m H = 48 −3.1%, 1H H = 6 −3.2%, 1H H = 24 −5.7%, BTC −1.3% / −6.6%, EUR −8.3% / −17.1%, daily +2.3% (H = 1) and +8.7% (H = 5). **GK + gap EWMA × clock**: 5m H = 12 **−13.3%** (all six series negative, −4.7 to −20.5%), 5m H = 48 −12.0%, 1H H = 6 **−24.0%** (−2.4 to −33.6%), 1H H = 24 +1.6% (the 24-bar window averages the clock out), BTC −0.5% / +2.5%, EUR −23.2%. MZ R² on 1H H = 6 rises from 0.147 (ATR14) to 0.346.
+  - [R6-T1] QLIKE vs ATR14-RMA, blended unit: 5m H = 12 +1.8%, 5m H = 48 −3.1%, 1H H = 6 −3.2%, 1H H = 24 −5.7%, BTC −1.3% / −6.6%, EUR −8.3% / −17.1%, daily +2.3% (H = 1) and +8.7% (H = 5).
+  - [R6-T1] **GK + gap EWMA × clock**: 5m H = 12 **−13.3%** (all six series negative, −4.7 to −20.5%); 5m H = 48 −12.0%; 1H H = 6 **−24.0%** (−2.4 to −33.6%); 1H H = 24 +1.6% (the 24-bar window averages the clock out); BTC −0.5% / +2.5%; EURUSD −23.2% at H = 6 but **+7.4% at H = 24**. MZ R² on 1H H = 6 rises from 0.147 (ATR14) to 0.346.
+  - Per-series block-bootstrap SEs: about 2.4-3.2 pp on ES, NQ and YM 5m; RTY 5m −4.7% (SE 4.6); CL and GC 5m −14% (SE 11.7-12.8). The CL and GC gains are not individually significant.
+  - Caveats on the T1 clock (it is an upper bound on what Pine will get):
+    - The bucket factors were learned on the other half of the sample, and one of the two folds trains on later data.
+    - The future-bar factors use the realised future timestamps, which know about holidays and halts that Pine's expected timestamps (`time(..., bars_back = -k)`) do not.
+    - The fully causal clock of R6-T7 (expanding means over past bars only) is the realistic version; VOL-X1 must score that.
+  - [R6-T1] HAR on GK + gap (fitted on the training half) is unstable intraday: 1H family mean +8.8% with one series at +66%. It does better on BTC (−3.0% / −11.2%) and EURUSD (−19.3% / −24.9%), and on daily it is SPX −6.7% and NDX +2.1% at H = 5.
+  - [R6-T7] The clock forward-variance unit √V(H) (causal) narrows the gap in forward range between compression and expansion breakouts. On 5m the COMP/EXP ratio is 1.01-1.15 with it vs 1.10-1.18 in ATR14 units (details in the breakout entry). It does not remove the gap.
 - **APEX recommendation:** **INCLUDE-CORE** (VOL; consumed by DOL, FCST, RISK, CAL). Ship three candidates {ATR14, √(ATR14·ATR100), clock V(H)} and select per chart by the CAL scorecard (lowest proper score with ≥ 2,000 resolved probes and z ≤ −2 against ATR14; hold ≥ 5 days). Daily and higher: ATR14 (or HAR when Phase 6 confirms it). Redundancy: this replaces potSig, ATR-unit surfaces and volatility-tercile rows.
-- **Sources:** Bollerslev (1986), *J. Econometrics* 31(3), 307-327 [verified: Duke Scholars and RePEc via search]; Engle (1982), *Econometrica* 50(4), 987-1007 [verified via secondary citation in search]; Corsi (2009) [study-verified]; Pine v6 reference `time()` bars_back (opened). Study: quant_regime REG-1, ict_time TIME-3/4, quant_pot QPOT-02/05. R6-T1.
+- **Sources:** Bollerslev (1986), *J. Econometrics* 31(3), 307-327 [verified this session: IDEAS/RePEc record and abstract]; Engle (1982), *Econometrica* 50(4), 987-1007 [verified this session: IDEAS/RePEc record]; Corsi (2009) [study-verified]; Pine v6 reference `time()` bars_back (opened). Study: quant_regime REG-1, ict_time TIME-3/4, quant_pot QPOT-02/05. R6-T1, R6-T7.
 
 ### Range percentile
 - **Classification:** D; weak.
@@ -256,19 +272,25 @@ Notation used throughout:
 - **Fails when:** jumps and breaks (a single roll gap or bad print enters the level unless winsorised; TIME-3 caps the update at 25× the level and 50× the ratio).
 - **Validation experiment:** Hypothesis: "The deseasonalised log-range has positive autocorrelation at lags of 1 bar, 1 hour and 1 day on every intraday series, and it is reproduced by the sign-flip null." Metric: ACF with block-bootstrap CI. Pass: ACF > 0.1 at lag 1 day on all series. (A mechanical check that the clustering assumption holds on the user's instrument.)
 - **Existing evidence:**
-  - Study: deseasonalised log-range ACF on ES 5m 0.63 (lag 1), 0.49 (1 hour), 0.34 (6.5 hours), 0.27 (1 day); seasonality with a flat level LL 0.6003 vs seasonality × clustering 0.5659 (quant_pot 1.9).
-  - Study: corr(ln(ATR14/ATR100) at t and t+14) 0.49-0.80 on 4 families, identical in the null (quant_regime 2.2).
-  - [R6-T3] Volatility-state label persistence at a 1-hour lag on 5m: kappa +0.26 to +0.48 (6 series); BTC 1H +0.19; daily +0.33; random walk +0.007.
+  - Study (researcher A's measurements in quant_pot 1.9): deseasonalised log-range ACF on ES 5m is 0.63 at lag 1, 0.49 at 1 hour, 0.34 at 6.5 hours and 0.27 at 1 day. Log-loss with seasonality and a flat level is 0.6003, vs 0.5659 with seasonality × clustering.
+  - Study: corr(ln(ATR14/ATR100) at t and t+14) is 0.49-0.80 on 4 families, identical in the null (quant_regime 2.2).
+  - [R6-T3] Label persistence of the **raw** ATR5/ATR100 state at a 1-hour lag on 5m: kappa +0.26 to +0.48 (6 series); BTC 1H +0.19; daily +0.33; random walk +0.007.
+  - [R6-T7] **Deseasonalised** state (GK + gap / causal clock, L_f span 20, L_s span 5 days), kappa at lag 12: 5m +0.46 to +0.55; 1H +0.24 to +0.33; BTC +0.32; EURUSD +0.21; daily +0.39 to +0.41 at lag 10.
+  - [R6-T7] An iid random walk gives +0.09 for this smoothed state: overlap of the 20-bar EWMA creates some persistence even without clustering. The real-data excess over that baseline (+0.15 to +0.46) is the clustering.
   - [R6-T2] After an abnormal bar (robust z ≥ 4), the next 12 bars' range in units of the previous ATR is 4.6-5.3 vs 3.8-4.1 for all bars on 5m; BTC 4.59 vs 3.98; reproduced by the null (5.1-5.2 on 5m).
 - **APEX recommendation:** **INCLUDE-CORE** (VOL), as the fast/slow deseasonalised level pair. **EXCLUDE** GARCH fitting in Pine. Redundancy: the level pair is the same object as the V-axis of REG and the unit u_H; compute once.
-- **Sources:** RiskMetrics Technical Document (1996) [study-verified]; Bollerslev (1986) [verified]; Engle (1982) [verified, secondary]; Chou (2005) *J. Money, Credit and Banking* 37(3) [study-verified]; Corsi (2009) [study-verified]. Study: quant_pot 1.9, quant_regime 2.2. R6-T2, R6-T3.
+- **Sources:** RiskMetrics Technical Document (1996) [study-verified]; Bollerslev (1986) [verified, IDEAS record]; Engle (1982) [verified, IDEAS record]; Chou (2005) *J. Money, Credit and Banking* 37(3) [study-verified]; Corsi (2009) [study-verified]. Study: quant_pot 1.9, quant_regime 2.2. R6-T2, R6-T3.
 
 ### Volatility expansion and contraction state (the REG V-axis)
 - **Classification:** A; strong (persistence), moderate (as a calibration key).
 - **Definition:** Whether recent volatility is below, near or above its own longer-run level, after removing time-of-day effects.
 - **Market mechanism:** Mean reversion of volatility. After compression, the next bars tend to move more than recent bars; after expansion, less. This is mechanical, not directional, and it is reproduced by direction-free nulls.
 - **Mathematical implementation:**
-  - State variable: v_t = ln(L_f,t / L_s,t), the log ratio of fast to slow deseasonalised levels (VOL). Without the clock (fallback): v_t = ln(A5/A100) on daily charts only.
+  - State variable: v_t = ln(L_f,t / L_s,t), the log ratio of the fast and slow deseasonalised levels (VOL).
+    - L_f = EWMA of x_t/s(τ_t) with span 20 bars (tested in R6-T7; TIME-3 uses potLen = 50; the scorecard chooses).
+    - L_s = EWMA of the same series with span max(5 days of bars, 100).
+    - x_t is the GK + gap proxy and s(τ_t) is the clock factor learned from past bars only.
+    - Without the clock (daily and higher, or before warm-up): v_t = ln(A5/A100).
   - Standardise with an EWMA of its own mean and variance, α = 2/2001: z_t = (v_t − μ_{t−1}) / σ_{t−1}. Using t−1 statistics keeps the bar from standardising itself.
   - States with hysteresis (Schmitt trigger): enter COMPRESSED at z ≤ −0.43, leave at z > −0.30; enter EXPANDED at z ≥ +0.43, leave at z < +0.30 (±0.43 = the normal terciles; study: quant_regime REG-2). Minimum dwell 3 bars.
   - Knowable at close t.
@@ -278,7 +300,13 @@ Notation used throughout:
 - **Useful when:** calibration auditing (accuracy by volatility class), display, expansion alerts, widening forecast bands.
 - **Fails when:** used as a separate key once the unit is fixed. Study: volatility-tercile rows add −0.23 to +0.36 pp over the blended unit and **hurt** on top of time-of-day rows (15m −2.38% vs −4.06%) (quant_regime 2.6).
 - **Validation experiment:** VOL-X3 (section 8).
-- **Existing evidence:** As above, plus [R6-T2] the forward range in ATR14 units by state is unit-dependent: on 1H, compressed 1.17-1.30 × mean and expanded 0.73-0.87 (largely the clock); on 5m the ATR14 unit is nearly state-neutral (0.95-1.06) while the blended unit over-corrects (compressed 0.75-0.95, expanded 1.09-1.23), matching the study's −5.1 pp over-correction on 5m. On a random walk the ATR14 unit alone produces 1.06 / 0.94 (measurement noise in the denominator).
+- **Existing evidence:**
+  - Persistence as above.
+  - [R6-T7] Flips per 1,000 bars, deseasonalised vs raw state: 5m 40-50 vs 66-116; 1H 70-84 vs 144-164; BTC 75 vs 137; random walk 218 vs 313. Median dwell: 11-13 bars on 5m, 8-9 on 1H.
+  - [R6-T2], raw state: the forward range in ATR14 units by state depends on the unit.
+    - On 1H: compressed 1.17-1.30 × the mean, expanded 0.73-0.87 (largely the clock).
+    - On 5m the ATR14 unit is nearly state-neutral (0.95-1.06), while the blended unit over-corrects (compressed 0.75-0.95, expanded 1.09-1.23). This matches the study's −5.1 pp over-correction on 5m.
+    - On a random walk the ATR14 unit alone produces 1.06 / 0.94 (measurement noise in the denominator).
 - **APEX recommendation:** **INCLUDE-CORE** (REG V-axis; CAL volatility split; UI optional row; ALERT "Volatility Expansion" optional). Not a directional input, and not a separate probability key. Redundancy: replaces ATR percentile, BBW percentile, squeeze and NR7 as the single compression/expansion measure.
 - **Sources:** Study: quant_regime REG-2, 2.6; ict_time TIME-3. R6-T2, R6-T3.
 
@@ -370,8 +398,10 @@ Notation used throughout:
   - Penetration: π_t = δ(C_t − B) / u_H,t.
   - Stretch: S_t = δ(C_t − EMA20_t) / u_H,t.
   - Expected forward range ratio: Q_t = E[R_{t,H}] / (κ·A14_t·√H) ≈ √(V_t(H) / (H·σ²_A14)), where R_{t,H} = max H − min L over t+1..t+H.
-  - **Breakout from compression:** z_{t−1} ≤ −0.43 and m^s_t ≥ 1. Then V(H) > H·σ²_A14 (Q > 1): expect more movement than ATR14 suggests, in **both** directions. Touch probabilities for pools on both sides rise; the cone widens.
-  - **Extension in an expanded market:** z_{t−1} ≥ +0.43 and S_t ≥ 2. Then Q < 1: expect less movement than ATR14 suggests. Distances measured in ATR14 look small and overstate reachability; the study measured the engine's touch probability as 5.5-8.2 pp too high in the expanded tercile (quant_regime 2.6).
+  - **Breakout from compression:** z_{t−1} ≤ −0.43 and m^s_t ≥ 1. Then the forecast ratio Q > 1 (V(H) > H·σ²_A14): the forecast is more movement than ATR14 suggests, in **both** directions. Touch probabilities for pools on both sides rise and the cone widens.
+  - **Extension in an expanded market:** z_{t−1} ≥ +0.43 and S_t ≥ 2. Then the forecast ratio is Q < 1: less movement than ATR14 suggests. Distances measured in ATR14 look small and overstate reachability; the study measured the engine's touch probability as 5.5-8.2 pp too high in the expanded tercile (quant_regime 2.6).
+  - In both cases the operational difference is Q, i.e. which unit converts distance into reachability. The engine should use u_H = √V(H) and not reason from the label.
+  - **What the data support** [R6-T7]: the forward range after compression breakouts is larger than after expanded-state breakouts, but by less than the label suggests, and the stretched-extension subgroup is *not* reliably below 1 in ATR14 units (evidence below). Q is a forecast to be scored, not a fact.
   - **What is not implied:** a higher probability of continuation for either event.
   - Knowable at close t (break confirmation); the state uses t−1 values, so nothing is backdated.
 - **Required data:** OHLC, time.
@@ -380,17 +410,29 @@ Notation used throughout:
 - **Useful when:** sizing the cone and the touch probabilities after a break; labelling the event honestly ("compression break: range expansion likely, direction not forecast").
 - **Fails when:** used as a continuation signal.
 - **Validation experiment:** VOL-X4 (section 8).
-- **Existing evidence:** [R6-T2] Donchian-20 close breaks, ±1 ATR race in the break direction within H (n-weighted; null in brackets):
+- **Existing evidence:** [R6-T2] Donchian-20 fresh close breaks, ±1 ATR race in the break direction within H (n-weighted; null in brackets). The T2 groups were defined from proxies: "compression" = BBW percentile ≤ 20 or squeeze on at t−1; "expanded" = raw V-state expanded or ATR percentile ≥ 80 at t−1.
   - 5m (6 series, H = 12): from compression 0.519 (n 1,911) [0.500]; in expanded volatility 0.496 (n 1,121) [0.482]; normal 0.459 (n 1,313) [0.506].
   - 1H (5 series, H = 12): 0.543 (n 504) [0.477]; 0.492 (n 285) [0.521]; 0.500 (n 424) [0.506].
   - BTC 1H: 0.503 (n 1,523) [0.492]; 0.486 (n 562) [0.510]; 0.476 (n 840) [0.505].
   - Daily SPX + NDX (H = 10): 0.503 (n 193) [0.470]; 0.535 (n 120) [0.531]; 0.560 (n 169) [0.469].
   - Random walk: 0.503 / 0.518 / 0.487.
   - Reading: differences of −5 to +7 pp, of mixed sign across families, mostly within 2 SE of the null (SE ≈ 0.011-0.05), with 12 cells tested. No robust directional difference.
-  - What is robust: stretch at the break is 1.69-1.88 ATR after compression vs 2.04-2.44 ATR in expanded tape; the 12-bar forward range in ATR14 units is larger after compression breaks (1H 4.65 vs 3.28) and the null reproduces it (4.61 vs 3.49). This is volatility mean reversion and the unit, not direction.
+  - What is robust in T2: stretch at the break is 1.69-1.88 ATR after compression vs 2.04-2.44 ATR in expanded tape. The 12-bar forward range in ATR14 units is larger after compression breaks (1H 4.65 vs 3.28), and the null reproduces it (4.61 vs 3.49).
+  - [R6-T7] **The documented definitions** (deseasonalised z at t−1; EXP-STRETCH adds |C − EMA20| ≥ 2 ATR14), with the forward 12-bar range divided by each unit and relative to its all-bar mean (null in brackets where informative):
+    - 5m (6 series, n 280-352 COMP and 150-216 EXP per series). ATR14 unit: COMP 1.08-1.22, EXP 0.95-1.03, EXP-STRETCH 0.99-1.19. Clock unit √V(H): COMP 1.03-1.13, EXP 0.95-1.02. COMP/EXP ratio: 1.10-1.18 (ATR14), 1.01-1.15 (clock). The blended unit reverses the ratio (0.89-0.99) because it over-corrects.
+    - 1H (5 series, n 56-104 per group). ATR14: COMP 1.02-1.15, EXP 0.88-1.02, EXP-STRETCH 0.92-1.10. Clock: COMP 1.00-1.05, EXP 0.89-1.01.
+    - BTC 1H (n 1,360 / 678 / 435): ATR14 1.14 / 1.03 / 1.14; clock 1.12 / 1.03 / 1.13.
+    - Daily SPX/NDX: the ratio reverses (COMP 0.92-0.99, EXP 1.02-1.04).
+    - **Constant-volatility random walk** (60,000 bars): ATR14 COMP 1.05, EXP 0.93 (ratio 1.13); clock-form unit 1.07 / 0.92.
+    - The sign-flip nulls reproduce the real ratios (5m null COMP 1.07-1.18, EXP 0.96-1.00 in ATR14).
+  - Reading of T7:
+    - Most of the "compression breaks run further than expansion breaks" effect in ATR14 units comes from estimator noise in short-window units: an underestimated σ looks like compression and is followed by "more than expected" movement. Genuine mean reversion adds a few percent on 5m and 1H.
+    - The clock unit removes part of the gap; on daily data the effect reverses.
+    - The practical rule stands (score the unit, widen the cone after compression), but the magnitude is small, and "extension in expanded tape → less movement" is not supported in ATR14 units on 5m.
+  - [R6-T7] Direction under the documented definitions: race COMP vs null is −4 to +1 pp on 5m. On 1H, COMP is below the null in all 5 series (real 0.44-0.54 vs null 0.52-0.59; mean −5.4 pp, pooled z ≈ −1.7), the opposite sign to T2's BBW-based +6.6 pp. BTC COMP 0.503 vs 0.502. The sign changes with the definition of "compression": noise.
   - Study: NR7 breaks 0.482-0.515 (above); displacement bars 0.484-0.548 (quant_regime 2.8); MNQ: Asia-session expansion bars *reverse* at the next bar (T = −10.96) and ORB long T = 1.17-1.50 fails walk-forward (Mesfin 2026, study-verified).
-- **APEX recommendation:** **INCLUDE-CORE** as a volatility-path classification in VOL/REG that adjusts the unit, the cone width and the reason codes. **EXCLUDE** any directional or continuation weight in BIAS, DOL or SETUP. Redundancy: displacement bars, NR7 breaks and squeeze fires are the same event family.
-- **Sources:** Study: quant_regime 1.5, 2.6, 2.8, REG-5, REG-7; Mesfin (2026) arXiv:2605.04004 [study-verified]. R6-T2.
+- **APEX recommendation:** **INCLUDE-CORE** as a volatility-path classification in VOL/REG. It drives a reason code and an optional label, and it selects nothing by itself: the unit u_H and the cone width come from the forward-variance model, scored per chart (VOL-X1), not from the label. **EXCLUDE** any directional or continuation weight in BIAS, DOL or SETUP. Redundancy: displacement bars, NR7 breaks and squeeze fires are the same event family.
+- **Sources:** Study: quant_regime 1.5, 2.6, 2.8, REG-5, REG-7; Mesfin (2026) arXiv:2605.04004 [study-verified]. R6-T2, R6-T7.
 
 ### Gaps (session, weekend, overnight, roll)
 - **Classification:** E (mechanics); strong. Gap-fill magnetism: C.
@@ -423,7 +465,10 @@ Notation used throughout:
 - **Mathematical implementation:**
   - Deseasonalise first: TR*_t = TR_t / ŝ(τ_t) (clock factor in price units), else every session open is "abnormal".
   - Robust z in logs (TR is right-skewed): z_t = (ln TR*_t − med_N) / (1.4826·MAD_N), with med_N and MAD_N computed over bars t−N..t−1 (N = 100, excluding bar t).
-  - Abnormal ⇔ z_t ≥ Z*, where Z* is adaptive: the 99.5th percentile of z over the last 2,000 bars, floored at 3. A fixed threshold is not universal: [R6-T2] P(raw z ≥ 5) is 2.1-4.0% on 5m CME, 1.7-3.2% on 1H, 3.0% BTC, 1.5% EUR, 0.9-1.3% daily, vs 0.15% on a Gaussian random walk; P(z ≥ 8) is 0.3-1.75% vs 0.00%.
+  - Abnormal ⇔ z_t ≥ Z*, where Z* is adaptive: the 99.5th percentile of z over the last 2,000 bars, floored at 3. A fixed threshold is not universal:
+    - [R6-T2] For the *linear, not deseasonalised* z of TR, P(z ≥ 5) is 2.1-4.0% on 5m CME, 1.7-3.2% on 1H, 3.0% BTC, 1.5% EUR and 0.9-1.3% daily, vs 0.15% on a Gaussian random walk. P(z ≥ 8) is 0.3-1.75% vs 0.00%.
+    - [R6-T7] For the *documented* deseasonalised log-TR z, P(z ≥ 3) is 0.67-1.09% on 5m, 0.86-1.15% on 1H, 1.25% BTC, 1.02% EUR and 0.50-0.61% daily, vs 0.10% on the random walk. P(z ≥ 4) is 0.14-0.37% intraday vs 0.00%.
+    - The log scale tames TR's right skew, so the floor of 3 flags roughly the top 1% of intraday bars.
   - Knowable at close t (a live preview may flag intrabar but must not feed confirmed logic).
 - **Required data:** OHLC, time.
 - **Pine v6 availability:** `ta.median` and a median of absolute deviations are O(N log N) per bar; with N = 100 this is acceptable. Alternatively a running quantile estimator. `ta.percentile_nearest_rank` for Z*. Feasible.
@@ -431,9 +476,28 @@ Notation used throughout:
 - **Useful when:** (1) capping the influence of the bar on learned levels (winsorise: TIME-3 caps updates at 25× the level); (2) widening the forecast cone and lowering Forecast Quality for the next k bars; (3) a "SHOCK" reason code; (4) suppressing breakout alerts on the bar.
 - **Fails when:** used for direction.
 - **Validation experiment:** VOL-X5 (section 8).
-- **Existing evidence:** [R6-T2] After z ≥ 4 bars, ±1 ATR race in the shock direction: 5m 0.479-0.527 (n 549-898 per series; null 0.463-0.519); 1H 0.446-0.568 (n 119-332); BTC 0.526 ± 0.009 (n 3,204; null 0.500 ± 0.009, a single +2.6 pp cell); EUR 0.466 (n 129); daily 0.482-0.512 (n 82-112). Forward 12-bar range in prior-ATR units: 5m 4.6-5.3 vs 3.8-4.1 for all bars; BTC 4.59 vs 3.98; reproduced by the null.
-- **APEX recommendation:** **INCLUDE-CORE** (VOL shock flag → FQ, FCST, CAL winsorising, UI reason code). No directional weight. Redundancy: displacement bars (the DOL Engine's `dispUp/dispDn`, lines 901-904) are a subset of the same event; keep displacement only for its structural role (FVG quality), not as volatility or direction.
-- **Sources:** Study: ict_time 1.12 (Ederington & Lee), academic_sr finding 6, quant_regime 2.8. R6-T2.
+- **Existing evidence:**
+  - **Magnitude** [R6-T2]. After linear z ≥ 4, the forward 12-bar range in prior-ATR units is:
+    - 5m 4.6-5.3 vs 3.8-4.1 for all bars (+15% to +36%);
+    - 1H 4.19-4.61 vs 4.06-4.27 (only +3% to +12%);
+    - BTC 4.59 vs 3.98 (+15%);
+    - daily 4.46-4.48 vs 3.54-3.59 (+25%).
+    - The null reproduces all of these, so the effect is clustering, not direction.
+  - **Direction, bounded race** [R6-T2]. ±1 ATR race in the shock direction (sign of C − O):
+    - 5m 0.479-0.527 (n 549-898 per series; null 0.463-0.519);
+    - 1H 0.446-0.568 (n 119-332);
+    - BTC 0.526 ± 0.009 (n 3,204; null 0.500 ± 0.009);
+    - EUR 0.466 (n 129); daily 0.482-0.512 (n 82-112).
+  - **Direction, mean close-to-close move** [R6-T7]: the move over the next 12 bars in the shock direction (sign of C_t − C_{t−1}), in ATR14_t units, with day-clustered SEs. Pooled across series assuming independence; the index futures are correlated (about 1.9 effective symbols of 4), so the pooled z overstates.
+    - 5m, linear z ≥ 4: per series +0.04 to +0.39, pooled **+0.16 ± 0.06** (null +0.03 ± 0.05). Documented z ≥ 3: index futures +0.41 to +0.63 (SE 0.31-0.39), CL −0.32, GC −0.39; pooled +0.22 ± 0.13 (null −0.01 ± 0.12).
+    - 1H, linear z ≥ 4: all 5 series negative, −0.11 to −0.49, pooled **−0.27 ± 0.07** (null +0.06 ± 0.08). Documented z ≥ 3: −0.25 to −0.74, pooled −0.50 ± 0.15 (n 36-65 per series).
+    - BTC 1H, linear z ≥ 4: **+0.21 ± 0.06** (n 3,196; null −0.01 ± 0.05). Documented z ≥ 3: **+0.35 ± 0.11** (n 870; null −0.19 ± 0.09). Race 0.527 ± 0.009 and 0.546 ± 0.017 (nulls 0.493 and 0.485). This is the only cell where the bounded race and the mean move agree.
+    - Daily SPX/NDX: −0.37 and −0.45 (SE 0.25 each; n 75-105). EURUSD: +0.02 ± 0.24.
+  - **Reading.** The mean move after shocks is small, has the opposite sign on 5m and 1H index futures in the same months, and mostly does not show up in the bounded race. It is fat-tail-driven and timeframe-specific. No universal directional rule exists. BTC (8 years, one asset, one venue) shows a consistent shock-continuation lean that needs replication on other coins and venues (VOL-X5b).
+- **APEX recommendation:** **INCLUDE-CORE** (VOL shock flag → FQ, FCST, CAL winsorising, UI reason code). No directional weight by default. A per-chart learned directional term is allowed only through the BIAS learner with zero prior (10_momentum.md), never as a fixed rule.
+  - Cone widening after shocks is gated per timeframe family by VOL-X5: the 1H magnitude effect (+3% to +12%) is too small to justify it on current data.
+  - Redundancy: displacement bars (the DOL Engine's `dispUp/dispDn`, lines 902-903 of the frozen copy) are a subset of the same event. Keep displacement only for its structural role (FVG quality), not as volatility or direction.
+- **Sources:** Study: ict_time 1.12 (Ederington & Lee), academic_sr finding 6, quant_regime 2.8, x1_tv_validation (effective symbols). R6-T2, R6-T7.
 
 ### Trend, range and transition regimes (efficiency axis) with adaptive thresholds and hysteresis
 - **Classification:** E as a description of the last window; C as a forecast; weak.
@@ -454,7 +518,13 @@ Notation used throughout:
 - **Fails when:** used to steer target choice or drift. Study: D-first selection loses 9-12 pp of first-touch accuracy intraday; drift worsens log-loss in every regime; trend-state rows never help (quant_regime 2.4-2.6).
 - **Validation experiment:** VOL-X6 (section 8).
 - **Existing evidence:**
-  - [R6-T3] Label changes per 1,000 bars: naive thresholds 248-261 (median dwell 2-3 bars); hysteresis + dwell 105-110 (median dwell 7); percentile thresholds 97-111. Label persistence at lag H (Cohen's kappa): naive +0.04 to +0.09, hysteresis +0.03 to +0.07, percentile +0.01 to +0.06 on 5m/1H/BTC/EUR; **random walk +0.05 to +0.06**. Hysteresis makes the display 2.4× calmer and adds no information.
+  - [R6-T3], with the *tested* rule (enter 0.40, stay 0.32, range < 0.15 / stay < 0.20, dwell 5, no confirmation):
+    - Label changes per 1,000 bars: naive thresholds 248-261 (median dwell 2-3 bars); this rule 105-110 (median dwell 7); percentile thresholds 97-111.
+    - Persistence at lag H (Cohen's kappa) on 5m/1H/BTC/EUR: naive +0.04 to +0.09, this rule +0.03 to +0.07, percentile +0.01 to +0.06; **random walk +0.05 to +0.06**.
+  - [R6-T7], with the *documented* rule (enter 0.46, stay 0.36, 2-bar confirmation, dwell 5):
+    - 77-85 changes per 1,000 bars on every series (5m, 1H, BTC, EUR, daily); median dwell 9-11.
+    - Kappa at lag H: −0.015 to +0.06 (random walk: 80.5 changes, kappa +0.017).
+  - Hysteresis makes the display 2.4-3.1× calmer than naive thresholds. It adds no information, and none was expected, because label persistence is at the random-walk level with any rule.
   - Study: corr(ER20(t), ER20(t+20)) −0.04 to +0.01 on 23 series; the sign-flip null gives the same (quant_regime 2.2). With-HTF-trend excess over geometry: nothing clears 2σ against its null on five families (quant_regime 2.3).
   - Study: in efficient trends the nearer pool is the with-trend pool 76-82% of the time (null 78-83%): "the draw continues" is geometry (quant_regime finding 3).
 - **APEX recommendation:** **INCLUDE-CORE** in REG as a descriptive label and a ledger stratifier, with zero directional weight by default. Any directional use must be learned per chart with zero prior weight and shrinkage (study: REG-6). Redundancy: ER, ADX, CHOP, R² of a regression and the TTM squeeze all measure efficiency; use ER only.
@@ -497,11 +567,12 @@ Notation used throughout:
 - **Fails when:** jump-dominated or spliced series (GC 1H −9.8% Brier); hence scorecard gating.
 - **Validation experiment:** VOL-X2 (section 8).
 - **Existing evidence:**
-  - Size: ES 5-minute variance at 09:30 ET = 4.67 × the day mean, 23:30 = 0.20 ×; NQ 09:30 = 6.17 ×; CL 09:30 2.17 ×, 18:00 reopen 1.94 ×; GC max/min 6.7 × (study: quant_pot). About 75% of daily S&P 500 variance falls in the 6.5 cash hours (Hansen et al. 2012 via the study).
+  - Size (study: quant_pot 1.8, researcher A's measurements): ES 5-minute variance at 09:30 ET = 4.67 × the day mean, at 23:30 = 0.20 ×; NQ 09:30 = 6.17 ×; CL 09:30 2.17 × and 18:00 reopen 1.94 ×; GC max/min 6.7 ×. About 75% of daily S&P 500 variance falls in the 6.5 cash hours (Hansen et al. 2012, via the study).
   - Engine bias without a clock: 5m H = 30 observed touch 68.3% vs predicted 52.4% at 07:00 ET, 42.1% vs 52.3% at 11:00; mean |bias| 7.3 pp; 1H H = 12 8.4 pp (study: ict_time E17).
   - Gains: see "Horizon-matched volatility forecast". Keyed to New York time +3.9% vs UTC-keyed +3.5% Brier on a sample with only 5 post-DST weeks (study: ict_time 1.13).
   - The cash-open drive: ES/NQ/YM/RTY 20-minute windows starting 09:20-09:59 ET take the prior 60-minute high or low +10 to +15 pp more often than the clock predicts (60 days; SE 1.6-3.2 pp); absent in CL/GC (study: ict_time E25). A time-of-day empirical surface learns this; a pure clock cannot.
-  - [R6-T1] GK + gap × clock vs ATR14: −13.3% QLIKE on 5m H = 12, −24.0% on 1H H = 6, +1.6% on 1H H = 24.
+  - [R6-T1] GK + gap × clock vs ATR14: −13.3% QLIKE on 5m H = 12, −24.0% on 1H H = 6, +1.6% on 1H H = 24. This is an upper bound; see the caveats in the forecast-unit entry.
+  - [R6-T7] A fully causal clock (expanding bucket means over past bars, New York-keyed 30/60-minute buckets, no weekday factor) is enough to deseasonalise the V-state. It turns 1H state persistence from negative (−0.05 to −0.20) to +0.24 to +0.33.
 - **APEX recommendation:** **INCLUDE-CORE** (VOL) on intraday charts ≤ 4H, scorecard-gated as the probability unit ("Auto"), always used for deseasonalising state variables. Redundancy: it is the quantitative form of killzones, sessions and weekday effects; fixed killzone multipliers on top would double-count (study: TIME-5).
 - **Sources:** Andersen & Bollerslev (1997) *J. Empirical Finance* 4 [study-verified shape]; Engle & Sokalska (2012) *J. Fin. Econometrics* 10(1) [study-verified]; Dacorogna et al. (1993) [study-verified]; Ederington & Lee (1993) *J. Finance* 48(4) [study-verified]; Hansen, Kim & Kimbrough (2024) *J. Fin. Econometrics* 22(1) [study-verified]. Pine v6 reference `time()` (opened). Study: ict_time 1.13, 2.2, TIME-3/4/5; quant_pot 1.8. R6-T1.
 
@@ -520,7 +591,7 @@ Notation used throughout:
 - **Useful when:** event days on intraday charts.
 - **Fails when:** stale or mistyped inputs; using the term-structure detector alone to drive variance (it hurt; study: x1_implied_vol 2.7).
 - **Validation experiment:** VOL-X8 (section 8).
-- **Existing evidence:** ES 1H: the 08:30 CPI/NFP bar carries 3.9 × (median 6.7 ×) the variance of the same hour on other days; FOMC 14:00 bar 4.8 × (median 8 ×) (n = 12 and 8). Adding event-hour variance cuts event-window touch log-loss by 7.6% with a realised level (study: x1_implied_vol 2.7). Event days run about 2 × a 22-day RV forecast but only 1.06-1.15 × VIX1D (same source).
+- **Existing evidence:** ES 1H: the 08:30 CPI/NFP bar carries 3.9 × (median 6.7 ×) the variance of the same hour on other days; FOMC 14:00 bar 4.8 × (median 8 ×) (n = 12 and 8). Adding event-hour variance to a realised level cuts event-window touch log-loss (H = 6) by 5.6% with variance multiplier m = 4 (σ × 2, the APEX default) and by 7.6% with m = 7 (study: x1_implied_vol 2.7: 0.6504 → 0.6138 / 0.6009). Redistributing instead of adding hurts the rest of the event day with a realised level but helps with VIX1D. Event days run about 2 × a 22-day RV forecast but only 1.06-1.15 × VIX1D (same source).
 - **APEX recommendation:** **INCLUDE-OPTIONAL** (VOL, off by default; RISK shows "⚑ EVENT" when the window lies inside the horizon). Redundancy: the learned clock already holds the average release-hour variance; the event input adds only the day-specific excess.
 - **Sources:** Ederington & Lee (1993, 1996) [study-verified]; Lee (2012) *RFS* 25(2) [study citation]. Study: ict_time TIME-8, x1_implied_vol X1-2, asset_specific ASSET-5.
 
@@ -528,7 +599,7 @@ Notation used throughout:
 - **Classification:** E (they exist); moderate as measurable proxies.
 - **Definition:** Times when few participants trade, spreads widen and prices can print or gap with little volume: the CME daily halt edges, Sunday reopens, the Asia session on US index futures, holidays and half days, the FX rollover window, crypto weekends.
 - **Market mechanism:** Fewer liquidity providers means wider spreads and thinner books, so small orders move price and wicks can be unrepresentative. Pine has no bid/ask or depth data, so APEX can only infer thinness.
-- **Mathematical implementation (all proxies, labelled as such):**
+- **Mathematical implementation:** All of these are proxies and are labelled as such.
   - Clock thinness: λ_t = s²(τ_t) (the learned seasonal variance factor) ≤ 0.3, or the forward-variance ratio V(H)/(H·L_f) ≤ 0.5.
   - Relative volume where volume is reliable (exchange futures and stocks): RV_t = V_t / median(V in the same clock bucket over the last 20 days); thin if RV_t ≤ 0.3. Not for spot FX (tick volume from one venue) and not for multi-venue crypto without a consolidated feed.
   - Stub or holiday day: bars in the session < 35% of the normal count (study: asset_specific).
@@ -549,7 +620,7 @@ Notation used throughout:
 - **Classification:** A; strong at daily horizons, moderate intraday.
 - **Definition:** The options market's forecast of volatility: VIX (SPX 30-day), VIX1D, VIX9D, VIX3M, VXN (Nasdaq-100), RVX, VXD, OVX (crude), GVZ (gold), Deribit DVOL (BTC).
 - **Market mechanism:** Option prices aggregate traders' forecasts, including scheduled events, plus a variance risk premium (implied above realised on average; Carr & Wu 2009).
-- **Mathematical implementation (study: x1_implied_vol X1-1):**
+- **Mathematical implementation:** Follows study x1_implied_vol X1-1.
   - Per-day variance from the index: ivVar = (IV/100)² / A, A = 252 (365 for DVOL).
   - Fresh alignment: request `[close[1], time_close[1]]` on a 60-minute timeframe with `lookahead_on` and latch the value when the closed bar's New York close time is 16:00-16:30 (the official close). A plain daily `close[1]` request is one day stale from 16:15 to 09:30 and destroys VIX1D's edge.
   - Unit-preserving scale: κ = slow EWMA (half-life about 250 days) of L·bpd / ivVar, so the implied term enters in the realised model's units; never a hard-coded VRP constant.
@@ -557,7 +628,7 @@ Notation used throughout:
   - Term-structure state VIX/VIX3M (or VIX9D/VIX) as a key for the probability scale.
   - Knowable at close t (confirmed history with `[1]` and lookahead_on).
 - **Required data:** one to three extra symbols; CBOE data are delayed for most users (fine for the 16:15 close).
-- **Pine v6 availability:** `request.security` with `ignore_invalid_symbol = true` (docs); dynamic symbol strings are allowed in v6; budget 40 unique requests per script (docs). Feasible, partial (only mapped symbols).
+- **Pine v6 availability:** `request.security` with `ignore_invalid_symbol = true` (docs). v6 enables dynamic requests by default, so symbol strings can be series. The budget is 40 unique `request.*()` calls per script, or 64 on the Ultimate plan (docs: limitations, other timeframes and data); APEX must budget for 40. Feasible, partial (only mapped symbols).
 - **Proxy limitations:** Mapping by root: ES/SPX/SPY → VIX family; NQ → VXN (untested natively; VIX used as proxy); RTY → RVX; YM → VXD; CL → OVX; GC → GVZ; BTC → DVOL. Beta-scaled VIX for stocks and FX was worse than plain ATR (study). MOVE is bp yield volatility, not price volatility (unit mismatch).
 - **Useful when:** daily horizons; SPX-linked and RTY 1H charts; event-day detection cross-check.
 - **Fails when:** stale alignment; ES/NQ 5m (no gain); unmapped symbols (clean no-op).
@@ -592,7 +663,11 @@ Notation used throughout:
 6. **Gap variance.** It is already inside TR and GK + gap; a separate gap-volatility term would count it twice.
 7. **Low liquidity and the clock.** The thin-market flag is derived mostly from the clock factor; it adjusts quality and alerts, not the unit again.
 
-**Volatility vs direction.** Every directional claim tied to volatility events tested null or tiny: NR7 breaks, compression breakouts, displacement, shocks, squeeze fires (sections above). Volatility therefore enters BIAS with zero weight. It enters DOL, FCST, RISK and FQ through the unit, the cone and quality.
+**Volatility vs direction.**
+- Every directional claim tied to volatility events tested null, tiny or sign-unstable: NR7 breaks, compression breakouts (the sign flips with the definition of compression), displacement, squeeze fires, and shocks (the mean move after a shock is +0.16 ATR on 5m and −0.27 ATR on 1H index futures over the same months) [R6-T2, R6-T7].
+- The one consistent cell is BTC 1H shock continuation, from a single series.
+- Volatility therefore enters BIAS with zero weight. Any shock-direction term must be learned per chart with a zero prior.
+- Volatility enters DOL, FCST, RISK and FQ through the unit, the cone and quality.
 
 ---
 
@@ -645,13 +720,13 @@ Notation used throughout:
 
 | Rank | Recommendation | Decision | Module | Why |
 |---|---|---|---|---|
-| 1 | Forward-variance unit u_H with per-chart selection among {ATR14, √(ATR14·ATR100), clock V(H)}; replaces `potSig` and ATR-unit surfaces | INCLUDE-CORE | VOL → DOL, FCST, RISK, CAL | Largest measured gains: −13% to −24% QLIKE intraday [R6-T1]; Brier +3.9-5.5% and hour bias 7.3 → 2.1 pp (study) |
+| 1 | Forward-variance unit u_H with per-chart selection among {ATR14, √(ATR14·ATR100), clock V(H)}; replaces `potSig` and ATR-unit surfaces | INCLUDE-CORE | VOL → DOL, FCST, RISK, CAL | Largest measured gains: −13% to −24% QLIKE intraday [R6-T1; offline clock, an upper bound]; Brier +3.9-5.5% and hour bias 7.3 → 2.1 pp (study) |
 | 2 | Robust NY/exchange-keyed volatility clock (TIME-3 form) with real future-bar walk | INCLUDE-CORE | VOL | Removes −17..+11 pp hour bias; quantitative form of sessions and killzones |
 | 3 | GK + gap per-bar proxy; never pure intrabar estimators; close-to-close only as evaluation target | INCLUDE-CORE | VOL, CAL | Pure Parkinson/GK collapse on gappy data (+965% QLIKE on GC 5m); close-to-close is worst everywhere |
-| 4 | Deseasonalised V-axis (ln L_f/L_s z-score) with ±0.43/±0.30 hysteresis and dwell | INCLUDE-CORE | REG, CAL, UI | The only regime state that persists (kappa +0.26..+0.48 at 1 hour on 5m); raw state on 1H is the clock (kappa < 0) |
-| 5 | Shock flag from the deseasonalised robust log-TR z with an adaptive threshold | INCLUDE-CORE | VOL → FQ, FCST, CAL, UI | Fat tails 10-25× a random walk; forward range +15-35%; no direction |
-| 6 | Breakout-from-compression vs extension classification as a volatility-path label (unit, cone, reason code), zero directional weight | INCLUDE-CORE | VOL, REG, FCST | Answers spec 9 honestly: the difference is Q = V(H)/(H·σ²_A14), not continuation |
-| 7 | Efficiency axis (ER20) with noise-floor thresholds (0.46 enter, 0.36 exit, 0.15/0.20 range), confirmation 2, dwell 5, transition window 5 | INCLUDE-CORE (descriptive) | REG, CAL, UI | Calm display (2.4× fewer flips) and ledger stratification; no forecasting weight |
+| 4 | Deseasonalised V-axis (ln L_f/L_s z-score) with ±0.43/±0.30 hysteresis and dwell | INCLUDE-CORE | REG, CAL, UI | The only regime state that persists. Deseasonalised kappa at lag 12: +0.46..+0.55 (5m), +0.24..+0.33 (1H), +0.32 (BTC), vs +0.09 on a random walk. The raw state on 1H is the clock (kappa −0.05..−0.20) [R6-T7] |
+| 5 | Shock flag from the deseasonalised robust log-TR z with an adaptive threshold | INCLUDE-CORE | VOL → FQ, FCST, CAL, UI | Tails 5-12× a random walk; forward range +15..+36% (5m, BTC, daily) but only +3..+12% (1H); mean direction changes sign by timeframe, so no direction weight [R6-T2, R6-T7] |
+| 6 | Breakout-from-compression vs extension classification as a volatility-path label (reason code); the unit and cone come from the scored forward-variance model, not the label; zero directional weight | INCLUDE-CORE | VOL, REG, FCST | Answers spec 9 honestly: the difference is the forecast ratio Q = V(H)/(H·σ²_A14), not continuation. The empirical magnitude is small and partly estimator noise (random walk: 1.13×) [R6-T7] |
+| 7 | Efficiency axis (ER20) with noise-floor thresholds (0.46 enter, 0.36 exit, 0.15/0.20 range), confirmation 2, dwell 5, transition window 5 | INCLUDE-CORE (descriptive) | REG, CAL, UI | Calm display: 77-85 flips per 1,000 bars vs 248-261 naive [R6-T7]. Used for ledger stratification only; no forecasting weight |
 | 8 | Gap handling: TR everywhere, roll exclusion, gap-through rules, RISK gap warning | INCLUDE-CORE | VOL, RISK | Mechanics; avoids corrupting learned volatility |
 | 9 | Low-liquidity proxy flag (clock factor, relative volume, stub day, rollover window) | INCLUDE-CORE (flag only) | VOL → FQ, RISK, ALERT | Honest tradeability; no bid/ask in Pine |
 | 10 | Scheduled-event variance input (σ units, add vs redistribute) | INCLUDE-OPTIONAL | VOL, RISK | −7.6% event-window log-loss (study); needs manual input |
@@ -666,20 +741,23 @@ Notation used throughout:
 
 ## 8. Open questions and Phase 6 experiments
 
-All experiments are pre-registered: the hypothesis, outcome, horizon, baseline, metric and pass criterion are fixed before the data are examined. Every test uses a 2-fold or walk-forward time split, block-bootstrap standard errors (block = max(H, bars per day)), the sign-flip null for any directional claim, and a multiple-testing note (Benjamini-Hochberg across the cells of each experiment). The Phase 6 data matrix: CME index futures (ES, NQ, RTY, YM), CL, GC (clean months only), EURUSD and GBPUSD, SPY or a large-cap stock, BTCUSD spot and a BTC perpetual; timeframes 5m, 15m, 1H, 4H, D.
+All experiments are pre-registered: the hypothesis, outcome, horizon, baseline, metric and pass criterion are fixed before the data are examined. Every test uses a 2-fold or walk-forward time split, block-bootstrap standard errors (block = max(H, bars per day)), the sign-flip null for any directional claim, and a multiple-testing note (Benjamini-Hochberg across the cells of each experiment). The Phase 6 data matrix: CME index futures (ES, NQ, RTY, YM), CL, GC (clean months only), EURUSD and GBPUSD, SPY or a large-cap stock, BTCUSD spot and a BTC perpetual, ETH and SOL spot; timeframes 5m, 15m, 1H, 4H, D.
 
-| ID | Hypothesis | Outcome | Horizon | Baseline | Metric | Pass criterion |
-|---|---|---|---|---|---|---|
-| VOL-X1 | The per-chart forward-variance unit (best of ATR14, blend, clock) forecasts next-H realised variance better than ATR14 | RV_fwd = Σ r² over t+1..t+H | H = 12, 30, 60 bars | ATR14-RMA (QLIKE-scaled) | QLIKE difference; MZ R² of log RV | Better on ≥ 80% of intraday series, pooled CI excludes 0; not worse than −1% on daily |
-| VOL-X2 | The clock improves touch-probability calibration when H × TF < 1 day and is neutral beyond | Level at k ∈ {1, 2, 3} u touched within H | H = 12, 30, 60 | ATR14 empirical surface | Brier and log-loss; mean |hour bias| | Brier gain > 1% with z ≤ −2 on ≥ 70% of series with H×TF < 1 day; hour bias ≤ 3 pp |
-| VOL-X3 | The deseasonalised V-state persists at lag H (kappa ≥ 0.2) on all intraday TFs; the raw state does not on 1H | Tercile label at t vs t+H | H | Raw ATR5/ATR100 state | Cohen's kappa | Deseasonalised kappa ≥ 0.2 on ≥ 80% of series and > raw on 1H/4H |
-| VOL-X4 | Breakouts from compression and extensions in expanded tape do not differ in continuation, but differ in forward range in ATR14 units | (a) ±1 u race in break direction; (b) R_{t,H}/A14_t | H = 12 (intraday), 10 (D) | Sign-flip null; all breakouts | (a) race minus null; (b) ratio | (a) PASS if |race − null| < 3 pp in ≥ 80% of cells (no directional effect, as expected); (b) ratio(compression)/ratio(expanded) > 1.15 and reproduced by the null |
-| VOL-X5 | Shock bars predict higher forward range but no direction | (a) R_{t,H}/A14_{t−1}; (b) ±1 u race in shock direction | H | All bars; null | (a) ratio; (b) race − 0.5 | (a) ratio ≥ 1.10 on ≥ 80% of series; (b) |race − null| < 3 pp |
-| VOL-X6 | Hysteresis + dwell cut regime-label flips by ≥ 50% without lowering label persistence | Label changes; kappa at lag H | — | Naive thresholds | Flips per 1,000 bars; kappa | Flips ≤ 50% of naive; kappa not lower by > 0.02 |
-| VOL-X7 | The implied-volatility blend (w by scorecard) improves touch log-loss over the clock + realised level on mapped symbols | Touch within H | H = 6, 12, 24 (1H); 1, 5 (D) | Clock + realised level (w = 0) | Log-loss with day-block CI | CI excludes 0 on SPX-linked 1H and daily; w = 0 chosen automatically where no gain |
-| VOL-X8 | Manual event variance (add with a realised level) improves event-window touch log-loss | Touch within H for windows containing the release | H = 6, 12 (1H); 12, 30 (5m) | No event input | Log-loss on event windows; unchanged elsewhere | Event-window gain ≥ 3% and non-event loss change within ±0.5% |
-| VOL-X9 | A volatility-of-volatility widening improves coverage of 80% H-bar move intervals | Close at t+H inside the interval | H | Empirical quantiles without widening | Coverage error |cov − 0.80| and interval score | Coverage error reduced by ≥ 25% with interval score not worse |
-| VOL-X10 | Touch-probability calibration error is larger in flagged low-liquidity periods, and the flag-driven FQ reduction is justified | Touch within H | H | Unflagged periods | Calibration error (ECE) by flag | ECE(flagged) − ECE(unflagged) > 1 pp with day-block CI excluding 0 |
+"Sample" names the slice of the Phase 6 matrix each test uses. "In-sample status" reports what the study data already show for the current form; those data cannot confirm the hypothesis, because they were used to form it. Phase 6 must use data after 2026-04-15 or symbols not used here.
+
+| ID | Hypothesis | Outcome | Sample | Horizon | Baseline | Metric and statistical test | Pass criterion | In-sample status |
+|---|---|---|---|---|---|---|---|---|
+| VOL-X1 | The per-chart forward-variance unit (best of ATR14, blend, *causal* clock) forecasts next-H realised variance better than ATR14 | RV_fwd = Σ r² over t+1..t+H | All intraday series and D; walk-forward with the scale c refitted on past data only | H = 12, 30, 60 bars | ATR14-RMA (QLIKE-scaled) | QLIKE difference with block bootstrap (block = max(H, bars/day)); MZ R² of log RV | Better on ≥ 80% of intraday series with the pooled 95% CI excluding 0; no worse than +1% on daily | Offline clock −13% (5m), −24% (1H H = 6) [R6-T1], an upper bound |
+| VOL-X2 | The clock improves touch-probability calibration when H × TF < 1 day and is neutral beyond | Level at k ∈ {1, 2, 3} u touched within H | Intraday series, all hours | H = 12, 30, 60 | ATR14 empirical surface | Brier and log-loss, day-block bootstrap z; mean absolute hour bias | Brier gain > 1% with z ≤ −2 on ≥ 70% of series with H × TF < 1 day; hour bias ≤ 3 pp | Study: +3.9% to +5.5% Brier, bias 7.3 → 2.1 pp |
+| VOL-X3 | The deseasonalised V-state persists at lag H on all intraday TFs; the raw state does not on 1H/4H | Tercile label at t vs t+H | Intraday series; iid random walk as benchmark | H = 12 and 1 day | Raw ATR5/ATR100 state; random-walk kappa | Cohen's kappa; block bootstrap CI | Deseasonalised kappa ≥ 0.2 and ≥ random-walk kappa + 0.1 on ≥ 80% of series, and > raw kappa on 1H/4H | Passes: 5m +0.46..+0.55, 1H +0.24..+0.33, BTC +0.32, EUR +0.21; random walk +0.09 [R6-T7] |
+| VOL-X4 | Breakouts from compression and extensions in expanded tape (documented definitions) do not differ in continuation, but differ in forward range in ATR14 units by more than estimator noise | (a) ±1 u race in the break direction; (b) R_{t,H}/A14_t relative to its mean | All series; each paired with its sign-flip null and an iid random walk | H = 12 (intraday), 10 (D) | Sign-flip null; random-walk ratio | (a) race minus null, BH-adjusted across cells; (b) ratio of group means, block bootstrap CI | (a) no-effect outcome if |race − null| < 3 pp in ≥ 80% of cells (a ≥ 3 pp effect with q < 0.05 on ≥ 3 asset classes would be reported as a directional finding); (b) COMP/EXP ratio > random-walk ratio (1.13) with the CI excluding it | (a) holds; (b) 5m 1.10-1.18, i.e. barely above the random walk [R6-T7] |
+| VOL-X5 | Shock bars predict higher forward range but no universal direction | (a) R_{t,H}/A14_{t−1} vs all bars; (b) ±1 u race and mean move in the shock direction | All series and nulls | H = 12 (intraday), 10 (D) | All bars; null | (a) ratio with block CI; (b) race − null and mean − null, day-clustered SE, BH-adjusted | (a) ratio ≥ 1.10 on ≥ 80% of the series in a timeframe family, else cone widening off for that family; (b) |race − null| < 3 pp | (a) passes 5m/BTC/D, fails 1H (3 of 5 below 1.10); (b) holds except BTC [R6-T2, R6-T7] |
+| VOL-X5b | The BTC shock-continuation lean replicates on other crypto | Mean move and race in the shock direction | ETH, SOL 1H (spot), a BTC perpetual from another venue, 2025-26 | H = 12 | Sign-flip null | Mean − null with day-clustered SE; race − null | Both > 0 with z ≥ 2 on ≥ 2 of 3 series; otherwise treated as a one-series result | BTC 1H +0.21 ± 0.06 ATR, race +3.4 pp [R6-T7] |
+| VOL-X6 | Hysteresis + confirmation + dwell cut regime-label flips by ≥ 50% and leave label persistence at or above the random-walk level | Label changes; kappa at lag H | All series; random walk | — | Naive thresholds; random walk | Flips per 1,000 bars; median dwell; kappa | Flips ≤ 50% of naive, median dwell ≥ 7 bars, kappa ≥ random-walk kappa − 0.03 (the label is descriptive; no information gain is expected) | Passes: 77-85 vs 248-261 flips, dwell 9-11 [R6-T7] |
+| VOL-X7 | The implied-volatility blend (w by scorecard) improves touch log-loss over the clock + realised level on mapped symbols | Touch within H | ES/SPY, RTY, CL, GC, BTC with mapped IV symbols | H = 6, 12, 24 (1H); 1, 5 (D) | Clock + realised level (w = 0) | Log-loss with day-block CI | CI excludes 0 on SPX-linked 1H and daily; w = 0 chosen automatically where there is no gain | Study: +0.3% to +1.6% intraday, larger daily |
+| VOL-X8 | Manual event variance (added to a realised level) improves event-window touch log-loss | Touch within H, for windows containing the release | ES, NQ, ZN-linked charts on CPI/NFP/FOMC days | H = 6, 12 (1H); 12, 30 (5m) | No event input | Log-loss on event windows, event-clustered SE; unchanged elsewhere | Event-window gain ≥ 3% and non-event loss change within ±0.5% | Study, ES 1H 2025-26 (12 CPI/NFP and 8 FOMC release bars): −5.6% (m = 4) and −7.6% (m = 7) |
+| VOL-X9 | A volatility-of-volatility widening improves coverage of 80% H-bar move intervals | Close at t+H inside the interval | All series | H = 20, 60, 120 | Empirical quantiles without widening | Coverage error |cov − 0.80| and interval score; block bootstrap | Coverage error reduced by ≥ 25% with the interval score not worse | Untested |
+| VOL-X10 | Touch-probability calibration error is larger in flagged low-liquidity periods, and the flag-driven FQ reduction is justified | Touch within H | Intraday series with volume (futures) and without (FX) | H = 12, 30 | Unflagged periods | Expected calibration error by flag, day-block CI | ECE(flagged) − ECE(unflagged) > 1 pp with the CI excluding 0 | Untested |
 
 **Open questions**
 1. Does the clock need separate shapes for the RTH and Globex parts of CME futures beyond what 30-minute buckets capture (cash-open drive)? The time-of-day surface learns the drive; the clock does not.
@@ -687,7 +765,9 @@ All experiments are pre-registered: the hypothesis, outcome, horizon, baseline, 
 3. Does the deseasonalised V-axis improve the per-chart probability scale enough to be a key on top of the unit? The study said no for raw volatility rows; deseasonalised rows are untested.
 4. Can holidays be detected early enough (stub day after the first few bars) to correct the forward variance live?
 5. HAR on daily charts: R6-T1 gave −6.7% (SPX) and +2.1% (NDX) at H = 5; more series needed.
-6. Is the BTC-specific shock-direction lean (+2.6 pp vs null, n 3,204) real on other crypto pairs and venues?
+6. Is the BTC-specific shock-direction lean real on other crypto pairs and venues (VOL-X5b)? It shows as +3.4 pp in the race and +0.21 ± 0.06 ATR in the mean move (n 3,196), and +0.35 ± 0.11 ATR with the documented z (n 870).
+7. Why does the mean move after shocks change sign between 5m (+) and 1H (−) on the same index futures? A plausible mechanism, untested: 5m shocks are mostly scheduled releases with follow-through, while 1H shocks are dominated by overnight and halt-edge bars that mean-revert. A time-of-day split of VOL-X5 answers it.
+8. How much of the compression/expansion forward-range gap survives a better unit? R6-T7 shows a random walk already produces 1.13× in ATR14 units. VOL-X4(b) uses that ratio as the benchmark.
 
 ---
 
@@ -695,9 +775,9 @@ All experiments are pre-registered: the hypothesis, outcome, horizon, baseline, 
 
 **Opened or verified in this session**
 - Pine Script v6 reference, local mirror `docsrc/jabez4jc_pinescriptv6/reference/ta.md` (`ta.tr`, `ta.atr`, `ta.rma`, `ta.stdev`, `ta.bbw`, `ta.kc`, `ta.kcw`, `ta.percentrank`, `ta.percentile_nearest_rank`, `ta.percentile_linear_interpolation`, `ta.linreg`, `ta.dmi`, `ta.rsi`, `ta.roc`, `ta.macd`, `ta.vwap`), `reference/time.md` (`time()` and `time_close()` with negative `bars_back`), `reference/request.md` and `concepts/other_timeframes_and_data.md` (40 unique requests), `writing_scripts/limitations.md` (500 ms per loop; 5,000-bar history buffer).
-- Patton, A. J. (2011). Volatility forecast comparison using imperfect volatility proxies. *Journal of Econometrics* 160(1), 246-256. https://econpapers.repec.org/RePEc:eee:econom:v:160:y:2011:i:1:p:246-256 [verified: abstract via search].
-- Bollerslev, T. (1986). Generalized autoregressive conditional heteroskedasticity. *Journal of Econometrics* 31(3), 307-327. https://ideas.repec.org/a/eee/econom/v31y1986i3p307-327.html ; https://scholars.duke.edu/display/pub651658 [verified via search].
-- Engle, R. F. (1982). Autoregressive conditional heteroskedasticity with estimates of the variance of United Kingdom inflation. *Econometrica* 50(4), 987-1007 [verified via a secondary citation in search: https://www.wikipedia.org/wiki/GARCH].
+- Patton, A. J. (2011). Volatility forecast comparison using imperfect volatility proxies. *Journal of Econometrics* 160(1), 246-256. https://econpapers.repec.org/RePEc:eee:econom:v:160:y:2011:i:1:p:246-256 [verified in the resume pass: EconPapers record and abstract opened; the abstract states the robust-loss result used for QLIKE].
+- Bollerslev, T. (1986). Generalized autoregressive conditional heteroskedasticity. *Journal of Econometrics* 31(3), 307-327. https://ideas.repec.org/a/eee/econom/v31y1986i3p307-327.html [verified in the resume pass: IDEAS record and abstract opened].
+- Engle, R. F. (1982). Autoregressive conditional heteroscedasticity with estimates of the variance of United Kingdom inflation. *Econometrica* 50(4), 987-1007. https://ideas.repec.org/a/ecm/emetrp/v50y1982i4p987-1007.html [verified in the resume pass: IDEAS bibliographic record opened; no abstract available there].
 
 **Verified by the study reports** (see each report's source list for URLs)
 - quant_pot.final.md: Parkinson (1980); Garman & Klass (1980); Rogers & Satchell (1991); Yang & Zhang (2000), *J. Business* 73(3); Vințe, Ausloos & Furtună (2022), arXiv:2205.01370; Shu & Zhang (2006), *J. Futures Markets* 26(3); Alizadeh, Brandt & Diebold (2002), *J. Finance* 57(3); Chou (2005), *JMCB* 37(3); Andersen & Bollerslev (1997), *J. Empirical Finance* 4; Engle & Sokalska (2012), *J. Fin. Econometrics* 10(1); Hansen, Kim & Kimbrough (2024), *J. Fin. Econometrics* 22(1); RiskMetrics (1996); Corsi (2009); Perelló, Gutiérrez-Roig & Masoliver (2011), arXiv:1107.1174; Broadie, Glasserman & Kou (1997).
@@ -708,7 +788,14 @@ All experiments are pre-registered: the hypothesis, outcome, horizon, baseline, 
 
 **This session's tests** (code and raw outputs in `/tmp/claude-0/-home-user-m/7ce60006-3639-59b1-8cd3-87355409d58a/scratchpad/r6_tools/`)
 - R6-T1 `vol_est.py` → `out_volest_{5m,1h,btc,eur,d}.txt`: estimator forecast comparison (QLIKE, MZ R², 2-fold OOS).
-- R6-T2 / R6-T3 `vol_regime.py` → `out_volreg_{5m,1h,btc,eur,d,rw}.txt`: compression and expansion magnitudes, breakouts by prior state with nulls, shocks, regime-label stability and kappa.
+- R6-T2 / R6-T3 `vol_regime.py` → `out_volreg_{5m,1h,btc,eur,d,rw}.txt`: compression and expansion magnitudes, breakouts by prior state with nulls, shocks, regime-label stability and kappa (simplified definitions; see the resume-pass note).
+- R6-T7 `gapfill_t7.py` → `out_t7_{5m,1h,btc,eur,d,rw}.txt` (resume pass), all with the causal clock:
+  - deseasonalised V-state persistence and flips;
+  - the documented ER hysteresis rule;
+  - shocks under both definitions, with day-clustered SEs for the mean move;
+  - breakouts by the documented states, with ATR14, blended and clock units;
+  - causal momentum factors for 10_momentum.md.
+- Interpreter: the scratchpad virtual environment `venv_E9_momentum_factors` (numpy 2.5.5, pandas 3.1.1).
 
 **Unverified in this session**
 - Carter's original TTM Squeeze specification (only the practitioner description via the study's Barchart citation).

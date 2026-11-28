@@ -2,7 +2,19 @@
 
 Read this first if you are a new session picking up the work. Everything needed to continue is in `dev-notes/` and `apex/`.
 
-## ⚠️ GOVERNING SPEC (since 2026-11-27)
+## ⚠️⚠️ GOVERNING SPEC (since 2026-11-28): APEX ∞ (APEX INFINITY)
+- `dev-notes/brief/APEX_INFINITY_SPEC.md` (verbatim) supersedes and extends the APEX ULTIMATE spec below.
+- The reconciliation and control document is `apex/APEX_KNOWLEDGE_BASE/00_PROJECT_CONSTITUTION/SPEC_RECONCILIATION.md`. It holds the deltas, the deliverable-name mapping, and steps 1-18 with their status.
+- The user insists: actually research, test on data, derive and verify the maths, prove what was tested; never summarise the prompt; do not rush into coding.
+- Knowledge base: `apex/APEX_KNOWLEDGE_BASE/` (40 folders). When the atlas writers finish, move the `apex/MARKET_KNOWLEDGE_BASE/*.md` docs into their folders and update the paths.
+- Deliverable names (APEX ∞): APEX_ULTIMATE.pine, APEX_ARCHITECTURE.md, APEX_MATHEMATICS.md, APEX_FEATURE_REGISTRY.md, APEX_DOL_SPECIFICATION.md, APEX_FORECASTING_SPECIFICATION.md, APEX_STATISTICAL_VALIDATION.md, APEX_REPAINT_AUDIT.md, APEX_PERFORMANCE_REPORT.md, APEX_DATA_LIMITATIONS.md, APEX_USER_GUIDE.md, APEX_CHANGELOG.md, APEX_KNOWLEDGE_BASE/, APEX_TESTS/.
+  - Also the 10 agent deliverables `01_FINANCIAL_MARKET_FOUNDATIONS.md` … `10_INDEPENDENT_AUDIT.md`, and `DOL_V2_MIGRATION.md`.
+- Launched 2026-11-28 ~06:40 UTC:
+  - KB expansion `w36xe86wr` (run `wf_9cb39709-38b`): K1 econometrics/time series, K2 information theory, K3 ML theory, K4 asset classes, K5 macro/news, K6 exchange mechanics/price discovery/participants, K7 risk maths, K8 signal/backtest/data engineering.
+  - Empirical-F `w4mfftp6x` (run `wf_eb0e7df7-4f5`): E15 ML vs heuristics + ablation, E16 setup taxonomy, E17 horizons × targets.
+- After research: Phase 3b runs the 10 agent deliverables + feature registry + data limitations + maths reference. Then Phase 4 (architecture with the 26 modules), Phase 5, Phase 6 (the 60 red-team tests), Phase 7.
+
+## (earlier) GOVERNING SPEC (since 2026-11-27)
 - The user gave the **APEX ULTIMATE master specification**: `dev-notes/brief/APEX_ULTIMATE_SPEC.md`, saved verbatim. It is now the governing requirements and supersedes the "DOL Engine Round 2" plan below.
 - Deliverables, all under `apex/`:
   - `APEX_ULTIMATE.pine`, `ARCHITECTURE.md`, `MATHEMATICAL_SPECIFICATION.md`, `MARKET_KNOWLEDGE_BASE/` (18 docs plus the methodology matrix), `FEATURE_DATA_MATRIX.md`;

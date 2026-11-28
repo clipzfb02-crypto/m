@@ -1,4 +1,5 @@
-"""Data audit, part 2 (added on resume, 2026-11-28). It extends check_data.py.
+"""Data audit, part 2 (the scan below runs on the REPAIRED data; set E4_NOREPAIR=1 for the raw scan)
+ (added on resume, 2026-11-28). It extends check_data.py.
 
 1. Applies the study's corruption scan (bar-to-bar |log gap| > 1.5% and jump-and-back pairs) to every raw file,
    including the 1-minute files behind the 5m family.
@@ -56,4 +57,11 @@ for fam in ("1h", "5m", "btc"):
             print("    ", c)
         for h in holes:
             print("     hole", h)
-json.dump(res, open(E.OUT + "/data_check2.json", "w"), indent=1)
+json.dump(res, open(E.OUT + ("/data_check2.json" if E.REPAIR else "/data_check2_raw.json"), "w"), indent=1)
+
+# ---- repair log (the loader applies repair_spikes unless E4_NOREPAIR=1)
+print("\nREPAIRS (single bad prints, spike-and-back):")
+for r in E.REPAIR_LOG:
+    print("   ", r)
+json.dump(dict(repairs=E.REPAIR_LOG, n_by_ds={k: sum(1 for r in E.REPAIR_LOG if r["ds"] == k) for k in res}),
+          open(E.OUT + "/repairs.json", "w") if E.REPAIR else open(E.OUT + "/repairs_none.json", "w"), indent=1, default=float)
