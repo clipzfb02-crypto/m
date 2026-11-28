@@ -1,0 +1,4 @@
+{"type":"launched"}
+{"type":"started","key":"v2:7ceb2980862cf518df0d27763009817703bce4eda5a61c4553289b4f06dd28b6","agentId":"af42e561c0f789dc6","label":"exp:E9_momentum_factors","phase":"Experiment"}
+{"type":"started","key":"v2:5faaf86615963cb66d80ba5fe2e6e1879fbc38eb0e920dc2a537e33de5a40281","agentId":"a9a4738d4b96e02fd","label":"exp:E10_volume_vwap","phase":"Experiment"}
+{"type":"started","key":"v2:e8e17417f10ba6d8e83f741c561150a5d507bbc5093e21f42598077873340ec1","agentId":"a0c91a8553280403a","label":"exp:E11_mtf_intermarket","phase":"Experiment"}

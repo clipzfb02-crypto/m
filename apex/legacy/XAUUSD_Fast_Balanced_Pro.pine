@@ -1,0 +1,1248 @@
+//@version=6
+//==============================================================================
+//  XAUUSD - FAST / BALANCED  PROFESSIONAL BUY / SELL SYSTEM   (Pine Script v6)
+//  Optimised defaults : XAUUSD, 3-minute chart.  Works on any symbol.
+//==============================================================================
+//
+//  ARCHITECTURE (top -> bottom)
+//
+//   DATA
+//     |
+//   MARKET REGIME
+//     |
+//   TREND / STRUCTURE / MOMENTUM / VOLATILITY  (+ VWAP, HTF, price action)
+//     |
+//   10 INDEPENDENT SETUP ENGINES  ->  OR logic (long and short, mirrored)
+//     |
+//   SETUP SCORING (0-100) + GRADE (A+ / A / B / C)
+//     |
+//   FAST / BALANCED THRESHOLD  (score + alignment count)
+//     |
+//   ANTI-CHOP / ANTI-CHASE / DUPLICATE / COOLDOWN / SESSION FILTERS
+//     |
+//   ENTRY  ->  SL  ->  TP1 / TP2 / TP3  (partial exits, BE, trailing)
+//     |
+//   DASHBOARD (real strategy statistics) + ALERTS
+//
+//  THERE IS NO GIANT "AND" CONDITION.  Every setup engine is independent and
+//  any single one of them can open a trade as long as it survives the small
+//  set of global safety filters.
+//
+//==============================================================================
+//  NON-REPAINTING / LOOK-AHEAD STATEMENT  (please read)
+//------------------------------------------------------------------------------
+//  * Signals are evaluated on CLOSED bar data only
+//    (strategy calc_on_every_tick = false  +  "confirm on bar close" option).
+//  * Orders are filled by the broker emulator on the NEXT bar (market order),
+//    so no impossible / future price is ever used as an entry.
+//  * Higher timeframe values use
+//        request.security(..., expr[1], lookahead = barmerge.lookahead_off)
+//    i.e. the value of the last CLOSED higher-timeframe bar. No HTF repaint.
+//  * Swing pivots (ta.pivothigh / ta.pivotlow) are confirmed by definition only
+//    AFTER `swing length` bars have closed to the right of the pivot. That is
+//    an unavoidable, FIXED confirmation delay (default 4 bars = 12 min on 3m).
+//    It is NOT repainting: once printed, a pivot never moves. Engines F (BOS)
+//    and H (CHoCH) therefore react with that small delay; every other engine
+//    (trend, pullback, VWAP, breakout, retest, sweep, momentum, compression)
+//    reacts on the current closed bar.
+//  * Historical BUY/SELL signals never move or disappear after the fact.
+//==============================================================================
+
+strategy("XAUUSD Fast/Balanced Pro [3m]",
+     shorttitle              = "XAU F/B Pro",
+     overlay                 = true,
+     format                  = format.price,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     commission_type         = strategy.commission.cash_per_contract,
+     commission_value        = 0.07,
+     slippage                = 3,
+     pyramiding              = 4,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     max_bars_back           = 1000,
+     currency                = currency.USD)
+
+//==============================================================================
+//  1. INPUTS
+//==============================================================================
+string gMODE = "1 - MODE & ENGINE"
+string gTRND = "2 - TREND / STRUCTURE / VWAP"
+string gMOM  = "3 - MOMENTUM"
+string gVOL  = "4 - VOLATILITY"
+string gENG  = "5 - SETUP ENGINES (ON/OFF)"
+string gSCR  = "6 - SCORING & THRESHOLDS"
+string gFLT  = "7 - FILTERS (CHOP / CHASE / HTF / SESSION)"
+string gRSK  = "8 - RISK, SL/TP & TRADE MANAGEMENT"
+string gVIS  = "9 - VISUALS"
+string gALT  = "10 - ALERTS"
+string gDBG  = "11 - DEBUG"
+
+//------------------------------------------------------------------ MODE ------
+string iMode = input.string("FAST", "SYSTEM MODE", options = ["FAST", "BALANCED"], group = gMODE,
+     tooltip = "FAST = more signals, earlier entries, lighter confirmation.\nBALANCED = fewer signals, higher score + more alignment required.\nBoth modes use OR logic between the 10 independent setup engines.")
+bool  iFast        = iMode == "FAST"
+bool  iConfirmOnly = input.bool(true, "Only evaluate signals on confirmed bar close", group = gMODE,
+     tooltip = "Recommended ON: guarantees backtest and live behave identically (no intrabar flicker).")
+
+//------------------------------------------------------------ TREND / VWAP ----
+int    iEmaF     = input.int(21,  "EMA fast", minval = 1, group = gTRND)
+int    iEmaM     = input.int(55,  "EMA medium", minval = 1, group = gTRND)
+int    iEmaS     = input.int(200, "EMA slow (bias)", minval = 1, group = gTRND)
+int    iSwLen    = input.int(4, "Swing pivot length (BOS / CHoCH)", minval = 2, maxval = 25, group = gTRND,
+     tooltip = "Pivot confirmation delay = this many bars. 4 bars = 12 min on a 3m chart.")
+int    iBreakLen = input.int(20, "Breakout lookback (bars)", minval = 3, group = gTRND)
+int    iSweepLen = input.int(15, "Liquidity-sweep lookback (bars)", minval = 3, group = gTRND)
+int    iRetWin   = input.int(14, "Break & retest validity window (bars)", minval = 2, group = gTRND)
+float  iRetTol   = input.float(0.35, "Retest tolerance (ATR)", minval = 0.05, step = 0.05, group = gTRND)
+string iVwapSes  = input.session("0000-0000", "VWAP session (0000-0000 = calendar day)", group = gTRND)
+
+//----------------------------------------------------------------- MOMENTUM ---
+int iRsiLen  = input.int(14, "RSI length", minval = 2, group = gMOM)
+int iMacdF   = input.int(12, "MACD fast", minval = 1, group = gMOM)
+int iMacdS   = input.int(26, "MACD slow", minval = 2, group = gMOM)
+int iMacdSig = input.int(9,  "MACD signal", minval = 1, group = gMOM)
+int iDmiLen  = input.int(14, "DMI length", minval = 2, group = gMOM)
+int iAdxLen  = input.int(14, "ADX smoothing", minval = 2, group = gMOM)
+
+//--------------------------------------------------------------- VOLATILITY ---
+int   iAtrLen  = input.int(14, "ATR length", minval = 1, group = gVOL)
+int   iAtrAvg  = input.int(50, "ATR average length (regime)", minval = 2, group = gVOL)
+int   iBbLen   = input.int(20, "Compression (Bollinger) length", minval = 5, group = gVOL)
+int   iBbAvg   = input.int(50, "Compression average length", minval = 5, group = gVOL)
+float iCompThr = input.float(0.70, "Compression threshold (bandwidth ratio)", minval = 0.10, step = 0.05, group = gVOL)
+int   iCompWin = input.int(12, "Compression box validity (bars)", minval = 2, group = gVOL)
+float iExpand  = input.float(1.00, "Expansion candle size (x ATR)", minval = 0.20, step = 0.05, group = gVOL)
+
+//----------------------------------------------------------- SETUP ENGINES ----
+bool iEngA = input.bool(true, "A - Trend continuation", group = gENG)
+bool iEngB = input.bool(true, "B - Pullback & reclaim / rejection", group = gENG)
+bool iEngC = input.bool(true, "C - VWAP reclaim / rejection", group = gENG)
+bool iEngD = input.bool(true, "D - Breakout / breakdown", group = gENG)
+bool iEngE = input.bool(true, "E - Break & retest", group = gENG)
+bool iEngF = input.bool(true, "F - BOS (break of structure)", group = gENG)
+bool iEngG = input.bool(true, "G - Liquidity sweep reversal", group = gENG)
+bool iEngH = input.bool(true, "H - CHoCH reversal", group = gENG)
+bool iEngI = input.bool(true, "I - Momentum shift", group = gENG)
+bool iEngJ = input.bool(true, "J - Compression expansion", group = gENG)
+
+//------------------------------------------------------- SCORE & THRESHOLDS ---
+int iScrFast = input.int(42, "FAST  - minimum score (0-100)", minval = 0, maxval = 100, group = gSCR)
+int iScrBal  = input.int(58, "BALANCED - minimum score (0-100)", minval = 0, maxval = 100, group = gSCR)
+int iAlFast  = input.int(1, "FAST  - minimum alignment count (0-5)", minval = 0, maxval = 5, group = gSCR,
+     tooltip = "Alignment = how many independent groups agree: trend, structure, momentum, VWAP, HTF.")
+int iAlBal   = input.int(2, "BALANCED - minimum alignment count (0-5)", minval = 0, maxval = 5, group = gSCR)
+int iAlExmpt = input.int(72, "BALANCED - accept with only 1 alignment if score >= ", minval = 50, maxval = 100, group = gSCR)
+
+//------------------------------------------------------------------ FILTERS ---
+int   iCoolFast = input.int(3, "FAST  - cooldown (bars, same direction)", minval = 1, maxval = 100, group = gFLT)
+int   iCoolBal  = input.int(6, "BALANCED - cooldown (bars, same direction)", minval = 1, maxval = 100, group = gFLT)
+int   iOppFast  = input.int(2, "FAST  - min bars between OPPOSITE signals", minval = 1, maxval = 100, group = gFLT)
+int   iOppBal   = input.int(4, "BALANCED - min bars between OPPOSITE signals", minval = 1, maxval = 100, group = gFLT)
+int   iChopLook = input.int(20, "Anti-chop lookback (bars)", minval = 5, group = gFLT)
+float iChopBlkF = input.float(85, "FAST  - block weak setups when chop >= ", minval = 1, maxval = 100, group = gFLT)
+float iChopBlkB = input.float(68, "BALANCED - block weak setups when chop >= ", minval = 1, maxval = 100, group = gFLT)
+float iChaseF   = input.float(85, "FAST  - block chase when extension >= ", minval = 1, maxval = 100, group = gFLT)
+float iChaseB   = input.float(62, "BALANCED - block chase when extension >= ", minval = 1, maxval = 100, group = gFLT)
+string iHtf     = input.timeframe("15", "HTF confirmation", group = gFLT)
+string iHtf2    = input.timeframe("60", "HTF context (display only)", group = gFLT)
+bool  iStrictHtf= input.bool(false, "STRICT HTF (block trades against HTF)", group = gFLT,
+     tooltip = "Default OFF: HTF is supporting evidence (score + dashboard), not a veto.")
+bool  iUseSess  = input.bool(false, "Enable session filter", group = gFLT)
+string iSess    = input.session("0800-2000", "Trading session", group = gFLT)
+float iVolBlk   = input.float(2.80, "Extreme volatility ATR ratio", minval = 1.0, step = 0.1, group = gFLT,
+     tooltip = "BALANCED requires extra score when ATR / ATR-average is above this.")
+
+//----------------------------------------------------- RISK & TRADE MGMT ------
+float iRiskPct  = input.float(1.0, "Risk per trade (% of equity)", minval = 0.05, step = 0.1, group = gRSK)
+float iMaxUnits = input.float(50, "Maximum position size (units/contracts)", minval = 0.01, step = 1, group = gRSK)
+int   iMaxTrades= input.int(1, "Max simultaneous trades", minval = 1, maxval = 4, group = gRSK,
+     tooltip = "Default 1 = one active trade at a time. Raise it to allow stacking (same direction only).")
+int   iSlLook   = input.int(12, "Stop-loss structure lookback (bars)", minval = 2, group = gRSK)
+float iSlBuf    = input.float(0.25, "Stop-loss structure buffer (ATR)", minval = 0.0, step = 0.05, group = gRSK)
+float iMinRiskA = input.float(0.70, "Minimum stop distance (ATR)", minval = 0.1, step = 0.05, group = gRSK)
+float iMaxRiskA = input.float(2.40, "Maximum stop distance (ATR)", minval = 0.2, step = 0.1, group = gRSK)
+float iMinTpA   = input.float(0.55, "Min TP1 distance (ATR) - kills micro targets", minval = 0.0, step = 0.05, group = gRSK)
+float iRr1      = input.float(1.0, "TP1 = R multiple", minval = 0.25, step = 0.25, group = gRSK)
+float iRr2      = input.float(2.0, "TP2 = R multiple", minval = 0.25, step = 0.25, group = gRSK)
+float iRr3      = input.float(3.0, "TP3 = R multiple", minval = 0.25, step = 0.25, group = gRSK)
+float iTp1Pct   = input.float(40, "TP1 exit size (%)", minval = 0, maxval = 100, group = gRSK)
+float iTp2Pct   = input.float(30, "TP2 exit size (%)", minval = 0, maxval = 100, group = gRSK)
+bool  iUseBE    = input.bool(true, "Move to break-even after TP1", group = gRSK)
+float iBeR      = input.float(0.10, "Break-even offset (R)", minval = 0.0, step = 0.05, group = gRSK)
+bool  iUseTrail = input.bool(true, "Trailing stop after TP2", group = gRSK)
+float iTrailA   = input.float(1.20, "Trailing distance (ATR)", minval = 0.1, step = 0.1, group = gRSK)
+
+//----------------------------------------------------------------- VISUALS ----
+bool iShowEmaF = input.bool(true,  "Show EMA fast", group = gVIS)
+bool iShowEmaM = input.bool(true,  "Show EMA medium", group = gVIS)
+bool iShowEmaS = input.bool(false, "Show EMA slow", group = gVIS)
+bool iShowVwap = input.bool(true,  "Show VWAP", group = gVIS)
+bool iPaint    = input.bool(true,  "Paint bars by bias", group = gVIS)
+bool iShowArw  = input.bool(true,  "Show BUY / SELL arrows", group = gVIS)
+bool iShowLbl  = input.bool(true,  "Show BUY / SELL labels (with levels)", group = gVIS)
+bool iShowLvls = input.bool(true,  "Show Entry / SL / TP lines (active trade)", group = gVIS)
+int  iMaxLbl   = input.int(12, "Maximum labels kept on chart", minval = 3, maxval = 60, group = gVIS)
+int  iLineExt  = input.int(30, "Level line extension (bars)", minval = 2, maxval = 200, group = gVIS)
+
+//------------------------------------------------------------------ ALERTS ----
+bool iAlertOn   = input.bool(true, "Enable alert() calls", group = gALT)
+bool iAlertBuy  = input.bool(true, "Alert on BUY", group = gALT)
+bool iAlertSell = input.bool(true, "Alert on SELL", group = gALT)
+bool iAlertLvl  = input.bool(true, "Include Entry/SL/TP in alert text", group = gALT)
+
+//------------------------------------------------------------------- DEBUG ----
+bool iDebug = input.bool(false, "DEBUG MODE - show why signals fire / do not fire", group = gDBG)
+
+//==============================================================================
+//  2. CORE DATA - TREND / MOMENTUM / VOLATILITY / PRICE ACTION / VWAP
+//==============================================================================
+float emaFast = ta.ema(close, iEmaF)
+float emaMid  = ta.ema(close, iEmaM)
+float emaSlow = ta.ema(close, iEmaS)
+
+//------------------------------------------------------------------ MOMENTUM --
+float rsiVal = ta.rsi(close, iRsiLen)
+[macdL, macdSg, macdH] = ta.macd(close, iMacdF, iMacdS, iMacdSig)
+[diPlus, diMinus, adxVal] = ta.dmi(iDmiLen, iAdxLen)
+
+// One normalised momentum composite (0..1) -> RSI, MACD and DMI cannot
+// triple-count the same information. They are AVERAGED, not added.
+float rsiNormB = math.max(0.0, math.min(1.0, (rsiVal - 30.0) / 40.0))
+float rsiNormS = math.max(0.0, math.min(1.0, (70.0 - rsiVal) / 40.0))
+float macdNorm = ta.rsi(macdH, 14) / 100.0
+float dmiSum   = diPlus + diMinus
+float dmiNormB = dmiSum > 0 ? diPlus / dmiSum : 0.5
+float momBull  = (rsiNormB + macdNorm + dmiNormB) / 3.0
+float momBear  = (rsiNormS + (1.0 - macdNorm) + (1.0 - dmiNormB)) / 3.0
+
+//---------------------------------------------------------------- VOLATILITY --
+float atrVal   = ta.atr(iAtrLen)
+float atrAvg   = ta.sma(atrVal, iAtrAvg)
+float atrRatio = atrAvg > 0 ? atrVal / atrAvg : 1.0
+
+float bbMid   = ta.sma(close, iBbLen)
+float bbDev   = ta.stdev(close, iBbLen)
+float bbw     = bbMid != 0 ? (4.0 * bbDev) / bbMid : 0.0
+float bbwAvg  = ta.sma(bbw, iBbAvg)
+float compRat = bbwAvg > 0 ? bbw / bbwAvg : 1.0
+
+//-------------------------------------------------------------- CANDLE / PA ---
+float cBody      = math.abs(close - open)
+float cRng       = math.max(high - low, syminfo.mintick)
+float bodyRat    = cBody / cRng
+float upWick     = high - math.max(close, open)
+float dnWick     = math.min(close, open) - low
+bool  bullCandle = close > open
+bool  bearCandle = close < open
+bool  bullEngulf = bullCandle and close > high[1] and open < low[1]
+bool  bearEngulf = bearCandle and close < low[1] and open > high[1]
+bool  bullReject = bullCandle and dnWick > 1.2 * cBody and dnWick / cRng > 0.32
+bool  bearReject = bearCandle and upWick > 1.2 * cBody and upWick / cRng > 0.32
+
+//-------------------------------------------------------------------- VWAP ----
+bool newVwapSes = na(time(timeframe.period, iVwapSes)[1]) and not na(time(timeframe.period, iVwapSes))
+var float cumPV = 0.0
+var float cumV  = 0.0
+var bool  volOk = false
+if newVwapSes
+    cumPV := 0.0
+    cumV  := 0.0
+    volOk := false
+float vVol = nz(volume, 0.0)
+if vVol > 0
+    volOk := true
+cumPV := cumPV + hlc3 * vVol
+cumV  := cumV + vVol
+float vwapFallback = ta.sma(hlc3, 50)
+float vwapVal = (volOk and cumV > 0) ? cumPV / cumV : vwapFallback
+
+//==============================================================================
+//  3. STRUCTURE - PIVOTS, BOS, CHoCH, RANGE, RETEST, COMPRESSION, SWEEP
+//==============================================================================
+// Pivots are computed manually so the logic is version proof and fully
+// auditable. A pivot is confirmed only once `iSwLen` bars have closed on
+// BOTH sides -> fixed confirmation delay of iSwLen bars, no repainting.
+f_pivHigh() =>
+    int L = iSwLen
+    float ref = high[L]
+    bool ok = not na(ref)
+    for j = 1 to L
+        if high[L + j] > ref or high[L - j] > ref
+            ok := false
+    ok ? ref : na
+
+f_pivLow() =>
+    int L = iSwLen
+    float ref = low[L]
+    bool ok = not na(ref)
+    for j = 1 to L
+        if low[L + j] < ref or low[L - j] < ref
+            ok := false
+    ok ? ref : na
+
+float phVal = f_pivHigh()
+float plVal = f_pivLow()
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var int   structDir     = 0          // 1 bullish structure, -1 bearish, 0 undefined
+
+if not na(phVal)
+    lastSwingHigh := phVal
+if not na(plVal)
+    lastSwingLow := plVal
+
+bool brkUp = not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
+bool brkDn = not na(lastSwingLow) and ta.crossunder(close, lastSwingLow)
+
+bool bosUp   = false
+bool chochUp = false
+bool bosDn   = false
+bool chochDn = false
+
+if brkUp
+    bosUp := structDir >= 0
+    chochUp := structDir < 0
+    structDir := 1
+    lastSwingHigh := na
+if brkDn
+    bosDn := structDir <= 0
+    chochDn := structDir > 0
+    structDir := -1
+    lastSwingLow := na
+
+//------------------------------------------------------- RANGE / BREAKOUT -----
+float rangeHighPrev = ta.highest(high, iBreakLen)[1]
+float rangeLowPrev  = ta.lowest(low, iBreakLen)[1]
+bool  brkOutUp = ta.crossover(close, rangeHighPrev)
+bool  brkOutDn = ta.crossunder(close, rangeLowPrev)
+
+//-------------------------------------------------------- BREAK AND RETEST ----
+var float retUpLvl = na
+var int   retUpBar = 0
+var float retDnLvl = na
+var int   retDnBar = 0
+if brkOutUp
+    retUpLvl := rangeHighPrev
+    retUpBar := bar_index
+    retDnLvl := na
+if brkOutDn
+    retDnLvl := rangeLowPrev
+    retDnBar := bar_index
+    retUpLvl := na
+bool retestUpZone = not na(retUpLvl) and (bar_index - retUpBar) >= 1 and (bar_index - retUpBar) <= iRetWin
+bool retestDnZone = not na(retDnLvl) and (bar_index - retDnBar) >= 1 and (bar_index - retDnBar) <= iRetWin
+
+//------------------------------------------------------------- COMPRESSION ----
+bool isCompress = compRat < iCompThr
+var int   compBar     = -10000
+var float compBoxHigh = na
+var float compBoxLow  = na
+if isCompress
+    compBar := bar_index
+    compBoxHigh := ta.highest(high, iBbLen)
+    compBoxLow := ta.lowest(low, iBbLen)
+bool compActive = (bar_index - compBar) <= iCompWin and not na(compBoxHigh)
+bool expandUp   = bullCandle and cRng > atrVal * iExpand
+bool expandDn   = bearCandle and cRng > atrVal * iExpand
+
+//---------------------------------------------------------- LIQUIDITY SWEEP --
+float sweepLowRef  = ta.lowest(low, iSweepLen)[1]
+float sweepHighRef = ta.highest(high, iSweepLen)[1]
+bool  sweptLow  = low < sweepLowRef and close > sweepLowRef
+bool  sweptHigh = high > sweepHighRef and close < sweepHighRef
+
+//==============================================================================
+//  4. HIGHER TIMEFRAME (confirmed values only - no repainting)
+//==============================================================================
+float htfClose  = request.security(syminfo.tickerid, iHtf, close[1], lookahead = barmerge.lookahead_off)
+float htfEmaF   = request.security(syminfo.tickerid, iHtf, ta.ema(close, iEmaF)[1], lookahead = barmerge.lookahead_off)
+float htfEmaM   = request.security(syminfo.tickerid, iHtf, ta.ema(close, iEmaM)[1], lookahead = barmerge.lookahead_off)
+float htf2Close = request.security(syminfo.tickerid, iHtf2, close[1], lookahead = barmerge.lookahead_off)
+float htf2EmaF  = request.security(syminfo.tickerid, iHtf2, ta.ema(close, iEmaF)[1], lookahead = barmerge.lookahead_off)
+
+bool htfReady = not na(htfClose) and not na(htfEmaF) and not na(htfEmaM)
+bool htfBull  = htfReady and htfClose > htfEmaF and htfEmaF > htfEmaM
+bool htfBear  = htfReady and htfClose < htfEmaF and htfEmaF < htfEmaM
+bool htf2Bull = not na(htf2Close) and not na(htf2EmaF) and htf2Close > htf2EmaF
+bool htf2Bear = not na(htf2Close) and not na(htf2EmaF) and htf2Close < htf2EmaF
+string htfStr = not htfReady ? "N/A" : htfBull ? "BULLISH" : htfBear ? "BEARISH" : "NEUTRAL"
+
+//==============================================================================
+//  5. MARKET REGIME - TREND STATE, CHOP, CHASE, VOLATILITY
+//==============================================================================
+bool bullTrend  = close > emaFast and emaFast > emaMid
+bool bearTrend  = close < emaFast and emaFast < emaMid
+bool strongBull = bullTrend and close > emaSlow and emaMid > emaSlow
+bool strongBear = bearTrend and close < emaSlow and emaMid < emaSlow
+
+//--------------------------------------------------------------- ANTI-CHOP ----
+bool  aboveEma = close > emaFast
+float flipSig  = (aboveEma != aboveEma[1]) ? 1.0 : 0.0
+float flips    = math.sum(flipSig, iChopLook)
+float range20  = ta.highest(high, iChopLook) - ta.lowest(low, iChopLook)
+float chopScore = 0.0
+chopScore += adxVal < 18.0 ? 30.0 : (adxVal < 22.0 ? 15.0 : 0.0)
+chopScore += (math.abs(emaFast - emaMid) < 0.35 * atrVal) ? 20.0 : 0.0
+chopScore += atrRatio < 0.75 ? 20.0 : 0.0
+chopScore += flips >= 6.0 ? 15.0 : (flips >= 4.0 ? 8.0 : 0.0)
+chopScore += (range20 < 3.5 * atrVal) ? 15.0 : 0.0
+chopScore := math.min(100.0, chopScore)
+
+//-------------------------------------------------------------- ANTI-CHASE ----
+float extUp   = atrVal > 0 ? (close - ta.lowest(low, 10)) / atrVal : 0.0
+float extDn   = atrVal > 0 ? (ta.highest(high, 10) - close) / atrVal : 0.0
+float extEmaB = atrVal > 0 ? (close - emaFast) / atrVal : 0.0
+float extEmaS = atrVal > 0 ? (emaFast - close) / atrVal : 0.0
+
+float chaseB = 0.0
+chaseB += extUp > 3.0 ? 40.0 : (extUp > 2.2 ? 20.0 : 0.0)
+chaseB += extEmaB > 2.0 ? 30.0 : (extEmaB > 1.4 ? 12.0 : 0.0)
+chaseB += (cRng > 2.5 * atrVal and bullCandle) ? 30.0 : 0.0
+chaseB := math.min(100.0, chaseB)
+
+float chaseS = 0.0
+chaseS += extDn > 3.0 ? 40.0 : (extDn > 2.2 ? 20.0 : 0.0)
+chaseS += extEmaS > 2.0 ? 30.0 : (extEmaS > 1.4 ? 12.0 : 0.0)
+chaseS += (cRng > 2.5 * atrVal and bearCandle) ? 30.0 : 0.0
+chaseS := math.min(100.0, chaseS)
+
+//--------------------------------------------------------- VOLATILITY STATE ---
+bool lowVol     = atrRatio < 0.75
+bool highVol    = atrRatio > 1.60 and atrRatio <= iVolBlk
+bool extremeVol = atrRatio > iVolBlk
+
+//------------------------------------------------------------- REGIME LABEL ---
+var int lastBrkBar = -10000
+var int lastChgBar = -10000
+if brkOutUp or brkOutDn
+    lastBrkBar := bar_index
+if chochUp or chochDn
+    lastChgBar := bar_index
+
+string regimeStr = "RANGE"
+if strongBull
+    regimeStr := "STRONG BULL TREND"
+else if bullTrend
+    regimeStr := "BULL TREND"
+else if strongBear
+    regimeStr := "STRONG BEAR TREND"
+else if bearTrend
+    regimeStr := "BEAR TREND"
+if (bar_index - lastChgBar) <= 6
+    regimeStr := "POTENTIAL REVERSAL"
+if (bar_index - lastBrkBar) <= 3
+    regimeStr := "BREAKOUT"
+if compActive
+    regimeStr := "COMPRESSION"
+if chopScore >= 65.0
+    regimeStr := "LOW-QUALITY CHOP"
+if highVol
+    regimeStr := "HIGH VOLATILITY"
+if extremeVol
+    regimeStr := "EXTREME VOLATILITY"
+
+//==============================================================================
+//  6. THE 10 INDEPENDENT BUY ENGINES (OR logic - any one can trigger)
+//==============================================================================
+bool buyA = iEngA and bullTrend and close > emaFast and bullCandle and (momBull > 0.45 or (adxVal > 20.0 and diPlus > diMinus))
+bool buyB = iEngB and bullTrend and ((low <= emaFast and close > emaFast) or (low <= emaMid and close > emaMid)) and bullCandle and close > close[1] and momBull > 0.33
+bool buyC = iEngC and ta.crossover(close, vwapVal) and bullCandle and (momBull > 0.45 or rsiVal > rsiVal[1])
+bool buyD = iEngD and brkOutUp and cRng > atrVal * 0.70 and bodyRat > 0.40 and atrRatio > 0.75 and extUp < 3.50
+bool buyE = iEngE and retestUpZone and low <= retUpLvl + iRetTol * atrVal and close > retUpLvl and bullCandle
+bool buyF = iEngF and bosUp and (bullCandle or close > emaFast)
+bool buyG = iEngG and sweptLow and bullCandle and dnWick / cRng > 0.30 and close > close[1]
+bool buyH = iEngH and chochUp and bullCandle
+bool buyI = iEngI and (ta.crossover(macdL, macdSg) or ta.crossover(rsiVal, 50.0) or ta.crossover(diPlus, diMinus)) and bullCandle and (close > emaFast or close > emaMid) and momBull > 0.45
+bool buyJ = iEngJ and compActive and ta.crossover(close, compBoxHigh) and expandUp
+
+bool buyRaw = buyA or buyB or buyC or buyD or buyE or buyF or buyG or buyH or buyI or buyJ
+string buyWhich = buyA ? "A TrendCont" : buyB ? "B Pullback" : buyC ? "C VWAPreclaim" : buyD ? "D Breakout" : buyE ? "E BrkRetest" : buyF ? "F BOS" : buyG ? "G LiqSweep" : buyH ? "H CHoCH" : buyI ? "I MomShift" : buyJ ? "J CompExpand" : "-"
+
+//==============================================================================
+//  7. THE 10 INDEPENDENT SELL ENGINES (exact mirror)
+//==============================================================================
+bool sellA = iEngA and bearTrend and close < emaFast and bearCandle and (momBear > 0.45 or (adxVal > 20.0 and diMinus > diPlus))
+bool sellB = iEngB and bearTrend and ((high >= emaFast and close < emaFast) or (high >= emaMid and close < emaMid)) and bearCandle and close < close[1] and momBear > 0.33
+bool sellC = iEngC and ta.crossunder(close, vwapVal) and bearCandle and (momBear > 0.45 or rsiVal < rsiVal[1])
+bool sellD = iEngD and brkOutDn and cRng > atrVal * 0.70 and bodyRat > 0.40 and atrRatio > 0.75 and extDn < 3.50
+bool sellE = iEngE and retestDnZone and high >= retDnLvl - iRetTol * atrVal and close < retDnLvl and bearCandle
+bool sellF = iEngF and bosDn and (bearCandle or close < emaFast)
+bool sellG = iEngG and sweptHigh and bearCandle and upWick / cRng > 0.30 and close < close[1]
+bool sellH = iEngH and chochDn and bearCandle
+bool sellI = iEngI and (ta.crossunder(macdL, macdSg) or ta.crossunder(rsiVal, 50.0) or ta.crossunder(diPlus, diMinus)) and bearCandle and (close < emaFast or close < emaMid) and momBear > 0.45
+bool sellJ = iEngJ and compActive and ta.crossunder(close, compBoxLow) and expandDn
+
+bool sellRaw = sellA or sellB or sellC or sellD or sellE or sellF or sellG or sellH or sellI or sellJ
+string sellWhich = sellA ? "A TrendCont" : sellB ? "B Rejection" : sellC ? "C VWAPreject" : sellD ? "D Breakdown" : sellE ? "E BrkRetest" : sellF ? "F BOS" : sellG ? "G LiqSweep" : sellH ? "H CHoCH" : sellI ? "I MomShift" : sellJ ? "J CompExpand" : "-"
+
+//==============================================================================
+//  8. FUNCTIONS (declared after every series they reference)
+//==============================================================================
+
+//------------------------------------------------- STRUCTURE BASED STOP LOSS --
+f_slLong() =>
+    float refLow = ta.lowest(low, iSlLook)
+    float swLow  = na(lastSwingLow) ? refLow : math.min(refLow, lastSwingLow)
+    float lvl    = math.min(swLow, low)
+    float lvlB   = lvl - iSlBuf * atrVal
+    float d      = close - lvlB
+    d := math.max(d, iMinRiskA * atrVal)
+    d := math.min(d, iMaxRiskA * atrVal)
+    close - d
+
+f_slShort() =>
+    float refHigh = ta.highest(high, iSlLook)
+    float swHigh  = na(lastSwingHigh) ? refHigh : math.max(refHigh, lastSwingHigh)
+    float lvl     = math.max(swHigh, high)
+    float lvlB    = lvl + iSlBuf * atrVal
+    float d       = lvlB - close
+    d := math.max(d, iMinRiskA * atrVal)
+    d := math.min(d, iMaxRiskA * atrVal)
+    close + d
+
+//------------------------------------------------------------- GRADING --------
+f_grade(float _s) =>
+    _s >= 82.0 ? "A+" : _s >= 68.0 ? "A" : _s >= 55.0 ? "B" : "C"
+
+f_gradeCol(string _g) =>
+    _g == "A+" ? color.new(#00e676, 0) : _g == "A" ? color.new(#00c853, 0) : _g == "B" ? color.new(#ffd54f, 0) : color.new(#b0bec5, 0)
+
+//------------------------------------------------------------- BUY SCORE ------
+// returns [score 0..100 , alignment count 0..5]
+f_scoreBuy() =>
+    float s = 0.0
+    int   ag = 0
+    if close > emaSlow
+        s += 7.0
+    if emaFast > emaMid
+        s += 7.0
+        ag += 1
+    if close > emaFast
+        s += 6.0
+    if bosUp
+        s += 10.0
+        ag += 1
+    else if chochUp
+        s += 8.0
+        ag += 1
+    if structDir == 1
+        s += 6.0
+    s += 16.0 * momBull
+    if momBull > 0.50
+        ag += 1
+    if atrRatio >= 0.85 and atrRatio <= 1.75
+        s += 8.0
+    else if atrRatio > 1.75 and atrRatio <= 2.60
+        s += 4.0
+    else if atrRatio < 0.85
+        s += 3.0
+    else
+        s += 1.0
+    float vd = atrVal > 0 ? (close - vwapVal) / atrVal : 0.0
+    if vd > 0.15
+        s += 8.0
+        ag += 1
+    else if vd > -0.15
+        s += 4.0
+    if bullEngulf
+        s += 6.0
+    else if bullReject
+        s += 5.0
+    else if bullCandle
+        s += 3.0
+    if bodyRat > 0.50
+        s += 4.0
+    if extUp < 1.00
+        s += 6.0
+    else if extUp < 2.00
+        s += 4.0
+    else if extUp < 3.00
+        s += 2.0
+    if close > rangeHighPrev
+        s += 4.0
+    if htfBull
+        s += 8.0
+        ag += 1
+    else if not htfBear
+        s += 3.0
+    s -= 18.0 * (chopScore / 100.0)
+    s -= 14.0 * (chaseB / 100.0)
+    [math.max(0.0, math.min(100.0, s)), ag]
+
+//------------------------------------------------------------ SELL SCORE ------
+f_scoreSell() =>
+    float s = 0.0
+    int   ag = 0
+    if close < emaSlow
+        s += 7.0
+    if emaFast < emaMid
+        s += 7.0
+        ag += 1
+    if close < emaFast
+        s += 6.0
+    if bosDn
+        s += 10.0
+        ag += 1
+    else if chochDn
+        s += 8.0
+        ag += 1
+    if structDir == -1
+        s += 6.0
+    s += 16.0 * momBear
+    if momBear > 0.50
+        ag += 1
+    if atrRatio >= 0.85 and atrRatio <= 1.75
+        s += 8.0
+    else if atrRatio > 1.75 and atrRatio <= 2.60
+        s += 4.0
+    else if atrRatio < 0.85
+        s += 3.0
+    else
+        s += 1.0
+    float vd = atrVal > 0 ? (vwapVal - close) / atrVal : 0.0
+    if vd > 0.15
+        s += 8.0
+        ag += 1
+    else if vd > -0.15
+        s += 4.0
+    if bearEngulf
+        s += 6.0
+    else if bearReject
+        s += 5.0
+    else if bearCandle
+        s += 3.0
+    if bodyRat > 0.50
+        s += 4.0
+    if extDn < 1.00
+        s += 6.0
+    else if extDn < 2.00
+        s += 4.0
+    else if extDn < 3.00
+        s += 2.0
+    if close < rangeLowPrev
+        s += 4.0
+    if htfBear
+        s += 8.0
+        ag += 1
+    else if not htfBull
+        s += 3.0
+    s -= 18.0 * (chopScore / 100.0)
+    s -= 14.0 * (chaseS / 100.0)
+    [math.max(0.0, math.min(100.0, s)), ag]
+
+//-------------------------------------------------------- DASHBOARD HELPERS ---
+f_put(table _t, int _r, string _k, string _v, color _c) =>
+    table.cell(_t, 0, _r, _k, text_color = color.new(color.white, 30), text_size = size.small, text_halign = text.align_left, bgcolor = color.new(#101418, 0))
+    table.cell(_t, 1, _r, _v, text_color = _c, text_size = size.small, text_halign = text.align_right, bgcolor = color.new(#1b2027, 0))
+
+f_hdr(table _t, int _r, string _k) =>
+    table.cell(_t, 0, _r, _k, text_color = color.new(#00e5ff, 0), text_size = size.small, text_halign = text.align_left, bgcolor = color.new(#0b2b33, 0))
+    table.cell(_t, 1, _r, "", text_size = size.small, bgcolor = color.new(#0b2b33, 0))
+
+f_px(float _v) =>
+    na(_v) ? "-" : str.tostring(_v, format.mintick)
+
+//==============================================================================
+//  9. SCORES, MODE THRESHOLDS AND THE FILTER CHAIN
+//==============================================================================
+[scoreB, alignB] = f_scoreBuy()
+[scoreS, alignS] = f_scoreSell()
+
+float minScore = iFast ? iScrFast : iScrBal
+int   minAlign = iFast ? iAlFast : iAlBal
+int   coolBars = iFast ? iCoolFast : iCoolBal
+int   oppBars  = iFast ? iOppFast : iOppBal
+float chopBlk  = iFast ? iChopBlkF : iChopBlkB
+float chaseBlk = iFast ? iChaseF : iChaseB
+
+//------------------------------------------------------------ COUNTERS --------
+var int barsSinceBuy  = 1000
+var int barsSinceSell = 1000
+var int barsSinceAny  = 1000
+if barstate.isnew
+    barsSinceBuy := barsSinceBuy + 1
+    barsSinceSell := barsSinceSell + 1
+    barsSinceAny := barsSinceAny + 1
+
+//------------------------------------------- SAFE PARTIAL EXIT PERCENTAGES ----
+float tpP1p = math.max(0.0, math.min(100.0, iTp1Pct))
+float tpP2p = math.max(0.0, math.min(100.0 - tpP1p, iTp2Pct))
+float tpP3p = math.max(0.0, 100.0 - tpP1p - tpP2p)
+if tpP1p + tpP2p + tpP3p <= 0.0
+    tpP3p := 100.0
+float tpP1f = tpP1p / 100.0
+float tpP2f = tpP2p / 100.0
+float tpP3f = tpP3p / 100.0
+
+//-------------------------------------------------------------- FILTERS -------
+bool okEval    = (not iConfirmOnly) or barstate.isconfirmed
+bool inSession = (not iUseSess) or (not na(time(timeframe.period, iSess)))
+
+bool chopBlockBuy  = chopScore >= chopBlk and not (buyD or buyJ or buyG)
+bool chopBlockSell = chopScore >= chopBlk and not (sellD or sellJ or sellG)
+bool chaseBlockBuy = chaseB >= chaseBlk and not (buyD or buyJ)
+bool chaseBlockSell = chaseS >= chaseBlk and not (sellD or sellJ)
+bool htfBlockBuy   = iStrictHtf and htfReady and htfBear
+bool htfBlockSell  = iStrictHtf and htfReady and htfBull
+bool volBlockBuy   = (not iFast) and extremeVol and scoreB < iAlExmpt
+bool volBlockSell  = (not iFast) and extremeVol and scoreS < iAlExmpt
+
+bool alignOkBuy  = alignB >= minAlign or (alignB >= 1 and scoreB >= iAlExmpt)
+bool alignOkSell = alignS >= minAlign or (alignS >= 1 and scoreS >= iAlExmpt)
+
+//==============================================================================
+// 10. TRADE STATE (parallel arrays - supports 1 to 4 simultaneous trades)
+//==============================================================================
+var int[]    tDir = array.new_int(0)      // 1 long, -1 short
+var float[]  tEnt = array.new_float(0)    // planned entry (signal bar close)
+var float[]  tSL0 = array.new_float(0)    // initial stop
+var float[]  tP1  = array.new_float(0)
+var float[]  tP2  = array.new_float(0)
+var float[]  tP3  = array.new_float(0)
+var float[]  tStp = array.new_float(0)    // current stop (BE / trailing)
+var float[]  tTrl = array.new_float(0)    // trailing level, na = trailing off
+var int[]    tH1  = array.new_int(0)      // TP1 filled
+var int[]    tH2  = array.new_int(0)      // TP2 filled
+var int[]    tBar = array.new_int(0)      // signal bar index
+var string[] tEid = array.new_string(0)   // entry id
+var label[]  tLbl = array.new_label(0)    // signal label
+var float[]  tRsk = array.new_float(0)    // 1R distance
+var float[]  tRac = array.new_float(0)    // accumulated model R
+var float[]  tRem = array.new_float(0)    // remaining fraction of position
+var int[]    tCls = array.new_int(0)      // close flag
+var string[] tRes = array.new_string(0)   // close reason
+var float[]  tQty = array.new_float(0)    // total entry quantity
+
+var label[] lblKeep = array.new_label(0)  // all labels, oldest first
+var int    tradeCnt = 0
+var float  sumR     = 0.0
+var int    cntR     = 0
+
+//------------------------------------------------------- level line objects ---
+var line lnEnt = na
+var line lnSl  = na
+var line lnT1  = na
+var line lnT2  = na
+var line lnT3  = na
+
+f_killLines() =>
+    if not na(lnEnt)
+        line.delete(lnEnt)
+        lnEnt := na
+    if not na(lnSl)
+        line.delete(lnSl)
+        lnSl := na
+    if not na(lnT1)
+        line.delete(lnT1)
+        lnT1 := na
+    if not na(lnT2)
+        line.delete(lnT2)
+        lnT2 := na
+    if not na(lnT3)
+        line.delete(lnT3)
+        lnT3 := na
+
+f_finalizeLines() =>
+    if not na(lnEnt)
+        line.set_extend(lnEnt, extend.none)
+        line.set_x2(lnEnt, bar_index + 2)
+    if not na(lnSl)
+        line.set_extend(lnSl, extend.none)
+        line.set_x2(lnSl, bar_index + 2)
+    if not na(lnT1)
+        line.set_extend(lnT1, extend.none)
+        line.set_x2(lnT1, bar_index + 2)
+    if not na(lnT2)
+        line.set_extend(lnT2, extend.none)
+        line.set_x2(lnT2, bar_index + 2)
+    if not na(lnT3)
+        line.set_extend(lnT3, extend.none)
+        line.set_x2(lnT3, bar_index + 2)
+
+//==============================================================================
+// 11. TRADE MANAGEMENT (partial exits, break-even, trailing, close detection)
+//==============================================================================
+int nTrades = array.size(tDir)
+if nTrades > 0
+    for i = 0 to nTrades - 1
+        int    td  = array.get(tDir, i)
+        float  ev  = array.get(tEnt, i)
+        float  p1  = array.get(tP1, i)
+        float  p2  = array.get(tP2, i)
+        float  p3  = array.get(tP3, i)
+        float  st  = array.get(tStp, i)
+        float  rv  = array.get(tRsk, i)
+        float  qt  = array.get(tQty, i)
+        int    h1  = array.get(tH1, i)
+        int    h2  = array.get(tH2, i)
+        int    tb  = array.get(tBar, i)
+        string eid = array.get(tEid, i)
+        bool   isL = td == 1
+
+        // absolute partial quantities (always sum back to the full position)
+        float q1 = math.floor(qt * tpP1f * 100.0) / 100.0
+        float q2 = math.floor(qt * tpP2f * 100.0) / 100.0
+        float q3 = math.max(0.0, qt - q1 - q2)
+        if q3 > 0.0 and q3 < 0.01
+            if tpP2p > 0.0
+                q2 := q2 + q3
+            else
+                q1 := q1 + q3
+            q3 := 0.0
+
+        // safety purge: armed trade but nothing in the market for 2+ bars
+        if bar_index - tb >= 2 and strategy.position_size == 0
+            array.set(tCls, i, 1)
+            array.set(tRes, i, "FLAT")
+
+        if bar_index > tb and array.get(tCls, i) == 0
+            bool t1 = h1 == 0 and (isL ? high >= p1 : low <= p1)
+            bool t2 = h2 == 0 and (isL ? high >= p2 : low <= p2)
+            bool t3 = isL ? high >= p3 : low <= p3
+            bool sl = isL ? low <= st : high >= st
+
+            // ---- TP1 : partial exit + break-even ---------------------------
+            if t1
+                array.set(tH1, i, 1)
+                array.set(tRem, i, math.max(0.0, array.get(tRem, i) - tpP1f))
+                array.set(tRac, i, array.get(tRac, i) + tpP1f * iRr1)
+                if iUseBE
+                    float beLvl = isL ? ev + iBeR * rv : ev - iBeR * rv
+                    float ns = isL ? math.max(st, beLvl) : math.min(st, beLvl)
+                    array.set(tStp, i, ns)
+                    st := ns
+
+            // ---- TP2 : partial exit + activate trailing --------------------
+            if t2
+                array.set(tH2, i, 1)
+                array.set(tRem, i, math.max(0.0, array.get(tRem, i) - tpP2f))
+                array.set(tRac, i, array.get(tRac, i) + tpP2f * iRr2)
+                if iUseTrail
+                    array.set(tTrl, i, isL ? high - iTrailA * atrVal : low + iTrailA * atrVal)
+
+            // ---- trailing update (can only ever improve the stop) ----------
+            if iUseTrail and not na(array.get(tTrl, i))
+                float trn = isL ? math.max(array.get(tTrl, i), high - iTrailA * atrVal) : math.min(array.get(tTrl, i), low + iTrailA * atrVal)
+                array.set(tTrl, i, trn)
+                float ns2 = isL ? math.max(st, trn) : math.min(st, trn)
+                array.set(tStp, i, ns2)
+                st := ns2
+
+            // ---- (re)issue the exit bracket --------------------------------
+            if not sl
+                if h1 == 0 and q1 >= 0.01
+                    strategy.exit(id = "X1" + eid, from_entry = eid, qty = q1, limit = p1, stop = st)
+                if h2 == 0 and q2 >= 0.01
+                    strategy.exit(id = "X2" + eid, from_entry = eid, qty = q2, limit = p2, stop = st)
+                if q3 >= 0.01
+                    strategy.exit(id = "X3" + eid, from_entry = eid, qty = q3, limit = p3, stop = st)
+
+            // ---- trade finished --------------------------------------------
+            if sl
+                float remF = array.get(tRem, i)
+                float rStop = rv > 0 ? (isL ? (st - ev) / rv : (ev - st) / rv) : 0.0
+                array.set(tRac, i, array.get(tRac, i) + remF * rStop)
+                array.set(tRem, i, 0.0)
+                array.set(tCls, i, 1)
+                bool wasTrail = (not na(array.get(tTrl, i))) and rv > 0 and (isL ? st > ev : st < ev)
+                array.set(tRes, i, wasTrail ? "TRAIL" : "SL")
+            else if t3
+                array.set(tRac, i, array.get(tRac, i) + tpP3f * iRr3)
+                array.set(tRem, i, 0.0)
+                array.set(tCls, i, 1)
+                array.set(tRes, i, "TP3")
+
+//------------------------------------------------ remove finished trades ------
+int kk = 0
+while kk < array.size(tDir)
+    if array.get(tCls, kk) == 1
+        f_finalizeLines()
+        label lb = array.get(tLbl, kk)
+        if not na(lb)
+            label.set_text(lb, label.get_text(lb) + "\n-> " + array.get(tRes, kk) + "  " + str.tostring(array.get(tRac, kk), "#.##") + "R")
+            label.set_color(lb, array.get(tRac, kk) >= 0 ? color.new(#1b5e20, 0) : color.new(#7f1d1d, 0))
+        sumR += array.get(tRac, kk)
+        cntR += 1
+        array.remove(tDir, kk)
+        array.remove(tEnt, kk)
+        array.remove(tSL0, kk)
+        array.remove(tP1, kk)
+        array.remove(tP2, kk)
+        array.remove(tP3, kk)
+        array.remove(tStp, kk)
+        array.remove(tTrl, kk)
+        array.remove(tH1, kk)
+        array.remove(tH2, kk)
+        array.remove(tBar, kk)
+        array.remove(tEid, kk)
+        array.remove(tLbl, kk)
+        array.remove(tRsk, kk)
+        array.remove(tRac, kk)
+        array.remove(tRem, kk)
+        array.remove(tCls, kk)
+        array.remove(tRes, kk)
+        array.remove(tQty, kk)
+    else
+        kk := kk + 1
+
+//==============================================================================
+// 12. SIGNAL EXECUTION
+//==============================================================================
+float slLong  = f_slLong()
+float slShort = f_slShort()
+
+//--------------------------------------------------------------- BUY PLAN -----
+bool buyPlan = buyRaw and okEval and inSession and (not chopBlockBuy) and (not chaseBlockBuy) and (not htfBlockBuy) and (not volBlockBuy) and alignOkBuy and scoreB >= minScore and barsSinceBuy >= coolBars and barsSinceAny >= oppBars
+
+float riskLong  = close - slLong
+bool  buySizeOk = riskLong >= iMinRiskA * atrVal * 0.98 and riskLong * iRr1 >= iMinTpA * atrVal
+float qtyLong = 0.0
+if buyPlan and buySizeOk
+    float riskAmt = strategy.equity * (iRiskPct / 100.0)
+    qtyLong := riskAmt / riskLong
+    qtyLong := math.floor(qtyLong * 100.0) / 100.0
+    qtyLong := math.min(qtyLong, iMaxUnits)
+
+bool canOpenLong = false
+int  nOpenL = array.size(tDir)
+if nOpenL < iMaxTrades
+    if nOpenL == 0
+        canOpenLong := true
+    else
+        canOpenLong := array.get(tDir, nOpenL - 1) == 1
+
+bool buySignal = buyPlan and buySizeOk and qtyLong >= 0.01 and canOpenLong
+
+//-------------------------------------------------------------- SELL PLAN -----
+bool sellPlan = sellRaw and okEval and inSession and (not chopBlockSell) and (not chaseBlockSell) and (not htfBlockSell) and (not volBlockSell) and alignOkSell and scoreS >= minScore and barsSinceSell >= coolBars and barsSinceAny >= oppBars
+
+float riskShort  = slShort - close
+bool  sellSizeOk = riskShort >= iMinRiskA * atrVal * 0.98 and riskShort * iRr1 >= iMinTpA * atrVal
+float qtyShort = 0.0
+if sellPlan and sellSizeOk
+    float riskAmt = strategy.equity * (iRiskPct / 100.0)
+    qtyShort := riskAmt / riskShort
+    qtyShort := math.floor(qtyShort * 100.0) / 100.0
+    qtyShort := math.min(qtyShort, iMaxUnits)
+
+bool canOpenShort = false
+int  nOpenS = array.size(tDir)
+if nOpenS < iMaxTrades
+    if nOpenS == 0
+        canOpenShort := true
+    else
+        canOpenShort := array.get(tDir, nOpenS - 1) == -1
+
+bool sellSignal = sellPlan and sellSizeOk and qtyShort >= 0.01 and canOpenShort
+
+//---------------------------------------------------------------- EXECUTE -----
+int    sigDir   = buySignal ? 1 : sellSignal ? -1 : 0
+float  sigEnt   = na
+float  sigSL    = na
+float  sigTP1   = na
+float  sigTP2   = na
+float  sigTP3   = na
+float  sigScore = na
+string sigGrade = "-"
+string sigWhich = "-"
+float  sigQty   = na
+
+if sigDir != 0
+    f_killLines()
+    tradeCnt += 1
+    string eid = "T" + str.tostring(tradeCnt)
+    bool   isB = sigDir == 1
+
+    if isB
+        sigEnt := close
+        sigSL := slLong
+        sigScore := scoreB
+        sigWhich := buyWhich
+        sigQty := qtyLong
+        sigTP1 := close + (close - slLong) * iRr1
+        sigTP2 := close + (close - slLong) * iRr2
+        sigTP3 := close + (close - slLong) * iRr3
+        strategy.entry(id = eid, direction = strategy.long, qty = sigQty)
+    else
+        sigEnt := close
+        sigSL := slShort
+        sigScore := scoreS
+        sigWhich := sellWhich
+        sigQty := qtyShort
+        sigTP1 := close - (slShort - close) * iRr1
+        sigTP2 := close - (slShort - close) * iRr2
+        sigTP3 := close - (slShort - close) * iRr3
+        strategy.entry(id = eid, direction = strategy.short, qty = sigQty)
+
+    sigGrade := f_grade(sigScore)
+
+    // absolute partial quantities -> they always add up to the position size
+    float e1 = math.floor(sigQty * tpP1f * 100.0) / 100.0
+    float e2 = math.floor(sigQty * tpP2f * 100.0) / 100.0
+    float e3 = math.max(0.0, sigQty - e1 - e2)
+    if e3 > 0.0 and e3 < 0.01
+        if tpP2p > 0.0
+            e2 := e2 + e3
+        else
+            e1 := e1 + e3
+        e3 := 0.0
+
+    if e1 >= 0.01
+        strategy.exit(id = "X1" + eid, from_entry = eid, qty = e1, limit = sigTP1, stop = sigSL)
+    if e2 >= 0.01
+        strategy.exit(id = "X2" + eid, from_entry = eid, qty = e2, limit = sigTP2, stop = sigSL)
+    if e3 >= 0.01
+        strategy.exit(id = "X3" + eid, from_entry = eid, qty = e3, limit = sigTP3, stop = sigSL)
+
+    // ---- bookkeeping --------------------------------------------------------
+    array.push(tDir, sigDir)
+    array.push(tEnt, sigEnt)
+    array.push(tSL0, sigSL)
+    array.push(tP1, sigTP1)
+    array.push(tP2, sigTP2)
+    array.push(tP3, sigTP3)
+    array.push(tStp, sigSL)
+    array.push(tTrl, na)
+    array.push(tH1, 0)
+    array.push(tH2, 0)
+    array.push(tBar, bar_index)
+    array.push(tEid, eid)
+    array.push(tRsk, math.abs(sigEnt - sigSL))
+    array.push(tRac, 0.0)
+    array.push(tRem, 1.0)
+    array.push(tCls, 0)
+    array.push(tRes, "-")
+    array.push(tQty, sigQty)
+
+    // ---- chart objects ------------------------------------------------------
+    color  colB = color.new(#00c853, 5)
+    color  colS = color.new(#ff3d00, 5)
+    string txt = (isB ? "BUY" : "SELL") + "  " + sigGrade + "\n" +
+         "Entry " + str.tostring(sigEnt, format.mintick) + "\n" +
+         "SL    " + str.tostring(sigSL, format.mintick) + "\n" +
+         "TP1   " + str.tostring(sigTP1, format.mintick) + "\n" +
+         "TP2   " + str.tostring(sigTP2, format.mintick) + "\n" +
+         "TP3   " + str.tostring(sigTP3, format.mintick)
+
+    label nl = label.new(bar_index, isB ? low - atrVal * 0.35 : high + atrVal * 0.35, txt,
+         color = iShowLbl ? (isB ? colB : colS) : color.new(#000000, 100),
+         textcolor = iShowLbl ? color.white : color.new(#ffffff, 100),
+         style = isB ? label.style_label_upper_left : label.style_label_lower_left,
+         size = size.normal, textalign = text.align_left)
+    array.push(tLbl, nl)
+    array.push(lblKeep, nl)
+
+    if iShowLvls
+        color lc = isB ? colB : colS
+        lnEnt := line.new(bar_index, sigEnt, bar_index + iLineExt, sigEnt, color = color.new(#78909c, 0), style = line.style_solid, width = 1, extend = extend.right)
+        lnSl := line.new(bar_index, sigSL, bar_index + iLineExt, sigSL, color = color.new(#ff5252, 0), style = line.style_dashed, width = 1, extend = extend.right)
+        lnT1 := line.new(bar_index, sigTP1, bar_index + iLineExt, sigTP1, color = color.new(lc, 40), style = line.style_dotted, width = 1, extend = extend.right)
+        lnT2 := line.new(bar_index, sigTP2, bar_index + iLineExt, sigTP2, color = color.new(lc, 20), style = line.style_dotted, width = 1, extend = extend.right)
+        lnT3 := line.new(bar_index, sigTP3, bar_index + iLineExt, sigTP3, color = lc, style = line.style_dotted, width = 1, extend = extend.right)
+
+    // ---- counters / alerts --------------------------------------------------
+    if isB
+        barsSinceBuy := 0
+    else
+        barsSinceSell := 0
+    barsSinceAny := 0
+
+    if iAlertOn and ((isB and iAlertBuy) or (not isB and iAlertSell))
+        string am = (isB ? "BUY" : "SELL") + " " + syminfo.ticker + " (" + timeframe.period + ") " + sigGrade + " | " + sigWhich + " | Mode " + iMode
+        if iAlertLvl
+            am := am + " | Entry " + str.tostring(sigEnt, format.mintick) + " SL " + str.tostring(sigSL, format.mintick) + " TP1 " + str.tostring(sigTP1, format.mintick) + " TP2 " + str.tostring(sigTP2, format.mintick) + " TP3 " + str.tostring(sigTP3, format.mintick)
+        alert(am, alert.freq_once_per_bar_close)
+
+//---------------------------------------------------- label housekeeping ------
+// The oldest label can never belong to an open trade while more than 5 labels
+// are queued (an open trade always holds one of the newest labels), so the
+// trim below can never delete a label that is still referenced.
+int keepMax = math.max(iMaxLbl, 6)
+while array.size(lblKeep) > keepMax
+    label old = array.shift(lblKeep)
+    if not na(old)
+        label.delete(old)
+
+//==============================================================================
+// 13. CHART VISUALS
+//==============================================================================
+plot(iShowEmaF ? emaFast : na, "EMA fast", color = color.new(#29b6f6, 0), linewidth = 1)
+plot(iShowEmaM ? emaMid : na, "EMA medium", color = color.new(#ab47bc, 0), linewidth = 1)
+plot(iShowEmaS ? emaSlow : na, "EMA slow", color = color.new(#ffa726, 0), linewidth = 2)
+plot(iShowVwap ? vwapVal : na, "VWAP", color = color.new(#ffd54f, 0), linewidth = 2)
+
+plotshape(iShowArw and buySignal ? low - atrVal * 0.25 : na, "BUY", style = shape.triangleup, location = location.absolute, color = color.new(#00e676, 0), size = size.tiny)
+plotshape(iShowArw and sellSignal ? high + atrVal * 0.25 : na, "SELL", style = shape.triangledown, location = location.absolute, color = color.new(#ff3d00, 0), size = size.tiny)
+
+barcolor(iPaint ? (strongBull ? color.new(#00c853, 78) : strongBear ? color.new(#ff3d00, 78) : bullTrend ? color.new(#00c853, 88) : bearTrend ? color.new(#ff3d00, 88) : na) : na)
+
+//==============================================================================
+// 14. DASHBOARD (real strategy statistics only - nothing is fabricated)
+//==============================================================================
+var int    dspDir = 0
+var float  dspEnt = na
+var float  dspSL = na
+var float  dspT1 = na
+var float  dspT2 = na
+var float  dspT3 = na
+var float  dspScore = na
+var string dspGrade = "-"
+var string dspWhich = "-"
+if sigDir != 0
+    dspDir := sigDir
+    dspEnt := sigEnt
+    dspSL := sigSL
+    dspT1 := sigTP1
+    dspT2 := sigTP2
+    dspT3 := sigTP3
+    dspScore := sigScore
+    dspGrade := sigGrade
+    dspWhich := sigWhich
+
+var table dash = table.new(position.top_right, 2, 26, border_width = 1, frame_width = 1, frame_color = color.new(#37474f, 0), border_color = color.new(#37474f, 0))
+
+if barstate.islast
+    // ---- real statistics from the strategy tester --------------------------
+    int stCnt = 0
+    int stWin = 0
+    int nCl = strategy.closedtrades
+    if nCl > 0
+        int startI = math.max(0, nCl - 250)
+        for q = startI to nCl - 1
+            if strategy.closedtrades.profit(q) > 0
+                stWin += 1
+            stCnt += 1
+    float wr = stCnt > 0 ? 100.0 * stWin / stCnt : 0.0
+    float pf = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : (strategy.grossprofit > 0 ? 999.0 : 0.0)
+    float expv = stCnt > 0 ? strategy.netprofit / stCnt : 0.0
+    float avgR = cntR > 0 ? sumR / cntR : 0.0
+
+    string posStr = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+    color posCol = strategy.position_size > 0 ? color.new(#00e676, 0) : strategy.position_size < 0 ? color.new(#ff3d00, 0) : color.new(#b0bec5, 0)
+    string biasStr = strongBull ? "BULLISH (strong)" : bullTrend ? "BULLISH" : strongBear ? "BEARISH (strong)" : bearTrend ? "BEARISH" : "NEUTRAL"
+    color biasCol = bullTrend ? color.new(#00e676, 0) : bearTrend ? color.new(#ff3d00, 0) : color.new(#b0bec5, 0)
+    string atrStr = extremeVol ? "EXTREME" : highVol ? "HIGH" : lowVol ? "LOW" : "NORMAL"
+    color atrCol = extremeVol ? color.new(#ff3d00, 0) : highVol ? color.new(#ffd54f, 0) : lowVol ? color.new(#b0bec5, 0) : color.new(#00e676, 0)
+    string htfCtx = htfStr + (htf2Bull ? " / 1h B" : htf2Bear ? " / 1h S" : " / 1h -")
+
+    f_hdr(dash, 0, "SIGNAL PANEL")
+    f_put(dash, 1, "MODE", iMode, iFast ? color.new(#00e5ff, 0) : color.new(#ffd54f, 0))
+    f_put(dash, 2, "BIAS", biasStr, biasCol)
+    f_put(dash, 3, "REGIME", regimeStr, color.new(#e0e0e0, 0))
+    f_put(dash, 4, "HTF " + iHtf, htfCtx, htfBull ? color.new(#00e676, 0) : htfBear ? color.new(#ff3d00, 0) : color.new(#b0bec5, 0))
+    f_put(dash, 5, "ADX", str.tostring(adxVal, "#.#"), adxVal >= 25.0 ? color.new(#00e676, 0) : color.new(#ffd54f, 0))
+    f_put(dash, 6, "ATR REGIME", atrStr + " (" + str.tostring(atrRatio, "#.##") + "x)", atrCol)
+    f_put(dash, 7, "SCORE", na(dspScore) ? "-" : str.tostring(dspScore, "#"), f_gradeCol(dspGrade))
+    f_put(dash, 8, "GRADE", dspGrade, f_gradeCol(dspGrade))
+    f_put(dash, 9, "LAST SETUP", (dspDir == 1 ? "LONG " : dspDir == -1 ? "SHORT " : "") + dspWhich, color.new(#e0e0e0, 0))
+    f_put(dash, 10, "POSITION", posStr, posCol)
+    f_put(dash, 11, "ENTRY", f_px(dspEnt), color.new(#e0e0e0, 0))
+    f_put(dash, 12, "SL", f_px(dspSL), color.new(#ff5252, 0))
+    f_put(dash, 13, "TP1", f_px(dspT1), color.new(#00e676, 0))
+    f_put(dash, 14, "TP2", f_px(dspT2), color.new(#00c853, 0))
+    f_put(dash, 15, "TP3", f_px(dspT3), color.new(#00bfa5, 0))
+    f_put(dash, 16, "AVG FILL", strategy.position_size != 0 ? str.tostring(strategy.position_avg_price, format.mintick) : "-", color.new(#e0e0e0, 0))
+
+    f_hdr(dash, 17, "BACKTEST STATS")
+    f_put(dash, 18, "CLOSED EXITS", str.tostring(stCnt), color.new(#e0e0e0, 0))
+    f_put(dash, 19, "WIN RATE", str.tostring(wr, "#.#") + " %", wr >= 50.0 ? color.new(#00e676, 0) : color.new(#ffd54f, 0))
+    f_put(dash, 20, "PROFIT FACTOR", str.tostring(pf, "#.##"), pf >= 1.0 ? color.new(#00e676, 0) : color.new(#ff5252, 0))
+    f_put(dash, 21, "NET PROFIT", str.tostring(strategy.netprofit, "#.##"), strategy.netprofit >= 0 ? color.new(#00e676, 0) : color.new(#ff5252, 0))
+    f_put(dash, 22, "EXPECTANCY", str.tostring(expv, "#.##") + " / exit", expv >= 0 ? color.new(#00e676, 0) : color.new(#ff5252, 0))
+    f_put(dash, 23, "MAX DD", str.tostring(strategy.max_drawdown, "#.##"), color.new(#ffd54f, 0))
+    f_put(dash, 24, "AVG R (model)", str.tostring(avgR, "#.##") + "R", avgR >= 0 ? color.new(#00e676, 0) : color.new(#ff5252, 0))
+    f_put(dash, 25, "OPEN TRADES", str.tostring(array.size(tDir)), color.new(#e0e0e0, 0))
+
+//==============================================================================
+// 15. DEBUG TABLE
+//==============================================================================
+var table dbg = na
+if iDebug
+    if na(dbg)
+        dbg := table.new(position.bottom_right, 2, 20, border_width = 1, frame_width = 1, frame_color = color.new(#37474f, 0), border_color = color.new(#37474f, 0))
+    if barstate.islast
+        string whyB = "-"
+        if buyRaw and not buySignal
+            if not okEval
+                whyB := "bar not confirmed"
+            else if not inSession
+                whyB := "session"
+            else if chopBlockBuy
+                whyB := "chop " + str.tostring(chopScore, "#")
+            else if chaseBlockBuy
+                whyB := "chase " + str.tostring(chaseB, "#")
+            else if htfBlockBuy
+                whyB := "strict HTF"
+            else if volBlockBuy
+                whyB := "extreme vol"
+            else if not alignOkBuy
+                whyB := "align " + str.tostring(alignB) + "/" + str.tostring(minAlign)
+            else if scoreB < minScore
+                whyB := "score " + str.tostring(scoreB, "#") + " < " + str.tostring(minScore)
+            else if barsSinceBuy < coolBars
+                whyB := "cooldown " + str.tostring(barsSinceBuy)
+            else if barsSinceAny < oppBars
+                whyB := "opposite cooldown"
+            else if not buySizeOk
+                whyB := "SL/TP size invalid"
+            else if qtyLong < 0.01
+                whyB := "qty too small"
+            else
+                whyB := "max trades / direction"
+
+        string whyS = "-"
+        if sellRaw and not sellSignal
+            if not okEval
+                whyS := "bar not confirmed"
+            else if not inSession
+                whyS := "session"
+            else if chopBlockSell
+                whyS := "chop " + str.tostring(chopScore, "#")
+            else if chaseBlockSell
+                whyS := "chase " + str.tostring(chaseS, "#")
+            else if htfBlockSell
+                whyS := "strict HTF"
+            else if volBlockSell
+                whyS := "extreme vol"
+            else if not alignOkSell
+                whyS := "align " + str.tostring(alignS) + "/" + str.tostring(minAlign)
+            else if scoreS < minScore
+                whyS := "score " + str.tostring(scoreS, "#") + " < " + str.tostring(minScore)
+            else if barsSinceSell < coolBars
+                whyS := "cooldown " + str.tostring(barsSinceSell)
+            else if barsSinceAny < oppBars
+                whyS := "opposite cooldown"
+            else if not sellSizeOk
+                whyS := "SL/TP size invalid"
+            else if qtyShort < 0.01
+                whyS := "qty too small"
+            else
+                whyS := "max trades / direction"
+
+        f_hdr(dbg, 0, "DEBUG - " + iMode)
+        f_put(dbg, 1, "BUY score/align", str.tostring(scoreB, "#") + " / " + str.tostring(alignB), f_gradeCol(f_grade(scoreB)))
+        f_put(dbg, 2, "SELL score/align", str.tostring(scoreS, "#") + " / " + str.tostring(alignS), f_gradeCol(f_grade(scoreS)))
+        f_put(dbg, 3, "Min score/align", str.tostring(minScore) + " / " + str.tostring(minAlign), color.new(#e0e0e0, 0))
+        f_put(dbg, 4, "BUY raw setup", buyWhich, buyRaw ? color.new(#00e676, 0) : color.new(#78909c, 0))
+        f_put(dbg, 5, "SELL raw setup", sellWhich, sellRaw ? color.new(#ff3d00, 0) : color.new(#78909c, 0))
+        f_put(dbg, 6, "BUY blocked by", whyB, whyB == "-" ? color.new(#78909c, 0) : color.new(#ffd54f, 0))
+        f_put(dbg, 7, "SELL blocked by", whyS, whyS == "-" ? color.new(#78909c, 0) : color.new(#ffd54f, 0))
+        f_put(dbg, 8, "TREND", bullTrend ? "bullish" : bearTrend ? "bearish" : "none", color.new(#e0e0e0, 0))
+        f_put(dbg, 9, "STRUCTURE", structDir == 1 ? "bullish" : structDir == -1 ? "bearish" : "none", color.new(#e0e0e0, 0))
+        f_put(dbg, 10, "MOM bull/bear", str.tostring(momBull, "#.##") + " / " + str.tostring(momBear, "#.##"), color.new(#e0e0e0, 0))
+        f_put(dbg, 11, "VWAP dist (ATR)", str.tostring(atrVal > 0 ? (close - vwapVal) / atrVal : 0.0, "#.##"), color.new(#e0e0e0, 0))
+        f_put(dbg, 12, "HTF", htfStr, htfBull ? color.new(#00e676, 0) : htfBear ? color.new(#ff3d00, 0) : color.new(#b0bec5, 0))
+        f_put(dbg, 13, "CHOP (block@)", str.tostring(chopScore, "#") + " (" + str.tostring(chopBlk, "#") + ")", chopScore >= chopBlk ? color.new(#ff5252, 0) : color.new(#00e676, 0))
+        f_put(dbg, 14, "CHASE B / S", str.tostring(chaseB, "#") + " / " + str.tostring(chaseS, "#"), color.new(#e0e0e0, 0))
+        f_put(dbg, 15, "ADX / DI+ / DI-", str.tostring(adxVal, "#.#") + " / " + str.tostring(diPlus, "#.#") + " / " + str.tostring(diMinus, "#.#"), color.new(#e0e0e0, 0))
+        f_put(dbg, 16, "ATR / ratio", str.tostring(atrVal, format.mintick) + " / " + str.tostring(atrRatio, "#.##"), color.new(#e0e0e0, 0))
+        f_put(dbg, 17, "REGIME", regimeStr, color.new(#e0e0e0, 0))
+        f_put(dbg, 18, "Since B/S/any", str.tostring(barsSinceBuy) + " / " + str.tostring(barsSinceSell) + " / " + str.tostring(barsSinceAny), color.new(#e0e0e0, 0))
+        f_put(dbg, 19, "Open trades", str.tostring(array.size(tDir)), color.new(#e0e0e0, 0))
+else
+    if not na(dbg)
+        table.delete(dbg)
+        dbg := na

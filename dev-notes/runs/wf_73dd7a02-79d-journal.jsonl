@@ -1,0 +1,4 @@
+{"type":"launched"}
+{"type":"started","key":"v2:e603cc0a2add334222762550575fc498af6ba89f3fd829dd29c9b2f85b79736f","agentId":"a29b0ce1800f38586","label":"exp:E6_sweep_lifecycle","phase":"Experiment"}
+{"type":"started","key":"v2:d33c9e14f75c92e6af5b2b4eac75a27876b162bbcdb0fd27c556182c38c9ace3","agentId":"a1d90d0977c3f1d7f","label":"exp:E7_structure_rules","phase":"Experiment"}
+{"type":"started","key":"v2:5ea50885152a15581b382bf9ec4cdb843edce52ab8e3b850fe1f4a8c003dae4b","agentId":"a1d1512d529c9a7c1","label":"exp:E8_session_time","phase":"Experiment"}

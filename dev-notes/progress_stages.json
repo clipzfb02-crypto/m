@@ -1,0 +1,43 @@
+[
+ {
+  "name": "0 DOL study (research base)",
+  "run": "wf_ff97c5ca-f34",
+  "total": 66
+ },
+ {
+  "name": "0 DOL v2 bug-fix overhaul",
+  "run": "wf_97652ad5-f56",
+  "total": 46
+ },
+ {
+  "name": "1-3 Research + atlas + tests",
+  "runs": [
+   "wf_2133809a-df0",
+   "wf_aff5b328-560",
+   "wf_484e4943-9ab",
+   "wf_84a2c4d5-7fa",
+   "wf_73dd7a02-79d",
+   "wf_5ef068e4-d8b",
+   "wf_0c009486-2f8",
+   "wf_9cb39709-38b",
+   "wf_eb0e7df7-4f5"
+  ],
+  "total": 81
+ },
+ {
+  "name": "3b-4 Synthesis + architecture",
+  "total": 20
+ },
+ {
+  "name": "5 Build APEX_ULTIMATE.pine",
+  "total": 40
+ },
+ {
+  "name": "6 Validation + red team",
+  "total": 30
+ },
+ {
+  "name": "7 Delivery",
+  "total": 4
+ }
+]

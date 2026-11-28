@@ -1,0 +1,9 @@
+# large or reproducible artefacts are never committed
+validation/data/
+validation/**/node_modules/
+validation/**/out/
+*.pkl
+*.parquet
+*.feather
+*.csv.gz
+__pycache__/
