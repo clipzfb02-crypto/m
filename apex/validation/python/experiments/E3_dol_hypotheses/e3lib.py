@@ -365,6 +365,12 @@ def bh(pvals):
     return adj
 
 
+def dkey(df, t):
+    """Calendar date (int days since epoch) of the trading day of bar(s) t. Used as the bootstrap block id so that
+    correlated instruments on the same date are resampled together (robustness to the per-dataset day blocks)."""
+    return df.dayk.values[np.asarray(t)].astype("datetime64[D]").astype(np.int64)
+
+
 def split_days(df, frac=0.6):
     """Chronological split on trading days: returns the first OOS day index."""
     nd = df.day.max() + 1
@@ -385,23 +391,32 @@ class RaceSurface:
     is placed at q = round(d*ATR_s/tick) ticks and is HIT when the excursion EXCEEDS it (strict trade-through, the same
     rule as real pools on the same tick grid). Gives P(up first | d_up, d_dn), P(none), P(tie), and single-level reach."""
 
-    def __init__(self, df, starts, H, tick, grid=None):
+    # v2 (2026-11-28): grid floor lowered from 0.05 to 1e-4 ATR (v1 clipped 7% of wick-only sweep events whose close sat
+    # at the extreme, which overstated the baseline reversal probability for them). `touch=True` gives the >= rule
+    # (near-edge touch) used for FVG targets; default False = strict trade-through as for pools.
+    def __init__(self, df, starts, H, tick, grid=None, touch=False, pairs=True):
         h, l, c, atr, seg = df.high.values, df.low.values, df.close.values, df.atr.values, df.seg.values
         n = len(df)
-        self.g = grid if grid is not None else np.exp(np.linspace(np.log(0.05), np.log(25.0), 56))
+        self.g = grid if grid is not None else np.exp(np.linspace(np.log(1e-4), np.log(25.0), 90))
         self.lg = np.log(self.g)
         G = len(self.g)
         st = [s for s in starts if s + H < n and seg[s + H] == seg[s] and np.isfinite(atr[s]) and atr[s] > 0]
         self.starts = np.array(st)
         Tu = np.full((len(st), G), H + 1, dtype=np.int32)
         Td = np.full((len(st), G), H + 1, dtype=np.int32)
+        sside = "left" if touch else "right"
         for i, s in enumerate(st):
             up = np.round((np.maximum.accumulate(h[s + 1:s + H + 1]) - c[s]) / tick)
             dn = np.round((c[s] - np.minimum.accumulate(l[s + 1:s + H + 1])) / tick)
             q = np.round(self.g * atr[s] / tick)
-            Tu[i] = np.searchsorted(up, q, side="right") + 1   # first k with up > q (1-based); H+1 = never
-            Td[i] = np.searchsorted(dn, q, side="right") + 1
+            Tu[i] = np.searchsorted(up, q, side=sside) + 1   # first k with up > q (>= if touch) (1-based); H+1 = never
+            Td[i] = np.searchsorted(dn, q, side=sside) + 1
         self.H = H
+        self.single_up = (Tu <= H).mean(0)
+        self.single_dn = (Td <= H).mean(0)
+        self.n = len(st)
+        if not pairs:
+            return
         # pair matrices
         U = Tu[:, :, None]; D = Td[:, None, :]
         upf = (U < D) & (U <= H)
@@ -412,9 +427,6 @@ class RaceSurface:
         self.PU = np.where(res > 0, upf.sum(0) / np.maximum(res, 1), np.nan)   # P(up first | resolved, no tie)
         self.PN = none.mean(0)
         self.PT = tie.mean(0)
-        self.single_up = (Tu <= H).mean(0)
-        self.single_dn = (Td <= H).mean(0)
-        self.n = len(st)
 
     def _interp1(self, arr, d):
         x = np.log(np.clip(d, self.g[0], self.g[-1]))

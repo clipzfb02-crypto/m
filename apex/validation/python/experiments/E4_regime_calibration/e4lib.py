@@ -44,6 +44,48 @@ def load_btc():
     return _frame(d)
 
 
+REPAIR_LOG = []
+
+
+def repair_spikes(d, name, k_spike=10.0, k_back=3.0):
+    """Evidence-based repair of single bad prints (added on resume, 2026-11-28; see check_data2.py).
+    A bar's open or close is a bad print when it lies > k_spike * ATR14[t-1] from BOTH the previous close and the
+    next open, while the previous close and the next open agree within k_back * ATR14[t-1] (price was back at once).
+    The print is replaced by the neighbouring price (open <- previous close, close <- next open); a high or low
+    that sits beyond the repaired body by > k_spike * ATR14[t-1] on the same side is clipped to the body.
+    This uses bar t+1, so it is a data-cleaning step only (never a feature). Every repair is logged."""
+    O = d["open"].values.astype(float).copy(); Hh = d["high"].values.astype(float).copy()
+    L = d["low"].values.astype(float).copy(); C = d["close"].values.astype(float).copy()
+    A = atr(Hh, L, C, 14)
+    for t in range(15, len(C) - 1):
+        a = A[t - 1]
+        if not np.isfinite(a) or a <= 0:
+            continue
+        pc, no = C[t - 1], O[t + 1]
+        if abs(no - pc) > k_back * a:
+            continue
+        badO = abs(O[t] - pc) > k_spike * a and abs(O[t] - no) > k_spike * a
+        badC = abs(C[t] - pc) > k_spike * a and abs(C[t] - no) > k_spike * a
+        if not (badO or badC):
+            continue
+        rec = dict(ds=name, t=str(d["datetime"].iloc[t]), O=O[t], H=Hh[t], L=L[t], C=C[t], atr=round(float(a), 4))
+        if badO:
+            O[t] = pc
+        if badC:
+            C[t] = no
+        top, bot = max(O[t], C[t]), min(O[t], C[t])
+        if Hh[t] - top > k_spike * a:
+            Hh[t] = top
+        if bot - L[t] > k_spike * a:
+            L[t] = bot
+        Hh[t] = max(Hh[t], top); L[t] = min(L[t], bot)
+        rec.update(newO=O[t], newH=Hh[t], newL=L[t], newC=C[t])
+        REPAIR_LOG.append(rec)
+    d = d.copy()
+    d["open"], d["high"], d["low"], d["close"] = O, Hh, L, C
+    return d
+
+
 def to_arrays(d, tzname):
     t = pd.DatetimeIndex(d["datetime"]).tz_localize("UTC")
     loc = t.tz_convert(tzname)

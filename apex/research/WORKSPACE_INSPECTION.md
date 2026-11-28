@@ -1,6 +1,8 @@
 # APEX ULTIMATE · Phase 1 workspace inspection (official deliverable)
 
-Lead inspector's merge of the two Phase 1 inspection reports, with spot-checks. Written 2026-11-27.
+Lead inspector's merge of the two Phase 1 inspection reports, with spot-checks.
+- First drafted 2026-11-27. That pass was cut off by a usage limit.
+- Completed and re-verified 2026-11-28 in a resume pass. Every [lead] check in §0.2 was re-run in that pass unless the row says otherwise, and the newer study material was added (§0.3).
 
 - **I1 · DOL lineage:** `apex/research/inspection/I1_dol_lineage.md`. Covers DOL Engine v2, the early DOL Engine and Liquidity Flow Pro.
 - **I2 · Signal and backtest lineage:** `apex/research/inspection/I2_signal_lineage.md`. Covers XAUUSD Fast/Balanced Pro, the Buy/Sell Indicator and the MNQ 5m ORB project.
@@ -31,7 +33,7 @@ Both reports stay in place as the detailed evidence. This file is the single Pha
 
 | # | Claim checked | How | Result |
 |---|---|---|---|
-| S1 | Every file in `apex/legacy/` is byte-identical to its origin commit | `git show <commit>:<path> \| cmp` for all 23 files | **Confirmed**, 23 of 23 [lead] |
+| S1 | Every file in `apex/legacy/` is byte-identical to its origin commit | `git show <commit>:<path> \| cmp` for every copied file | **Confirmed**, 22 of 22. The folder holds 23 files; the 23rd is the index `README.md`, which has no origin. The first draft said "23 of 23"; corrected [lead] |
 | S2 | The v2 legacy copy equals the frozen baseline `<scratchpad>/brief/baseline_v2.pine` | `diff -q` | **Confirmed**. The live `indicators/dol_engine.pine` is also byte-identical today, but the bug-fix pass may change it, so every v2 line number here refers to the frozen copy [lead] |
 | S3 | About 45 v2 line references (e.g. 37, 404, 434, 447, 466, 564, 570, 597, 623, 650, 661, 691-693, 865, 917, 923-925, 1141, 1211, 1230, 1314, 1376, 1441, 1518, 1580-1582, 1891-1894, 1945-1947, 2066, 2084, 2214-2226, 2295-2307, 2390) | `sed -n` on the frozen copy | **All match** [lead] |
 | S4 | Line references in the other legacy files: early engine 180-181, 353, 490, 731, 734, 886, 922, 964, 1034, 1053, 1098, 1330, 1550, 1583-1585, 1637, 2032, 2423; LFP 12-13, 55, 61, 104, 299, 336, 461, 554, 784, 885, 1045, 1300, 1320, 1324; XAUUSD 99, 131-147, 154, 212-218, 245, 360, 382, 395, 450, 458-459, 515, 681, 725, 731-746, 1162; Buy/Sell 1, 116; ORB 65, 152, 201; `bt.py` 76 | `sed -n` | **All match** [lead] |
@@ -47,15 +49,24 @@ Both reports stay in place as the detailed evidence. This file is the single Pha
 | S14 | The legacy README dates `00a405a` to 2026-11-23 | `git log` | **Date corrected.** Commit `00a405a` is dated 2026-10-16. The baseline was *frozen* on 2026-11-23 |
 | S15 | "Every file found" | Listed every remote branch and searched the workspace for `*.pine` and images | **Three additions** that neither report lists: (a) the early engine's origin branch also holds `CLAUDE.md`, the user's own setup notes (used in §5 and §6); (b) branch `claude/peaceful-gauss-tr43jz` is an unrelated car-dealership website; (c) branch `claude/youthful-ritchie-ttryl6` is an unrelated Obsidian-vault setup. No other Pine file exists anywhere |
 | S16 | The reference screenshot | Viewed `dev-notes/brief/reference_look.png` | **Confirmed** as described in §5.1. It is a screenshot of the commercial product's own page. We copy the layout only, never its name or branding |
+| S17 | I1's "cost < 3% of the stop lost about 4× less" is a README claim | `grep` in the early README and engine | **Citation corrected.** The sentence is in the early engine's *input tooltip* (EE 286: "signals with cost under 3% of the stop lost about 4x less than the rest"), not in its README. It is still a [claim]: no script exists |
+| S18 | The 49 audit IDs all appear in the §4.1 summary | Extracted every `## P1/P2` heading and matched it against the table | **Confirmed**, 49 of 49 (18 P1 + 31 P2). One line reference fixed: PD-5 is reported at line 942, so theme 24 now reads 785-796, 942 [lead] |
+| S19 | About 30 further line references in §3 (LFP 139, 337, 432, 876, 891, 1082, 1163; XAU 413, 1085; EE 199, 265, 291, 314, 320, 432, 493, 896, 981, 1012, 1031, 1158, 1505, 1708, 1754, 1900, 1918, 1966, 1975, 1984, 2100, 2355, 2397, 2431, 2464; ORB 73, 90, 200, 250; v2 170, 220, 229, 964, 1253, 1585, 1950, 1984, 2021, 2160) | `sed -n` | **All match** [lead] |
+| S20 | Session defaults and the early engine's core hours quoted in §5.4 | `grep` of every `input.session` and EE 283, 331, 1047 | **Confirmed**, with one addition: the early engine's own session pools (Asia 2000-2359, London 0200-0500, NY 0930-1130; EE 217-221) were missing and are now listed [lead] |
+| S21 | Newer study material that the first draft could not use | Read `x1_behavioral.md` (§0), `x1_positioning.md` (§0), `ict_time` §0 item 2, `quant_pot` §0, `calib_ml` §0.6 | **Added** to §6 (C2), §7 and §8, each tagged with its source. The x1 reports have no combined `.final.md`, so they are marked "non-final" [lead] |
 
 ### 0.3 What is missing or unverified
 - **TradingView compile status of every legacy script: unverified.** No offline compiler exists. Two scripts are known *not* to compile (XAUUSD, Buy/Sell; §4.6-4.7).
 - **The early engine's research scripts and data are not in any branch.** Every early-engine statistic is a [claim]. The later study reproduced its conclusions independently (§7).
 - **Project C (ORB) rejected-idea scripts and its 0.5R-era bootstrap were never committed** [claim].
-- **Not available when this was written:**
-  - `STUDY.md` and `ROADMAP.md`;
-  - the gap-lens reports `x1_retail_schools` and `x1_behavioral`. The other four gap lenses exist as non-final `.md` files.
-- **Phase 2 experiments are still running.** `apex/research/experiments/E1-E4, E7, E9` hold pre-registrations only. None of their results is used here.
+- **Still not available on 2026-11-28:**
+  - `STUDY.md` and `ROADMAP.md` (the study's synthesis has not run);
+  - the gap-lens report `x1_retail_schools`.
+- **Gap lenses that do exist,** as single `.md` files without a combined `.final.md`: `x1_positioning`, `x1_internals`, `x1_tv_validation`, `x1_implied_vol` and, new since the first draft, `x1_behavioral`. Numbers from them are tagged "non-final".
+- **Phase 2 experiments are still running.**
+  - `apex/research/experiments/` holds pre-registrations for E1, E2, E3, E4, E6, E7, E9, E10 and E12. There is no file for E5, E8, E11, E13 or E14; HANDOFF lists E8, E11, E13 and E14 as on hold.
+  - Some experiment folders under `apex/validation/python/experiments/` already contain run outputs (for example E1 and E4), but no experiment file has a written results section. E3's "Part B · Results" is still empty.
+  - None of their results is used here.
 
 ---
 
@@ -116,20 +127,24 @@ Sizes are bytes and lines at inspection time.
 | `indicators/dol_engine.pine` | 127,223 | Live v2. Byte-identical to `00a405a` at inspection time; the bug-fix overhaul may edit it |
 | `README.md` | 9,148 | User-facing v2 design: sources, scoring, Clean and Terminal styles |
 | `CLAUDE.md` | 541 | Project pointer to `HANDOFF.md` |
-| `dev-notes/HANDOFF.md` | 12,612 | Goal, constraints, status log |
+| `dev-notes/HANDOFF.md` | 13,594 | Goal, constraints, status log (grows as sessions log progress) |
 | `dev-notes/brief/APEX_ULTIMATE_SPEC.md` | 32,063 | The governing specification |
 | `dev-notes/brief/CONTEXT.md` | 5,288 | Agent brief, hard constraints, decision history |
 | `dev-notes/brief/reference_look.png` | 81,701 | **The only visual design reference** (§5.1) |
 | `dev-notes/brief/tradeaxis_description.md` | 4,529 | Feature description of the commercial product that inspired v2 (features only; never its branding) |
 | `dev-notes/runs/overhaul-r1-findings.md` | 22,886 | The 49 audited v2 findings (§4.1) |
 | `dev-notes/runs/overhaul-r1-journal.jsonl` | 262,596 | Raw audit results with exact patches. Not read by either inspector |
-| `dev-notes/study/` | 3.6 MB, 50 files | Synced copies of the study reports |
+| `dev-notes/runs/wf_*-journal.jsonl` | 9 files, 554 B to 1.59 MB | Workflow run journals (study, overhaul, APEX phases) |
+| `dev-notes/study/` | 3.6 MB, 51 files | Synced copies of the study reports: 23 `.final.md`, 23 first-pass `.md`, 5 x1 gap lenses |
 | `dev-notes/tools/pine_parse.sh`, `parse_one.py`, `split.py` | 1,182 / 233 / 763 | Syntax checker based on pynescript (syntax only) |
 | `dev-notes/workflows/*.js` | 9 files | Workflow scripts (study, overhaul, APEX phases) |
+| `apex/.gitignore` | 166 | Keeps data, `out/` folders and caches out of git |
 | `apex/research/inspection/I1_dol_lineage.md`, `I2_signal_lineage.md` | 99,852 / 72,220 | The two inspector reports merged here |
-| `apex/research/experiments/E1, E2, E3, E4, E7, E9 *.md` | 9.7-13.7 KB each | Phase 2 pre-registrations; no results yet |
-| `apex/MARKET_KNOWLEDGE_BASE/11_statistical_mathematics.md` | 109,673 | Phase 3 atlas document, in progress |
-| `apex/validation/python/experiments/` | (data git-ignored) | Phase 2 experiment code |
+| `apex/research/experiments/E1, E2, E3, E4, E6, E7, E9, E10, E12 *.md` | 9.7-13.7 KB each | Phase 2 pre-registrations; no written results yet |
+| `apex/research/team/` | empty | Reserved |
+| `apex/MARKET_KNOWLEDGE_BASE/09_volatility.md`, `10_momentum.md`, `11_statistical_mathematics.md` | 96,929 / 69,250 / 134,891 | Phase 3 atlas documents, in progress (sizes at 2026-11-28) |
+| `apex/validation/python/experiments/` | (data and `out/` git-ignored) | Phase 2 experiment code and run outputs |
+| `apex/validation/pine/` | empty | Reserved for Pine-side validation |
 
 ### 1.5 Scratchpad resources the team uses (not in git)
 - `<scratchpad>/brief/baseline_v2.pine`: the frozen v2, identical to `00a405a`.
@@ -267,7 +282,7 @@ The "I-ID" column traces each row back to I1 (P-v2-*, R-e-*, X-l-* …) or I2 (�
 | R15 | Time (§9, §14) | Intraday volatility seasonality (`sfNow`) | EE 937-969 | A strong (the clock is real) | Use the real future-bar calendar (964 ignores session gaps). Compute once per bar, not per tick. Gate it per chart (it fails on GC 1H) [study: ict_time §0.3] | R-e-1 |
 | R16 | Regime (§9) | Volatility regime `atrPct`; chop and chase scores; ATR-ratio volatility state | EE 1022-1025; XAU 382-410, 413-415 | A moderate (volatility state); D (point tables) | Percentile-based measures with hysteresis and compression/expansion states. Volatility state persists across windows; trend labels do not (§7.1) | R-e-2, I2 §2.15 |
 | R17 | Momentum (§8) | Momentum composite averaging RSI, MACD and DMI; LFP pressure EMA and bounded tilts | XAU 212-218; LFP 876-919 | A (redundancy principle) | One documented, normalised momentum feature with redundancy control. Keep LFP's ≤ 1.25× cap principle; tilts stay neutral until measured | I2 §2.15, R-l-2 |
-| R18 | Risk (§16) | Cost model, max-cost-%-of-stop filter, minimum cost stop, sizing | EE 1051-1065, 1693-1695, 1954-1964, 2408-2412 | A weak (README: cost < 3% of the stop lost about 4× less) [claim] | Instrument-agnostic: the user enters cost in ticks; tick size and point value come from `syminfo`; mark the estimate "incomplete" when the cost is unknown. No hard-coded roots (1053) | R-e-3 |
+| R18 | Risk (§16) | Cost model, max-cost-%-of-stop filter, minimum cost stop, sizing | EE 286, 1051-1065, 1693-1695, 1954-1964, 2408-2412 | A weak (input tooltip at EE 286: cost < 3% of the stop "lost about 4x less") [claim] | Instrument-agnostic: the user enters cost in ticks; tick size and point value come from `syminfo`; mark the estimate "incomplete" when the cost is unknown. No hard-coded roots (1053) | R-e-3 |
 | R19 | Intermarket/events (§12) | Event calendar and release windows | EE 291-306, 981-1011 | E (manual windows) | Manual windows only. No unverified pre-filled FOMC dates. Never call it news detection | R-e-4 |
 | R20 | Regime (§9) | Spike detector (range ≥ 2.5 ATR and volume ≥ 3×) | EE 1012-1019 | D weak | Rename it the "abnormal move" regime flag | R-e-5 |
 | R21 | Volume (§7) | Order-flow proxy: sign(close − open) × 1-minute volume | EE 1031-1042 (lower-TF request 1034) | D proxy; A weak (≈ 0.05R, not significant) [claim] | Optional, labelled "volume-delta proxy (no bid/ask)", data-quality weighted, never on by default. It requests *below* the chart TF inside an `if` | R-e-6 |
@@ -350,7 +365,7 @@ The "I-ID" column traces each row back to I1 (P-v2-*, R-e-*, X-l-* …) or I2 (�
 | 21 | Classic breaker never created; liquidity gate checks the wrong extreme | PD-2 (P2) | 1691, 1706 | R13 |
 | 22 | OB not moved to the HL/LH retest candle | PD-3 (P2) | 1695 | R13 |
 | 23 | OB quality gate almost always passes | PD-4 (P2) | 1688 | R13 |
-| 24 | HTF FVG has no quality or direction check | PD-5 (P2) | 785-796 | R13 |
+| 24 | HTF FVG has no quality or direction check | PD-5 (P2) | 785-796, 942 | R13 |
 | 25 | HTF FVG exempt from the origin lockout | dol-G (P2) | 689 | P22, R13 |
 | 26 | iFVGs far behind never cleaned; 8 bands clutter; overlaps stack | PD-6, TE7, ux-ifvg-overlap-merge (P2 ×3) | 198, 1609, 1636 | P19 |
 | 27 | Label shows "PoT 95%" after a live sweep; no TF in the code; no "no target" state | dol-F, VIS-swept-label, ux-clean-swept-label, TE6, VIS-no-target-state (P2 ×5) | 2225, 2305 | R30 |
@@ -527,7 +542,7 @@ None of these thresholds was ever tested [I2].
   - MNQ/NQ 5m (ORB).
 - **Sessions in use:**
   - v2: Asia 2000-0000, London 0200-0500, NY AM 0930-1200, America/New_York; killzones Asia 2000-0000, London 0200-0500, NY AM 0700-1000, NY PM 1330-1600;
-  - EE: core hours 09:30-11:30 + 13:30-15:45 NY, flat at 15:55;
+  - EE: session pools Asia 2000-2359, London 0200-0500, NY 0930-1130 (EE 217-221); signal hours "Auto" = core 09:30-11:30 + 13:30-15:45 NY on futures, indices and stocks, any time on crypto and forex (EE 283, 1047); flat at 15:55 (EE 331);
   - LFP: Asia 1800-0300, London 0300-0830, NY 0830-1600;
   - ORB: OR 09:30-09:44, last entry 12:00, flat 15:50.
 
@@ -572,7 +587,7 @@ The spec governs (HANDOFF: "supersedes"). Where a resolution changes something t
 | # | Earlier preference (source) | APEX spec rule | Recommended resolution | Confirm with user? |
 |---|---|---|---|---|
 | **C1** | The reference look: "Timeframe \| Bias" table on, iFVG boxes on, no markers, no path (screenshot; v2 Clean default) | §17/§23 default display: **BUY/SELL markers + one forward path + minimal essential DOL information**; "unnecessary tables" off; FVGs and diagnostics optional and OFF | Make the default **APEX Clean**: BUY/SELL markers, one forward path, and the reference DOL element (ONE dashed neon zone with the glow core, tether and two-line label). That DOL element *is* the spec's "minimal essential DOL information", and it keeps the user's signature look. Offer a single **Display preset** input: "Clean" (default, spec) and "Clean + Bias table" (the exact reference layout: 3-row table + at most 2 merged iFVG boxes). The table shows confirmed structure state per TF, can read NEUTRAL, and its tooltip says "structure state, not a forecast". It is **off by default** per spec §17 | **Yes**: the table off by default is a visible change |
-| **C2** | Label "Target: BEFVG / **PoT: 70.1%**", live tick-by-tick, capped at 95% (screenshot; v2 2225; reference product notes) | §4.7: call it a **Draw Score until statistically calibrated**; §15: a probability only for an empirically calibrated outcome frequency with a defined target, sample and horizon; §19.1: confirmed by default | Keep the two-line label slot. **Line 2 reads "Draw Score: 72"** (confirmed-bar value) until a **per-chart calibration gate** passes. The gate: prequential Brier skill > 0 against the distance-matched baseline (P08/P09), an anytime-valid test (R11), a reliability slope within a pre-set band, and a minimum n of resolved targets for *this* horizon. Only after it passes does line 2 read **"PoT 30b: 64%"**, with the event (touch of the near edge within H bars), H, n and Brier skill in the tooltip. It reverts to the Draw Score if the gate later fails. No 95% cap display; after a sweep it reads "Swept ✓". Evidence: the PoT *model class* is well calibrated in aggregate (slope 0.93-1.04 on 13 clean sets, 76,181 probes [study: calib_ml §0.1]), but it is ungraded per chart, carries the drift bias (+3.66% LL when removed) and is hour-biased by up to about ±17 pp on 5m [study: ict_time §0.1]. That is exactly what the gate is for | Yes: the user will see "Draw Score" until their chart earns "PoT" |
+| **C2** | Label "Target: BEFVG / **PoT: 70.1%**", live tick-by-tick, capped at 95% (screenshot; v2 2225; reference product notes) | §4.7: call it a **Draw Score until statistically calibrated**; §15: a probability only for an empirically calibrated outcome frequency with a defined target, sample and horizon; §19.1: confirmed by default | Keep the two-line label slot. **Line 2 reads "Draw Score: 72"** (confirmed-bar value) until a **per-chart calibration gate** passes. The gate: prequential Brier skill > 0 against the distance-matched baseline (P08/P09), an anytime-valid test (R11), a reliability slope within a pre-set band, and a minimum n of resolved targets for *this* horizon. Only after it passes does line 2 read **"PoT 30b: 64%"**, with the event (touch of the near edge within H bars), H, n and Brier skill in the tooltip. It reverts to the Draw Score if the gate later fails. No 95% cap display; after a sweep it reads "Swept ✓". While the gate has not passed, the tooltip says "calibrating" or "no measured edge" instead of showing nothing. Evidence: the PoT *model class* is well calibrated in aggregate (slope 0.93-1.04 on 13 clean sets, 76,181 probes [study: calib_ml §0.1]), but it is ungraded per chart, carries the drift bias (+3.66% LL when removed) and is hour-biased by up to about ±17 pp on 5m [study: ict_time §0.1]. That is exactly what the gate is for. A live readout is also unstable: on NQ 1-minute paths the live PoT moves a median 10.9 pp inside one 1H bar (90th percentile 26.4 pp) and crosses 70% inside 27% of bars, so the label uses the bar-close value [study: x1_behavioral §0 items 5-6, non-final] | Yes: the user will see "Draw Score" until their chart earns "PoT" |
 | **C3** | Terminal HUD with R:R, WIN≤H, EV, ETA, EDGE verdict; EE BUY NOW banner; XAU stats dashboard | §17: debug dashboard optional and OFF; §15: no fake confidence; §16: do not encourage trading because a signal exists | One optional debug dashboard, OFF by default, with reason codes and the honest ledger (win rate beside break-even and baseline, n and horizon). Drop the biased readouts (X02, X03) and the banner (X15) | No |
 | **C4** | "Always see where price is going"; banner "DOL SAYS HIGHER/LOWER", never just WAIT; "never leave the chart without a DOL"; D-first selection (EE `CLAUDE.md`, EE 1583-1585, v2 1964-2035) | §13.3/§25: NEUTRAL is a legitimate output; "do not force BUY and SELL signals"; "when evidence is weak, remain neutral"; §4.7: output the best buy-side **and** sell-side targets | Always *compute* the best buy-side and best sell-side targets, so the user can always see where price could go. Show the selected DOL zone when one qualifies. The **signal state and the path direction may be NEUTRAL**. In NEUTRAL the path is drawn in neutral grey with its uncertainty band, and the label reads "No clear draw" instead of inventing a side. No fallback target that ignores the minimum score | **Yes**: this reverses an explicit earlier wish |
 | **C5** | Colour-only reading on a phone: **blue = BUY, red = SELL**, colours only on trades; magenta DOL (EE `CLAUDE.md`, EE 353) | §14/§23: **green bullish path, red bearish path**; clear bullish/bearish colours | Default to green/red, in the Classic neon family (the later choice, consistent with the reference). Colour is the **direction of travel**: a buy-side target and an up path are green; a sell-side target and a down path are red; NEUTRAL is grey. Offer a "Blue/Red" marker palette for colour-only phone reading. Magenta is an optional theme only (X17) | Yes: ask whether they still want blue for BUY |
@@ -583,7 +598,7 @@ The spec governs (HANDOFF: "supersedes"). Where a resolution changes something t
 | **C10** | Hard-coded instruments, hours and costs: MNQ/NQ root lock, NY constants, 15:55 flat, NQ/ES cost table, "tuned for 1m/5m", "XAUUSD 3m" (ORB 65; EE 1053; XAU header) | §2.1: universal; never hard-code calculations for XAUUSD or NQ; account for tick size, sessions and volume quality | Everything instrument-specific comes from `syminfo` plus inputs. Sessions are configurable, with exchange-timezone defaults. Costs are a user input in ticks (default "unknown" → tradeability marked "incomplete"). Asset-class presets at most, never per-symbol constants | No |
 | **C11** | LFP "▲ UP xx% / ▼ DOWN yy%" as a likely direction; large background zones | §17: no large background fills; §15/§25: scores are not probabilities | Drop (X18). Side balance may appear as a feature in the debug dashboard only | No |
 | **C12** | A high win rate as a goal (ORB 0.2R retune, Target Win Rate mode) | §15/§20: baselines, calibration, sample sizes; never imply edge from a win rate | Every win rate is shown **with its geometric break-even and a baseline**, n and horizon (§7.1). No Target Win Rate mode (X12) | No |
-| **C13** | Live PoT and an intrabar sweep alert (v2 2066, 2084; reference product notes) | §18/§19.1: alerts on confirmed conditions; live features labelled and kept out of confirmed alerts by default | Confirmed alerts by default. The live sweep becomes an opt-in "provisional" alert, labelled as such. Live readouts carry a "live" marker (P17) | No |
+| **C13** | Live PoT and an intrabar sweep alert (v2 2066, 2084; reference product notes) | §18/§19.1: alerts on confirmed conditions; live features labelled and kept out of confirmed alerts by default | Confirmed alerts by default. The live sweep becomes an opt-in "provisional" alert, labelled as such. Live readouts carry a "live" marker (P17) and are never the default label value (see the intrabar instability in C2) | No |
 | **C14** | Reference product: the bias table "removes lagging Neutral states" | §11: if timeframes disagree, reduce confidence or stay neutral | The table may read NEUTRAL. Disagreement between rows lowers the Forecast Quality score (§13 F) | No |
 | **C15** | "Compile with 0 errors and 0 warnings on TradingView before hand-over" (EE `CLAUDE.md`) | §19.2: no compile errors; §24: if a test cannot be run, mark it as not run | Doc-grounded engineering with the layered offline checks (R26). The compile is marked **NOT RUN** in VALIDATION_REPORT. The user is asked to paste any TradingView error and line | No (process) |
 
@@ -600,7 +615,12 @@ The spec governs (HANDOFF: "supersedes"). Where a resolution changes something t
 | **The empirical excursion surface is calibrated** | Slope 0.99, ECE 0.004 (1.2M 5-min rows) [study: calib_ml §0.1] | study | A strong |
 | **Expected reach d·PoT(d) is the better ranking objective** | 1.10-1.43 ATR per target vs 0.86-1.09 (hand score) and 0.66-0.93 (nearest), 13 intraday/1h sets [study: calib_ml §0.8] | study | A moderate |
 | **The intraday volatility clock is real** | Hour bias in v2's PoT up to −17 pp at 08:00 NY and +11 pp at 21:00 (about 1.2M level-windows) [study: ict_time §0.1] | study | A strong |
+| **One time-of-day effect exists beyond volatility: the US cash-open drive in index futures** | 20-minute windows starting 09:20-09:59 ET take the prior 60-minute high or low +10 to +15 pp more often than a variance clock predicts (observed 90-93% vs model 79%; 1-min ES/NQ/YM/RTY, 60 days, day-clustered SE 1.6-3.2 pp). Absent at 08:30, after 10:00 and in CL/GC [study: ict_time §0 item 2] | study | A moderate. An empirical time-of-day surface learns it; a pure volatility clock cannot |
+| **Keying the PoT surface by volatility state helps** | Partial pooling by volatility tercile: +1.79% log-loss (CI +1.45 to +2.13), all 6 symbols, 5-min [study: quant_pot §0] | study | A strong |
 | **Volatility state persists; trend labels do not** | Volatility correlation 0.49-0.80 between consecutive windows; ER/CHOP/Hurst about 0 [study: quant_regime §0] | study | A strong |
+| **Equal highs/lows at 1H are the only pool attribute that survives a multiple-testing correction** | EQ +0.29 logit (t +3.6), Holm p 0.007, 1-hour group; null at 5-min. Distance-matched reach of EQ is +0.3 ± 1.8 pp (1H) [study: calib_ml §0.6; ict_liq] | study | A weak. A candidate feature for the gated shadow ledger, not a default weight |
+| **Dealer gamma and its Pine proxies are a volatility-state input, not a direction input** | SPX daily 2011-2026 (n 2,665 days): range/ATR20 falls from 1.154 (low-gamma quintile) to 0.803 (high), t −10.8 beyond VIX-implied σ. VIX/VIX3M term structure + VIX-implied σ recover about 75% of that gain [study: x1_positioning §0 item 1, non-final] | study (non-final) | A moderate; candidate σ/regime input on index charts |
+| **Crypto perpetual funding tilts which side is run first** | BTC 1h 2019-09 to 2025-01 (7,444 decided races): negative funding → BSL first +5.2 ± 2.1 pp above calibrated geometry; sign holds in both halves [study: x1_positioning §0 item 5, non-final] | study (non-final) | A weak; crypto only, gated per chart |
 | **Opposing untouched FVGs in the path reduce reach** | −2.8 ± 0.8 pp at 1H (n 4,757); −2.1 ± 1.0 at 5m (n 3,387); negative in 11 of 12 datasets [study: ict_liq §0.4] | study | A moderate (the only supported ICT path claim) |
 | **Win rate is set by target/stop geometry** | ORB at 0.2R: observed 85.7%, driftless random walk 83.3%, cost-adjusted break-even 84.6% (729 trades, NQ 5m 2023-2025) [ran: I2 T4]; BE = 1/(1+RR) [study: trade_mgmt §1.2] | ran + study | E strong |
 | **Costs dominate short-horizon futures signals** | ORB PF 1.24 → 1.16 → 1.08 as round-trip cost goes 1.5 → 2.5 → 3.5 pts (729 trades) [ran: I2 T1]. MNQ/MES 1m: −0.08R (NQ) and −0.17R (S&P) per trade from costs; filters cut NQ from 20,031 trades (−1,655R) to 2,460 (−75R) (about 3.7 years, about 420 NY sessions per market) [claim] | ran + claim | E strong |
@@ -635,6 +655,9 @@ The spec governs (HANDOFF: "supersedes"). Where a resolution changes something t
 | **ICT sweep reversals, ORB, noise-boundary momentum and first-half-hour momentum on MNQ/MES 1m; linear and GBM walk-forward models on about 20 features** | None reliably profitable after costs (about 3.7 years Dukascopy, about 420 NY sessions per market) [claim] | claim | C |
 | **High-capacity online learners** | All 20 ICT features: Brier skill 0.192, below 0.201 (over-fits) [claim]; ungated learners lose to the baseline [study: calib_ml] | claim + study | C |
 | **Voting that ANDs a state with events** | Buy/Sell 3-of-3 fired 0 times in 3 years on NQ 1H (17,396 bars) and 4H (4,718 bars); RSI + MA never co-occurred [ran: I2 T5] | ran | E (combinatorics) strong |
+| **Cost-basis levels (swing-anchored VWAP) as magnets** | Reached exactly as often as distance implies: NQ 15m −0.5 / −0.6 ± 0.5 pp (n about 11,500 per side), NQ 1h +0.7 / −0.4 ± 1.0 pp; a time-weighted placebo gives the same numbers [study: x1_behavioral §0 item 2, non-final] | study (non-final) | C. VWAP belongs in §7 as context, not as a target family |
+| **"The SMC/ICT crowd changed how levels behave"** | Same-instrument pre-2019 vs post-2021 (BTC 1h, EURUSD 1h, SPX daily): reach beyond distance unchanged (e.g. EURUSD −0.1 ± 2.3 pp; SPX −2.9 ± 4.0 pp vs a placebo of −2.1 ± 3.6); sweep depth unchanged [study: x1_behavioral §0 item 1, non-final] | study (non-final) | C. No era-aware priors |
+| **COT positioning, max pain and OPEX-week flows** | COT (E-mini S&P 2008-2026, 723 weeks) does not predict which side of the prior week's range is taken first (t −0.3 and +1.4). Max pain adds nothing over "close near the prior close" on SPX 2004-2026 [study: x1_positioning §0 items 3-5, non-final] | study (non-final) | C |
 
 ### 7.3 Method lessons
 1. **A spent holdout is no longer evidence.** The 0.5R ORB rule lost on both 2026 files (−$224 NQ on 50 trades, −$1,674 MNQ on 41). Then 0.2R was chosen after seeing them [ran: I2]. APEX needs a pre-registered holdout that is never retuned (Phase 6).

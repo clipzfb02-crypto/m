@@ -118,7 +118,7 @@ def run(name, tf):
                 if rr == -9:
                     continue
                 events.append(dict(ds=name, tf=tf, pen=pen_name, cls=cls, t=t, dbar=d, side=s, kind=int(e.kind),
-                                   d_opp=d_opp, d_ext=d_ext, race=rr, rev=rev, day=day[d],
+                                   d_opp=d_opp, d_ext=d_ext, race=rr, rev=rev, day=day[d], dk=int(L.dkey(df, d)),
                                    with_bias=(bias[d] == s), against_bias=(bias[d] == -s),
                                    oos=d >= oos_bar + emb_bars, is_=d + HR < oos_bar))
     X = pd.DataFrame(events)
@@ -136,8 +136,9 @@ def summ(X):
     r = X[X.race.isin([1, -1])]
     b = r.ds.astype("category").cat.codes.astype("int64").values * 100000 + r.day.values
     m, lo, hi, se = L.block_boot_mean(r.rev.values - r.p_rev.values, b, block_len=3)
+    mc, loc, hic, sec = L.block_boot_mean(r.rev.values - r.p_rev.values, r.dk.values, block_len=3, seed=7)
     k = int(r.rev.sum()); nn = len(r)
-    return dict(n=len(X), res=nn, tie=int((X.race == 0).sum()), none=int((X.race == 9).sum()),
+    return dict(ci_cal=(loc, hic),n=len(X), res=nn, tie=int((X.race == 0).sum()), none=int((X.race == 9).sum()),
                 rev=k / max(nn, 1), rev_ci=L.wilson(k, nn), base=r.p_rev.mean(), edge=m, ci=(lo, hi),
                 p=L.p_from_ci(m, se), cont=1 - k / max(nn, 1), none_obs=(X.race == 9).mean(), none_base=X.p_none.mean(),
                 med_dopp=r.d_opp.median(), med_dext=r.d_ext.median())
@@ -146,7 +147,7 @@ def summ(X):
 def f(o):
     return (f"n={o['n']:6d} res={o['res']:6d} tie={o['tie']:4d} none={o['none']:5d} | REV {100*o['rev']:.1f}% "
             f"[{100*o['rev_ci'][0]:.1f},{100*o['rev_ci'][1]:.1f}] base {100*o['base']:.1f} edge {100*o['edge']:+.2f}pp "
-            f"[{100*o['ci'][0]:+.2f},{100*o['ci'][1]:+.2f}] p={o['p']:.3f} | CONT {100*o['cont']:.1f}% | none obs {100*o['none_obs']:.1f} "
+            f"[{100*o['ci'][0]:+.2f},{100*o['ci'][1]:+.2f}] p={o['p']:.3f} calCI[{100*o['ci_cal'][0]:+.2f},{100*o['ci_cal'][1]:+.2f}] | CONT {100*o['cont']:.1f}% | none obs {100*o['none_obs']:.1f} "
             f"base {100*o['none_base']:.1f} | med d_opp {o['med_dopp']:.2f} d_ext {o['med_dext']:.2f}")
 
 
@@ -187,8 +188,9 @@ if __name__ == "__main__":
                     ba = a.ds.map({k: i for i, k in enumerate(cats)}).values * 100000 + a.day.values
                     bw = w.ds.map({k: i for i, k in enumerate(cats)}).values * 100000 + w.day.values
                     m, lo, hi, se = joint_boot_diff((a.rev - a.p_rev).values, ba, (w.rev - w.p_rev).values, bw)
-                    res[f"{tf}|{pen}|{part}|R3-W"] = dict(diff=m, ci=(lo, hi), p=L.p_from_ci(m, se))
-                    lines.append(f"  R3-W edge diff {100*m:+.2f}pp [{100*lo:+.2f},{100*hi:+.2f}] p={L.p_from_ci(m, se):.3f}")
+                    mc, loc, hic, sec = joint_boot_diff((a.rev - a.p_rev).values, a.dk.values, (w.rev - w.p_rev).values, w.dk.values, seed=8)
+                    res[f"{tf}|{pen}|{part}|R3-W"] = dict(diff=m, ci=(lo, hi), p=L.p_from_ci(m, se), ci_cal=(loc, hic), p_cal=L.p_from_ci(mc, sec))
+                    lines.append(f"  R3-W edge diff {100*m:+.2f}pp [{100*lo:+.2f},{100*hi:+.2f}] p={L.p_from_ci(m, se):.3f} calCI[{100*loc:+.2f},{100*hic:+.2f}] p_cal={L.p_from_ci(mc, sec):.3f}")
                 # exploratory: R3 by HTF bias relation
                 for lab, msk in (("with-bias", "with_bias"), ("against-bias", "against_bias")):
                     s = P[(P.cls == "R3") & P[msk]]

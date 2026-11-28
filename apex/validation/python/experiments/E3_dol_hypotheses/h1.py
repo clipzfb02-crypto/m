@@ -58,7 +58,7 @@ def run(name, tf):
             eod = c[lb] - c[t]
             reach_up = r == 1 or r == 0 or (h[t + 1:t + H + 1] > H_).any()
             reach_dn = r == -1 or r == 0 or (l[t + 1:t + H + 1] < Lo).any()
-            rows.append(dict(ds=name, tf=tf, ev=ev, day=D, t=t, du=du, dd=dd, race=r, tau=tau, eod=eod,
+            rows.append(dict(ds=name, tf=tf, ev=ev, day=D, t=t, dk=int(L.dkey(df, t)), du=du, dd=dd, race=r, tau=tau, eod=eod,
                              pdcdir=np.sign(pdc - pdo), reach_up=reach_up, reach_dn=reach_dn,
                              oos=D >= oos0 + emb_days, is_=(D < oos0) and (D + 2 < oos0)))
     R = pd.DataFrame(rows)
@@ -89,8 +89,11 @@ def summarize(R, label):
     blocks_ord = res.ds.astype("category").cat.codes.astype("int64") * 100000 + res.day
     m, lo, hi, se = L.block_boot_mean(res.near_first - res.p_near_emp, blocks_ord, block_len=bl)
     mg, log_, hig, seg_ = L.block_boot_mean(res.near_first - res.p_near_geo, blocks_ord, block_len=bl, seed=1)
+    # robustness: calendar-date blocks (correlated instruments on the same date resampled together)
+    mc, loc, hic, sec = L.block_boot_mean(res.near_first - res.p_near_emp, res.dk.values, block_len=bl, seed=4)
     k = int(res.near_first.sum()); nn = len(res)
-    out.update(n_dec=len(R), n_res=nn, ties=int((R.race == 0).sum()), unres=int((R.race == 9).sum()),
+    out.update(edge_emp_ci_cal=(loc, hic), edge_emp_p_cal=L.p_from_ci(mc, sec),
+               n_dec=len(R), n_res=nn, ties=int((R.race == 0).sum()), unres=int((R.race == 9).sum()),
                near_first=k / max(nn, 1), near_ci=L.wilson(k, nn), base_emp=res.p_near_emp.mean(),
                base_geo=res.p_near_geo.mean(), edge_emp=m, edge_emp_ci=(lo, hi), edge_emp_p=L.p_from_ci(m, se),
                edge_geo=mg, edge_geo_ci=(log_, hig),
@@ -104,12 +107,17 @@ def summarize(R, label):
     kb = int(dr.acc.sum()); nb = len(dr)
     bo = dr.ds.astype("category").cat.codes.astype("int64") * 100000 + dr.day
     md, lod, hid, sed = L.block_boot_mean(dr.acc - dr.acc_mom, bo, block_len=bl, seed=2)
+    ma, loa, hia, sea = L.block_boot_mean(dr.acc - 0.5, dr.dk.values, block_len=bl, seed=5)
+    out.update(dir_ci_cal=(0.5 + loa, 0.5 + hia))
     out.update(dir_n=nb, dir_acc=kb / max(nb, 1), dir_ci=L.wilson(kb, nb), dir_mom=dr.acc_mom.mean(),
                dir_diff_mom=md, dir_diff_ci=(lod, hid), dir_diff_p=L.p_from_ci(md, sed))
     # H1c single-level reach within H_race (both levels per decision)
     rr = pd.concat([pd.DataFrame({"y": R.reach_up.astype(float), "p": R.p_reach_up, "b": R.ds.astype("category").cat.codes.astype("int64") * 100000 + R.day}),
                     pd.DataFrame({"y": R.reach_dn.astype(float), "p": R.p_reach_dn, "b": R.ds.astype("category").cat.codes.astype("int64") * 100000 + R.day})])
     mr, lor, hir, ser = L.block_boot_mean(rr.y - rr.p, rr.b, block_len=bl, seed=3)
+    m2, lo2, hi2, se2 = L.block_boot_mean(np.r_[R.reach_up.astype(float) - R.p_reach_up, R.reach_dn.astype(float) - R.p_reach_dn],
+                                          np.r_[R.dk.values, R.dk.values], block_len=bl, seed=6)
+    out.update(reach_ci_cal=(lo2, hi2))
     out.update(reach_n=len(rr), reach_obs=rr.y.mean(), reach_base=rr.p.mean(), reach_edge=mr, reach_ci=(lor, hir),
                reach_p=L.p_from_ci(mr, ser))
     return out
@@ -124,7 +132,7 @@ def fmt(o):
             f"      H1b dir n={o['dir_n']} acc {100*o['dir_acc']:.1f}% [{100*o['dir_ci'][0]:.1f},{100*o['dir_ci'][1]:.1f}] "
             f"PDcandle {100*o['dir_mom']:.1f}% diff {100*o['dir_diff_mom']:+.2f} [{100*o['dir_diff_ci'][0]:+.2f},{100*o['dir_diff_ci'][1]:+.2f}] p={o['dir_diff_p']:.3f}\n"
             f"      H1c reach n={o['reach_n']} obs {100*o['reach_obs']:.1f} base {100*o['reach_base']:.1f} edge {100*o['reach_edge']:+.2f} "
-            f"[{100*o['reach_ci'][0]:+.2f},{100*o['reach_ci'][1]:+.2f}] p={o['reach_p']:.3f}")
+            f"[{100*o['reach_ci'][0]:+.2f},{100*o['reach_ci'][1]:+.2f}] p={o['reach_p']:.3f} calCI[{100*o['reach_ci_cal'][0]:+.2f},{100*o['reach_ci_cal'][1]:+.2f}]")
 
 
 if __name__ == "__main__":

@@ -1221,7 +1221,21 @@ f_pushExt(array<Ext> reg, float px, bool isHigh, int src, int aBar, float prom, 
                 dup := true
                 break
         if not dup
-            reg.push(Ext.new(px, isHigh, src, f_x(nz(aBar, bar_index)), nz(aBar, bar_index), nz(prom), hlm))
+            int bB = nz(aBar, bar_index)
+            int aB = bB
+            // MTF pivots arrive with the chart bar their STF / HTF candle opened on:
+            // walk forward through that candle to the chart bar that printed px, so the
+            // zone anchors on the exact print (bornBar keeps the open bar for f_mergeAt)
+            int k0 = bar_index - bB
+            if (src == 1 or src == 2) and k0 > 0 and k0 <= anchorMax
+                float rTf  = src == 2 ? f_tfRatio(tfH) : f_tfRatio(tfS)
+                int   kEnd = math.max(0, k0 - math.ceil(rTf) + 1)
+                for k = k0 to kEnd
+                    float p = isHigh ? high[k] : low[k]
+                    if math.abs(p - px) <= syminfo.mintick * 0.5
+                        aB := bar_index - k
+                        break
+            reg.push(Ext.new(px, isHigh, src, f_x(aB), bB, nz(prom), hlm))
     ok
 
 // Stacked liquidity on one side, O(n log n): with the pools sorted by price only
@@ -1237,12 +1251,25 @@ f_stackSide(array<Level> lvls, array<float> px, array<int> ix, float tol) =>
                 Level lb = lvls.get(ix.get(ord.get(b)))
                 if math.abs(la.price - lb.price) <= tol
                     if lb.price > la.price
-                        if la.side == 1
-                            la.inner := true
+                        // the outer pool is the draw and the inner one inducement, unless the
+                        // inner one is the more widely watched level (a minor swing just beyond
+                        // PDH / a session high does not demote it): then both count as a stack
+                        bool  bsl  = la.side == 1
+                        float tIn  = f_tierW(bsl ? la.src : lb.src)
+                        float tOut = f_tierW(bsl ? lb.src : la.src)
+                        bool  dem  = tOut >= tIn
+                        if bsl
                             lb.stack += 1
+                            if dem
+                                la.inner := true
+                            else
+                                la.stack += 1
                         else
-                            lb.inner := true
                             la.stack += 1
+                            if dem
+                                lb.inner := true
+                            else
+                                lb.stack += 1
                     else
                         la.stack += 1
                         lb.stack += 1
@@ -1251,10 +1278,12 @@ f_stackSide(array<Level> lvls, array<float> px, array<int> ix, float tol) =>
     n
 
 f_ghost(Level lv, string reason, array<box> gB, array<label> gL, int maxG, color col, color txtCol) =>
-    box   b = box.new(f_x(lv.anchorBar), lv.top, bar_index, lv.bottom, border_color = color.new(col, 65), border_width = 1,
-      border_style = line.style_dotted, bgcolor = color.new(col, 94))
-    label l = label.new(bar_index, lv.price, reason + " · " + f_levelName(lv.kind, lv.src), style = label.style_label_left,
-      color = color.new(col, 100), textcolor = color.new(txtCol, 20), size = size.tiny, text_font_family = font.family_monospace)
+    // faint by design: a dotted outline over the zone's life, captioned just inside its right end
+    // (the untraded side of the zone) instead of over the candles that follow the sweep
+    box   b = box.new(f_x(lv.anchorBar), lv.top, bar_index, lv.bottom, border_color = color.new(col, 72), border_width = 1,
+      border_style = line.style_dotted, bgcolor = color.new(col, 96))
+    label l = label.new(bar_index, lv.price, reason + " · " + f_levelName(lv.kind, lv.src), style = label.style_label_right,
+      color = color.new(col, 100), textcolor = color.new(txtCol, 40), size = size.tiny, text_font_family = font.family_monospace)
     gB.push(b)
     gL.push(l)
     if gB.size() > maxG
@@ -1265,7 +1294,7 @@ f_ghost(Level lv, string reason, array<box> gB, array<label> gL, int maxG, color
 f_bump(array<int> S, int r, float x) =>
     int k = -1
     if not na(x)
-        k := math.min(NB, math.floor(math.max(0.0, x) / bStep))
+        k := math.floor(math.min(float(NB), math.max(0.0, x) / bStep))
         for j = 0 to k
             S.set(r * NB1 + j, S.get(r * NB1 + j) + 1)
     k
@@ -1503,13 +1532,19 @@ f_book(Trial t) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 bool liveSweep = not na(activeLv) and bar_index > activeLv.createdBar and activeLv.touched(high, low)
 int  liveId    = -1
+float sweptPx  = na
 string sweepMsg = ""
 if liveSweep
     liveId   := activeLv.id
-    sweepMsg := "DOL Engine ▸ target swept: " + activeLv.tag() + " @ " + str.tostring(activeLv.price, format.mintick) + " · " + syminfo.ticker
+    sweptPx  := activeLv.price
+    sweepMsg := "DOL Target Swept ▸ " + f_levelName(activeLv.kind, activeLv.src) + " @ " + str.tostring(activeLv.price, format.mintick) + " · " + syminfo.ticker + " " + timeframe.period
+// a sweep alert only follows a target that was announced (the PoT filter may have held it back);
+// read before the engine runs, which can announce the replacement on this same bar
+bool sweepAlert = liveSweep and liveId == lastAnnId
 
 bool newDolEvent  = false
 bool newIfvgEvent = false
+string ifvgMsg    = ""
 bool drawFlip     = false
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1586,6 +1621,9 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                             f_ghost(lv, hit ? "✕ SWEPT" : "⊘ EJECTED", ghostB, ghostL, ghostMax, lv.side == 1 ? cAbove : cBelow, cGhost)
                         activeId := -1
                         activeLv := na
+                    // HTF imbalances are parked, not discarded: they re-enter when price returns
+                    if ej and lv.src == 2 and lv.isArray()
+                        hfReg.push(lv)
                     pool.remove(i)
 
     // ── 4 · external registry: drop raided pools ─────────────────────────────
@@ -1606,22 +1644,46 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                     // Classic Clean iFVGs use a teal-green, distinct from the bias-table green
                     bool  icl = clean and classic
                     color ic  = nd == 1 ? (icl ? #00B478 : cIBull) : cIBear
-                    box   ib = na
-                    line  il = na
-                    if showIFVG
-                        // Clean style: plain filled zone; Terminal style: tagged zone with a CE line
-                        ib := box.new(f_x(clean ? z.createdBar : z.bornBar), z.top, bar_index + extBars, z.bottom, border_color = color.new(ic, icl ? 50 : clean ? 55 : 35), border_width = 1,
-                          bgcolor = color.new(ic, icl ? 75 : clean ? 85 : 86), text = clean ? "" : nd == 1 ? "iFVG ▲" : "iFVG ▼", text_size = size.tiny, text_color = color.new(ic, 15),
-                          text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
-                        if not clean
-                            il := line.new(f_x(z.bornBar), (z.top + z.bottom) / 2.0, bar_index + extBars, (z.top + z.bottom) / 2.0,
-                              color = color.new(ic, 55), style = line.style_dashed, width = 1)
-                    ifvgs.push(Zone.new(top = z.top, bottom = z.bottom, dir = nd, bornBar = z.bornBar, createdBar = bar_index, bx = ib, ce = il))
-                    if ifvgs.size() > ifvgMax
-                        Zone oldest = ifvgs.shift()
-                        box.delete(oldest.bx)
-                        line.delete(oldest.ce)
+                    // an inversion that mostly overlaps a live same-direction iFVG widens that
+                    // zone instead of stacking a second translucent box on top of it
+                    Zone mz = na
+                    for q in ifvgs
+                        float ov = math.min(z.top, q.top) - math.max(z.bottom, q.bottom)
+                        if q.dir == nd and ov >= 0.5 * math.min(z.top - z.bottom, q.top - q.bottom)
+                            mz := q
+                            break
+                    if not na(mz)
+                        mz.top        := math.max(mz.top, z.top)
+                        mz.bottom     := math.min(mz.bottom, z.bottom)
+                        mz.bornBar    := math.min(mz.bornBar, z.bornBar)
+                        mz.createdBar := bar_index
+                        mz.closesIn   := 0
+                        if not na(mz.bx)
+                            box.set_top(mz.bx, mz.top)
+                            box.set_bottom(mz.bx, mz.bottom)
+                            box.set_left(mz.bx, math.min(box.get_left(mz.bx), f_x(clean ? z.createdBar : z.bornBar)))
+                        if not na(mz.ce)
+                            line.set_y1(mz.ce, (mz.top + mz.bottom) / 2.0)
+                            line.set_y2(mz.ce, (mz.top + mz.bottom) / 2.0)
+                            line.set_x1(mz.ce, math.min(line.get_x1(mz.ce), f_x(z.bornBar)))
+                    else
+                        box   ib = na
+                        line  il = na
+                        if showIFVG
+                            // Clean style: plain filled zone; Terminal style: tagged zone with a CE line
+                            ib := box.new(f_x(clean ? z.createdBar : z.bornBar), z.top, bar_index + extBars, z.bottom, border_color = color.new(ic, icl ? 50 : clean ? 55 : 35), border_width = 1,
+                              bgcolor = color.new(ic, icl ? 75 : clean ? 85 : 86), text = clean ? "" : nd == 1 ? "iFVG ▲" : "iFVG ▼", text_size = size.tiny, text_color = color.new(ic, 15),
+                              text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
+                            if not clean
+                                il := line.new(f_x(z.bornBar), (z.top + z.bottom) / 2.0, bar_index + extBars, (z.top + z.bottom) / 2.0,
+                                  color = color.new(ic, 55), style = line.style_dashed, width = 1)
+                        ifvgs.push(Zone.new(top = z.top, bottom = z.bottom, dir = nd, bornBar = z.bornBar, createdBar = bar_index, bx = ib, ce = il))
+                        if ifvgs.size() > ifvgMax
+                            Zone oldest = ifvgs.shift()
+                            box.delete(oldest.bx)
+                            line.delete(oldest.ce)
                     newIfvgEvent := true
+                    ifvgMsg      += (ifvgMsg == "" ? "" : " | ") + (nd == 1 ? "bullish " : "bearish ") + str.tostring(z.bottom, format.mintick) + " – " + str.tostring(z.top, format.mintick)
                     fvgTrk.remove(i)
                 else if bar_index - z.bornBar > trackAge
                     fvgTrk.remove(i)
@@ -1634,7 +1696,9 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                 if close <= z.top and close >= z.bottom
                     z.closesIn += 1
                 bool failed = z.dir == 1 ? close < z.bottom : close > z.top
-                if z.closesIn > ifvgMaxIn or failed
+                // left far behind: no longer a retest zone for continuation
+                bool faded  = (z.dir == 1 ? close - z.top : z.bottom - close) / atrE > ejectD
+                if z.closesIn > ifvgMaxIn or failed or faded
                     box.delete(z.bx)
                     line.delete(z.ce)
                     ifvgs.remove(i)
@@ -1788,15 +1852,15 @@ if barstate.isconfirmed and not na(atr) and atr > 0
         if newStfPvL and stfLV
             regNew := f_pushExt(extReg, stfPvL, false, 1, f_barAtTime(stfPvLT, anchorMax), (nz(stfRH, stfPvL) - stfPvL) / atr * 0.5, hmS) or regNew
     if useKeyD and pdNew
-        float pdProm = (pdH - pdL) / atr * 0.5
+        float pdProm = (pdHv - pdLv) / atr * 0.5
         float hmD    = math.sqrt(math.max(1.0, 86400.0 / chartS))
-        regNew := f_pushExt(extReg, pdH, true, 6, pdHB, pdProm, hmD) or regNew
-        regNew := f_pushExt(extReg, pdL, false, 6, pdLB, pdProm, hmD) or regNew
+        regNew := f_pushExt(extReg, pdHv, true, 6, pdHB, pdProm, hmD) or regNew
+        regNew := f_pushExt(extReg, pdLv, false, 6, pdLB, pdProm, hmD) or regNew
     if useKeyW and pwNew
-        float pwProm = (pwH - pwL) / atr * 0.5
+        float pwProm = (pwHv - pwLv) / atr * 0.5
         float hmW    = math.sqrt(math.max(1.0, 604800.0 / chartS))
-        regNew := f_pushExt(extReg, pwH, true, 7, pwHB, pwProm, hmW) or regNew
-        regNew := f_pushExt(extReg, pwL, false, 7, pwLB, pwProm, hmW) or regNew
+        regNew := f_pushExt(extReg, pwHv, true, 7, pwHB, pwProm, hmW) or regNew
+        regNew := f_pushExt(extReg, pwLv, false, 7, pwLB, pwProm, hmW) or regNew
     if useSess and intraOK
         if asEnd
             regNew := f_pushExt(extReg, asH, true, 3, asHB, (asH - asL) / atr * 0.5, 1.0) or regNew
@@ -1852,17 +1916,49 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                     ixs.push(pool.size() - 1)
 
     // ── 12 · HTF fair value gaps ──────────────────────────────────────────────
+    // parked HTF FVGs keep being mitigated (CE crop / delivery) while out of range
+    if hfReg.size() > 0
+        for i = hfReg.size() - 1 to 0
+            Level hz     = hfReg.get(i)
+            bool  hzGone = false
+            if hz.touched(high, low)
+                float hzH0  = hz.oTop - hz.oBot
+                float hzPen = hz.side == 1 ? high - hz.oBot : hz.oTop - low
+                hz.fill := math.max(hz.fill, hzH0 > 0 ? math.min(1.0, hzPen / hzH0) : 1.0)
+                if hz.fill >= delivAt
+                    hzGone := true
+                else
+                    if hz.side == 1
+                        hz.bottom := math.max(hz.bottom, high)
+                    else
+                        hz.top := math.min(hz.top, low)
+                    if delivAt >= 1.0
+                        hz.price := (hz.top + hz.bottom) / 2.0
+                    hzGone := hz.top <= hz.bottom
+            if hzGone
+                hfReg.remove(i)
+            else if hz.distance(close) / atrE <= maxATR
+                hz.mult := 1.0
+                pool.push(hz)
+                hfReg.remove(i)
     if hfNew
         int   hd   = nz(hfDir)
         bool  hOk  = hd == 1 ? low > hfTop : high < hfBot
         float hGap = hd == 1 ? close - hfTop : hfBot - close
-        if hOk and hGap >= 0 and hGap / atrE <= ejectD
+        if hOk and hGap >= 0
             int aHF = f_barAtTime(hfT, anchorMax)
             nextId += 1
             Level nf = f_newLevel(nextId, hd == 1 ? 2 : 3, 2, hfTop, hfBot, (hfTop + hfBot) / 2.0, f_x(aHF), aHF, coilScore, indScore)
             nf.qual   := nz(hfQ, 0.5)
             nf.hlMult := math.sqrt(f_tfRatio(tfH))
-            pool.push(nf)
+            // how far price already is from the gap on arrival (track() takes over next bar)
+            nf.maxAway := hGap / atr
+            if hGap / atrE <= ejectD
+                pool.push(nf)
+            else
+                hfReg.push(nf)
+    while hfReg.size() > 30
+        hfReg.shift()
 
     // ── 13 · chart FVGs (quality-gated targets) + inversion tracker ──────────
     if bullFVG
@@ -1945,7 +2041,15 @@ if barstate.isconfirmed and not na(atr) and atr > 0
                 if usePathVP and vpSm.size() > 0
                     float vf = f_pathVol(close, lv.nearEdge())
                     lv.mult *= vf < 0.6 ? 1.10 : vf > 1.4 ? 0.85 : 1.0
-                lv.evaluate(close, atr, anchors, confTol, drawD, nz(potSig), nz(potMu))
+                lv.evaluate(close, atr, anchors, confTol, drawD, nz(potSig), nz(potMu), lv.id == activeId)
+
+        // out of range: beyond Max ATR Distance on the slow-ATR yardstick the registry
+        // re-enters with, proximity is 0 and PoT ~0%. Such a level can neither be chosen
+        // nor kept as the DOL (it stays in the pool for re-entry until ejected). The
+        // committed DOL gets a 10% band so it does not flicker in and out at the edge.
+        for lv in pool
+            if lv.distance(close) / atrE > (lv.id == activeId ? 1.1 : 1.0) * maxATR
+                lv.score := 0.0
 
         // ── 18 · keep the pool constrained (external pools are dropped last) ──
         while pool.size() > poolMax
@@ -1953,7 +2057,11 @@ if barstate.isconfirmed and not na(atr) and atr > 0
             float wK = 1e100
             for i = 0 to pool.size() - 1
                 Level lv = pool.get(i)
-                float key = lv.score + (lv.src >= 1 ? 10.0 : 0.0)
+                // a level survives on its score OR on its direction-neutral pillars: ranking by
+                // score alone (draw pillar, counter-draw x0.5, origin lockout x0.25) discards
+                // every fresh FVG / OB / breaker and the whole counter side once the pool is full
+                float neu = 100.0 * (wProx * lv.prox + wFresh * lv.fresh + wConf * lv.conf + wDens * lv.dens) / math.max(wSum - wDraw, 1e-9)
+                float key = math.max(lv.score, neu) + (lv.src >= 1 ? 10.0 : 0.0)
                 if lv.id != activeId and key < wK
                     wK := key
                     wI := i
@@ -2018,9 +2126,8 @@ if barstate.isconfirmed and not na(atr) and atr > 0
             pick := curI
         else if bI >= 0 and bS >= minScore
             pick := bI
-        if showGhost and curI >= 0 and not curElig and pick != curI
-            Level gone = pool.get(curI)
-            f_ghost(gone, "⊘ INVALIDATED", ghostB, ghostL, ghostMax, gone.side == 1 ? cAbove : cBelow, cGhost)
+        // a target dropped by a draw flip is still in the pool and can be re-selected:
+        // it leaves no ghost (the trail marks swept / ejected targets only)
         int pickId = -1
         activeLv := na
         if pick >= 0

@@ -159,8 +159,8 @@ def pooled_series(S, names, m, H, period, field):
     M = pd.concat(cols_m, axis=1).sort_index()
     Rr = pd.concat(cols_r, axis=1).sort_index()
     need = int(np.ceil(len(names) / 2))
-    ok = (M.notna().sum(1) >= need).values
-    return M.mean(1).values[ok], Rr.mean(1).values[ok]
+    ok = (M.notna().sum(axis=1) >= need).values
+    return M.mean(axis=1).values[ok], Rr.mean(axis=1).values[ok]
 
 
 # ----------------------------------------------------------------------------- point metrics
@@ -230,9 +230,9 @@ def direction(S):
                         hit_c.append(pd.Series(hit.astype(float), index=a['t'], name=s))
                         up_c.append(pd.Series(up.astype(float), index=a['t'], name=s))
                         val_c.append(pd.Series(val.astype(float), index=a['t'], name=s))
-                    Hh = pd.concat(hit_c, axis=1).sort_index().fillna(0).sum(1).values
-                    U = pd.concat(up_c, axis=1).sort_index().fillna(0).sum(1).values
-                    V = pd.concat(val_c, axis=1).sort_index().fillna(0).sum(1).values
+                    Hh = pd.concat(hit_c, axis=1).sort_index().fillna(0).sum(axis=1).values
+                    U = pd.concat(up_c, axis=1).sort_index().fillna(0).sum(axis=1).values
+                    V = pd.concat(val_c, axis=1).sort_index().fillna(0).sum(axis=1).values
                     row['acc'] = float(Hh.sum() / V.sum()) if V.sum() else np.nan
                     row['acc_up'] = float(U.sum() / V.sum()) if V.sum() else np.nan
                     row['n'] = int(V.sum())
