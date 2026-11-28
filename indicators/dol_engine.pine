@@ -2077,19 +2077,20 @@ if annNow
 // ALERTS
 // ═══════════════════════════════════════════════════════════════════════════════
 if annNow
-    alert("DOL Engine ▸ new target: " + activeLv.tag() + " @ " + str.tostring(activeLv.price, format.mintick) + " · score " + str.tostring(activeLv.score, "0.0") +
-      " · PoT " + str.tostring(activePoT * 100.0, "0") + "% · " + syminfo.ticker, alert.freq_once_per_bar_close)
+    alert("New DOL Target Active ▸ " + f_levelName(activeLv.kind, activeLv.src) + (activeLv.side == 1 ? " ▲ " : " ▼ ") + str.tostring(activeLv.price, format.mintick) +
+      " (zone " + str.tostring(activeLv.bottom, format.mintick) + " – " + str.tostring(activeLv.top, format.mintick) + ") · PoT " + str.tostring(activePoT * 100.0, "0.0") +
+      "% · score " + str.tostring(activeLv.score, "0") + " · " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar_close)
 if newIfvgEvent
-    alert("DOL Engine ▸ new iFVG formed · " + syminfo.ticker, alert.freq_once_per_bar_close)
-if liveSweep
+    alert("New iFVG Formed ▸ " + ifvgMsg + " · " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar_close)
+if sweepAlert
     alert(sweepMsg, alert.freq_once_per_bar)
 if drawFlip
     alert("DOL Engine ▸ draw direction flipped " + (lastDirSide == 1 ? "▲ BUY-SIDE" : "▼ SELL-SIDE") + " · D " + str.tostring(drawD, "0.00") + " · " + syminfo.ticker,
       alert.freq_once_per_bar_close)
 
-alertcondition(annNow, "New DOL Target Active", "DOL Engine: new Draw on Liquidity target active on {{ticker}} ({{interval}}) @ {{close}}")
-alertcondition(newIfvgEvent, "New iFVG Formed", "DOL Engine: an FVG inverted into a new iFVG on {{ticker}} ({{interval}})")
-alertcondition(liveSweep, "DOL Target Swept", "DOL Engine: active DOL target swept on {{ticker}} ({{interval}}) @ {{close}}")
+alertcondition(annNow, "New DOL Target Active", 'New DOL Target Active on {{ticker}} ({{interval}}): target {{plot("DOL Price")}} · PoT {{plot("DOL PoT %")}}% · price {{close}}')
+alertcondition(newIfvgEvent, "New iFVG Formed", 'New iFVG Formed on {{ticker}} ({{interval}}): an FVG was closed through and inverted · price {{close}}')
+alertcondition(sweepAlert, "DOL Target Swept", 'DOL Target Swept on {{ticker}} ({{interval}}): level {{plot("Swept DOL Price")}} taken · price {{close}}')
 alertcondition(drawFlip, "Draw Direction Flip", "DOL Engine: order-flow draw direction flipped on {{ticker}} ({{interval}})")
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2109,25 +2110,30 @@ float invL     = na
 float invRR    = na
 float invWin   = na
 if barstate.islast
-    reachU50 := f_reachD(sUp, htfBias + 1, 0.5)
-    reachU20 := f_reachD(sUp, htfBias + 1, 0.2)
-    reachD50 := f_reachD(sDn, 1 - htfBias, 0.5)
-    reachD20 := f_reachD(sDn, 1 - htfBias, 0.2)
-    if ttHit.size() > 0
+    // only what the chosen style displays: Clean shows none of these unless Reach
+    // Bands / Invalidation are on, and this block runs on every realtime tick
+    if not clean or showReach
+        reachU50 := f_reachD(sUp, htfBias + 1, 0.5)
+        reachU20 := f_reachD(sUp, htfBias + 1, 0.2)
+        reachD50 := f_reachD(sDn, 1 - htfBias, 0.5)
+        reachD20 := f_reachD(sDn, 1 - htfBias, 0.2)
+    if not clean and ttHit.size() > 0
         medHit := ttHit.median()
     if not na(activeLv) and nz(atr) > 0
-        // typical bars-to-hit of past DOLs that were taken from a similar distance
-        float      dNow = math.max(0.0, activeLv.distance(close)) / atr
-        array<int> sim  = array.new<int>()
-        for [i, dd] in dHit
-            if math.abs(dd - dNow) <= 0.5
-                sim.push(ttHit.get(i))
-        if sim.size() >= 5
-            etaHit := sim.median()
-        [i0, i1, i2] = f_invalidation(activeLv)
-        invL   := i0
-        invRR  := i1
-        invWin := f_raceAdj(i2)
+        if not clean
+            // typical bars-to-hit of past DOLs that were taken from a similar distance
+            float      dNow = math.max(0.0, activeLv.distance(close)) / atr
+            array<int> sim  = array.new<int>()
+            for [i, dd] in dHit
+                if math.abs(dd - dNow) <= 0.5
+                    sim.push(ttHit.get(i))
+            if sim.size() >= 5
+                etaHit := sim.median()
+        if not clean or showInv
+            [i0, i1, i2] = f_invalidation(activeLv)
+            invL   := i0
+            invRR  := i1
+            invWin := f_raceAdj(i2)
 
 if barstate.islast
     for b in dB
@@ -2213,16 +2219,23 @@ if barstate.islast
               textcolor = color.new(cIBear, 20), size = size.tiny, text_font_family = font.family_monospace))
         if clean
             // dashed zone, glowing core line, dashed tether into a Target / PoT label
-            dB.push(box.new(aX, activeLv.top, xR, activeLv.bottom, border_color = color.new(c, 75), border_width = 1,
-              border_style = line.style_dashed, bgcolor = color.new(c, 92)))
+            // light backgrounds: lime / white on white vanish, so stroke with a darker ink and a solid core
+            color inkC  = lightBg ? color.from_gradient(0.35, 0.0, 1.0, c, #000000) : c
+            color coreC = lightBg ? inkC : color.new(color.white, 15)
+            dB.push(box.new(aX, activeLv.top, xR, activeLv.bottom, border_color = color.new(inkC, 75), border_width = 1,
+              border_style = line.style_dashed, bgcolor = color.new(inkC, 92)))
             // five-layer glow with a white-hot filament core
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 90), width = 10))
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 80), width = 7))
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 60), width = 4))
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(c, 30), width = 2))
-            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(color.white, 15), width = 1))
-            dLn.push(line.new(bar_index, close, xR, activeLv.price, color = color.new(c, 30), style = line.style_dashed, width = 1))
-            dLb.push(label.new(xR, activeLv.price, "Target: " + f_shortName(activeLv.kind, activeLv.src) + "\nPoT: " + str.tostring(activePoT * 100.0, "0.0") + "%",
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(inkC, 90), width = 10))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(inkC, 80), width = 7))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(inkC, 60), width = 4))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = color.new(inkC, 30), width = 2))
+            dLn.push(line.new(aX, activeLv.price, xR, activeLv.price, color = coreC, width = 1))
+            dLn.push(line.new(bar_index, close, xR, activeLv.price, color = color.new(inkC, 30), style = line.style_dashed, width = 1))
+            // MTF pools carry their real timeframe (4H BSL, D BEFVG) instead of STF / HTF
+            string tfL = activeLv.src == 2 ? f_tfLabel(f_tfSafe(tfH)) : f_tfLabel(f_tfSafe(tfS))
+            string tNm = activeLv.src == 1 or activeLv.src == 2 ? tfL + " " + f_shortName(activeLv.kind, 0) : f_shortName(activeLv.kind, activeLv.src)
+            string tTx = "Target: " + tNm + "\n" + (sweptNow ? "Swept ✓" : "PoT: " + str.tostring(activePoT * 100.0, "0.0") + "%")
+            dLb.push(label.new(xR, activeLv.price, tTx,
               style = label.style_label_left, color = cLblBg, textcolor = c, size = size.normal, textalign = text.align_center, tooltip = tip))
         else
             int zA = int(math.round(92.0 - activeLv.score * 0.12))
@@ -2297,14 +2310,21 @@ if showTable and barstate.islast and clean
     f_cellC(dash, 0, 0, "Timeframe", cHdrTx, cHdrBg)
     f_cellC(dash, 1, 0, "Bias", cHdrTx, cHdrBg)
     for k = 0 to 2
-        int sb = k == 0 ? htfBias : k == 1 ? stfBias : exeBias
-        int ib = k == 0 ? htfIB : k == 1 ? stfIB : exeIB
+        int sb = k == 0 ? htfBiasT : k == 1 ? stfBiasT : exeBiasT
+        int ib = k == 0 ? htfIBT : k == 1 ? stfIBT : exeIBT
         int b  = sb != 0 ? sb : ib
-        f_cellC(dash, 0, k + 1, f_tfLabel(k == 0 ? tfH : k == 1 ? tfS : tfE), cText, na)
-        f_cellC(dash, 1, k + 1, b == 1 ? "BULLISH" : b == -1 ? "BEARISH" : "NEUTRAL", f_biasCol(b), na)
+        bool rowNa = k == 0 ? tfNaH : k == 1 ? tfNaS : tfWarn
+        f_cellC(dash, 0, k + 1, f_tfLabel(k == 0 ? tfH : k == 1 ? tfS : tfE), rowNa ? cGhost : cText, na)
+        f_cellC(dash, 1, k + 1, rowNa ? "N/A" : b == 1 ? "BULLISH" : b == -1 ? "BEARISH" : "NEUTRAL", rowNa ? cGhost : f_biasCol(b), na)
+    int fRow = 4
     if tfWarn
-        f_cellC(dash, 0, 4, "⚠ CHART TF", cIBear, na)
-        f_cellC(dash, 1, 4, "> EXEC TF", cIBear, na)
+        f_cellC(dash, 0, fRow, "⚠ CHART TF", cIBear, na)
+        f_cellC(dash, 1, fRow, "> EXEC TF", cIBear, na)
+        fRow += 1
+    // no zone on the chart: say why instead of leaving an empty chart
+    if showDOL and not dolShown
+        f_cellC(dash, 0, fRow, "Target", cGhost, na)
+        f_cellC(dash, 1, fRow, na(activeLv) ? "NONE" : "FILTERED", cGhost, na)
 
 // Terminal style: full panel
 if showTable and barstate.islast and not clean
@@ -2312,7 +2332,7 @@ if showTable and barstate.islast and not clean
     color hdr = color.new(cAbove, 84)
     color dim = color.new(cText, 40)
     f_cell(dash, 0, 0, "◈ DOL ENGINE v2", cAbove, hdr)
-    f_cell(dash, 1, 0, str.upper(modeIn), cText, hdr)
+    f_cell(dash, 1, 0, fitK > 0 ? "AUTO-FIT" : str.upper(modeIn), cText, hdr)
     f_cell(dash, 2, 0, f_kzName(kz), kz > 0 ? cLVN : dim, hdr)
     f_cell(dash, 3, 0, theme, dim, hdr)
     f_cell(dash, 0, 1, "TF", dim, na)
@@ -2322,8 +2342,8 @@ if showTable and barstate.islast and not clean
     int row = 2
     for k = 0 to 2
         string nm = k == 0 ? "HTF  " + f_tfLabel(tfH) : k == 1 ? "STF  " + f_tfLabel(tfS) : "EXEC " + f_tfLabel(tfE)
-        int    sb = k == 0 ? htfBias : k == 1 ? stfBias : exeBias
-        int    ib = k == 0 ? htfIB : k == 1 ? stfIB : exeIB
+        int    sb = k == 0 ? htfBiasT : k == 1 ? stfBiasT : exeBiasT
+        int    ib = k == 0 ? htfIBT : k == 1 ? stfIBT : exeIBT
         float  rh = k == 0 ? htfRH : k == 1 ? stfRH : exeRH
         float  rl = k == 0 ? htfRL : k == 1 ? stfRL : exeRL
         string zn = "—"
@@ -2443,6 +2463,7 @@ if not na(activeLv)
 float hitOut = stN.get(4) > 0 ? 100.0 * stK.get(4) / stN.get(4) : na
 plot(dolPriceOut, "DOL Price", color = cAbove, display = display.data_window)
 plot(dolScoreOut, "DOL Score", color = cAbove, display = display.data_window)
-plot(activePoT * 100.0, "DOL PoT %", color = cAbove, display = display.data_window)
+plot(activePoT * 100.0, "DOL PoT %", color = cAbove, display = display.data_window, precision = 1)
 plot(drawD, "Draw Direction D", color = cAbove, display = display.data_window)
 plot(hitOut, "Ledger Hit %", color = cAbove, display = display.data_window)
+plot(sweptPx, "Swept DOL Price", color = cBelow, display = display.data_window)
