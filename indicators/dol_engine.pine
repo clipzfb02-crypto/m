@@ -25,8 +25,10 @@
 //
 //  Non-repainting: structure, ranking, ledger, iFVG and breaker logic run only on
 //  barstate.isconfirmed. Every request.security() reads [1]-offset series with
-//  lookahead_on and never requests a timeframe below the chart's. The PoT readout
-//  and the intrabar sweep alert are deliberately live (unclosed data).
+//  lookahead_on and never requests a timeframe below the chart's. The bias table
+//  also reads a requested bar's own bias, but only on the confirmed chart bar that
+//  closes it. The PoT readout and the intrabar sweep alert are deliberately live
+//  (unclosed data).
 // ═══════════════════════════════════════════════════════════════════════════════
 indicator("DOL Engine v2 · Draw on Liquidity", shorttitle = "DOL Engine v2", overlay = true, max_bars_back = 500,
   max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
@@ -52,189 +54,201 @@ const string G_ACC   = "Accuracy Engine"
 const string G_IFVG  = "Inversion FVG"
 const string G_LVN   = "Volume Profile"
 const string G_GHOST = "Ghost Trail"
-const string G_TABLE = "Terminal Panel"
+const string G_TABLE = "Bias Table · Panel"
 const string G_CONF  = "Sessions & Killzones"
 const string G_COL   = "Theme"
 
 // ── Trading mode ──────────────────────────────────────────────────────────────
 string modeIn  = input.string("Day Trading", "Trading Mode", options = ["Swing", "Day Trading", "Scalping", "Custom"], group = G_MODE,
-  tooltip = "HTF / STF / Execution timeframes.\nSwing: W / D / 4H\nDay Trading: D / 4H / 1H\nScalping: 1H / 15m / 5m\nCustom defaults to 4H / 1H / 15m.\nKeep the chart timeframe at or below the Execution TF.")
-string cHTF    = input.timeframe("240", "Custom HTF (Structure)", group = G_MODE)
-string cSTF    = input.timeframe("60", "Custom STF (Sub-structure)", group = G_MODE)
-string cEXE    = input.timeframe("15", "Custom Execution TF", group = G_MODE)
+  tooltip = "HTF / STF / Execution timeframes.\nSwing: W / D / 4H\nDay Trading: D / 4H / 1H\nScalping: 1H / 15m / 5m\nCustom defaults to 4H / 1H / 15m.\nKeep the chart timeframe at or below the Execution TF.", display = display.none)
+string cHTF    = input.timeframe("240", "Custom HTF (Structure)", group = G_MODE, display = display.none, active = modeIn == "Custom")
+string cSTF    = input.timeframe("60", "Custom STF (Sub-structure)", group = G_MODE, display = display.none, active = modeIn == "Custom")
+string cEXE    = input.timeframe("15", "Custom Execution TF", group = G_MODE, display = display.none, active = modeIn == "Custom")
 int    biasLen = input.int(3, "MTF Pivot Strength", minval = 1, maxval = 10, group = G_MODE,
-  tooltip = "Bars required on each side of a swing on the HTF / STF / Execution timeframes.")
+  tooltip = "Bars required on each side of a swing on the HTF / STF / Execution timeframes.", display = display.none)
 
-string tfH = switch modeIn
+bool   autoFit = input.bool(true, "Auto-Fit to Chart Timeframe", group = G_MODE,
+  tooltip = "On a chart above the mode's Execution TF the lower rows cannot be read without repainting. Auto-fit then uses the smallest set whose Execution TF is at or above the chart timeframe:\n<= 15m: 4H / 1H / 15m\n<= 1H: D / 4H / 1H\n<= 4H: W / D / 4H\n<= D: M / W / D\n<= W: 3M / M / W")
+
+string tfH0 = switch modeIn
     "Swing"    => "W"
     "Scalping" => "60"
     "Custom"   => cHTF
     => "D"
-string tfS = switch modeIn
+string tfS0 = switch modeIn
     "Swing"    => "D"
     "Scalping" => "15"
     "Custom"   => cSTF
     => "240"
-string tfE = switch modeIn
+string tfE0 = switch modeIn
     "Swing"    => "240"
     "Scalping" => "5"
     "Custom"   => cEXE
     => "60"
+// Auto-fit: above the Execution TF every lower row would be requested on the chart
+// timeframe (f_tfSafe) and printed under a lower-TF label next to a red warning.
+// Step up to the smallest standard set whose Execution TF covers the chart instead.
+int    chSec = timeframe.in_seconds()
+int    fitK  = not autoFit or chSec <= timeframe.in_seconds(tfE0) ? 0 : chSec <= 900 ? 1 : chSec <= 3600 ? 2 : chSec <= 14400 ? 3 : chSec <= 86400 ? 4 : chSec <= 604800 ? 5 : 0
+string tfH   = fitK == 1 ? "240" : fitK == 2 ? "D" : fitK == 3 ? "W" : fitK == 4 ? "M" : fitK == 5 ? "3M" : tfH0
+string tfS   = fitK == 1 ? "60" : fitK == 2 ? "240" : fitK == 3 ? "D" : fitK == 4 ? "W" : fitK == 5 ? "M" : tfS0
+string tfE   = fitK == 1 ? "15" : fitK == 2 ? "60" : fitK == 3 ? "240" : fitK == 4 ? "D" : fitK == 5 ? "W" : tfE0
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 int calcBars = input.int(5000, "Calculation Depth (bars)", minval = 500, maxval = 20000, step = 500, group = G_ENG,
-  tooltip = "Scoring, target selection and the accuracy ledger run on the most recent N bars. Levels are tracked on every bar. Lower = faster load.")
-int atrLen   = input.int(14, "ATR Length", minval = 1, group = G_ENG)
+  tooltip = "Scoring, target selection and the accuracy ledger run on the most recent N bars. Levels are tracked on every bar. Lower = faster load.", display = display.none)
+int atrLen   = input.int(14, "ATR Length", minval = 1, group = G_ENG, display = display.none)
 
 // ── Liquidity sources ─────────────────────────────────────────────────────────
-int   pivLen    = input.int(5, "Swing Pivot Length", minval = 2, maxval = 30, group = G_LIQ)
+int   pivLen    = input.int(5, "Swing Pivot Length", minval = 2, maxval = 30, group = G_LIQ, display = display.none)
 bool  useLiq    = input.bool(true, "BSL / SSL · Chart Swings", group = G_LIQ)
 bool  useMTFLiq = input.bool(true, "BSL / SSL · HTF + STF Swings", group = G_LIQ)
 float zoneATR   = input.float(0.20, "Liquidity Zone Depth (ATR)", minval = 0.0, step = 0.05, group = G_LIQ,
-  tooltip = "Depth of the BSL / SSL zone drawn beyond the swing, where resting stops sit.")
-float eqTol     = input.float(0.10, "Equal H/L Tolerance (ATR)", minval = 0.0, step = 0.01, group = G_LIQ)
+  tooltip = "Depth of the BSL / SSL zone drawn beyond the swing, where resting stops sit.", display = display.none)
+float eqTol     = input.float(0.10, "Equal H/L Tolerance (ATR)", minval = 0.0, step = 0.01, group = G_LIQ, display = display.none)
 float clusATR   = input.float(0.75, "Stacked-Liquidity Window (ATR)", minval = 0.0, step = 0.05, group = G_LIQ,
-  tooltip = "Same-side pools within this distance form a stack: the outermost one is the draw, the inner ones are inducement.")
+  tooltip = "Same-side pools within this distance form a stack: the outermost one is the draw, the inner ones are inducement (unless an inner pool is a more widely watched level, e.g. PDH or a session high, than the pool beyond it: then both count as a stack).", display = display.none)
 float testATR   = input.float(0.30, "Test Proximity (ATR)", minval = 0.05, step = 0.05, group = G_LIQ,
-  tooltip = "A bar that comes this close to a pool without taking it counts as a test (more resting stops).")
+  tooltip = "A bar that comes this close to a pool without taking it counts as a test (more resting stops).", display = display.none)
 int   anchorMax = input.int(300, "Max Anchor Scan (bars)", minval = 20, maxval = 450, group = G_LIQ,
-  tooltip = "How far back the engine scans to anchor a zone on the exact candle that printed it.")
+  tooltip = "How far back the engine scans to anchor a zone on the exact candle that printed it.", display = display.none)
 
 // ── Key liquidity ─────────────────────────────────────────────────────────────
 bool   useKeyD = input.bool(true, "PDH / PDL", group = G_KEY)
 bool   useKeyW = input.bool(true, "PWH / PWL", group = G_KEY)
 bool   useSess = input.bool(true, "Session Highs / Lows (intraday ≤ 1H)", group = G_KEY)
-string sessAs  = input.session("2000-0000", "Asia Range", group = G_KEY)
-string sessLo  = input.session("0200-0500", "London Range", group = G_KEY)
-string sessNA  = input.session("0930-1200", "NY AM Range", group = G_KEY)
+string sessAs  = input.session("2000-0000", "Asia Range", group = G_KEY, display = display.none, active = useSess)
+string sessLo  = input.session("0200-0500", "London Range", group = G_KEY, display = display.none, active = useSess)
+string sessNA  = input.session("0930-1200", "NY AM Range", group = G_KEY, display = display.none, active = useSess)
 
 // ── Imbalances & blocks ───────────────────────────────────────────────────────
 bool   useFVG    = input.bool(true, "Fair Value Gaps", group = G_ARR)
 bool   useHTFFVG = input.bool(true, "HTF Fair Value Gaps", group = G_ARR)
-float  fvgMin    = input.float(0.15, "Min FVG Size (ATR)", minval = 0.0, step = 0.05, group = G_ARR)
+float  fvgMin    = input.float(0.15, "Min FVG Size (ATR)", minval = 0.0, step = 0.05, group = G_ARR, display = display.none)
 float  fvgQMin   = input.float(0.45, "Min FVG Quality (0-1)", minval = 0.0, maxval = 1.0, step = 0.05, group = G_ARR,
-  tooltip = "Displacement quality of the middle candle (body vs ATR, body ratio), gap size and a nearby break of structure.")
+  tooltip = "Displacement quality of the middle candle (body vs ATR, body ratio), gap size and a nearby break of structure.", display = display.none, active = useFVG)
 bool   useOB     = input.bool(true, "Order Blocks", group = G_ARR)
-int    obLook    = input.int(20, "OB Search Window (bars)", minval = 3, maxval = 60, group = G_ARR)
+int    obLook    = input.int(20, "OB Search Window (bars)", minval = 3, maxval = 60, group = G_ARR, display = display.none)
 float  obQMin    = input.float(0.40, "Min OB Quality (0-1)", minval = 0.0, maxval = 1.0, step = 0.05, group = G_ARR,
-  tooltip = "Imbalance left in the leg, liquidity taken at the origin, and leg size.")
+  tooltip = "Imbalance left in the leg, liquidity taken at the origin, and leg size.", display = display.none, active = useOB)
 bool   useBRK    = input.bool(true, "Breaker Blocks", group = G_ARR,
   tooltip = "Only order blocks whose leg swept prior liquidity can become breakers.")
 string delivIn   = input.string("CE 50%", "Imbalance Delivered At", options = ["Touch", "CE 50%", "Full Fill"], group = G_ARR,
-  tooltip = "When a non-active FVG / OB counts as delivered. Partially filled zones are cropped and stay live. The active DOL always counts a touch as a sweep.")
-float  dispMult  = input.float(1.2, "Displacement Body (x ATR)", minval = 0.3, step = 0.1, group = G_ARR)
+  tooltip = "When a non-active FVG / OB counts as delivered. Partially filled zones are cropped and stay live. The active DOL always counts a touch as a sweep.", display = display.none)
+float  dispMult  = input.float(1.2, "Displacement Body (x ATR)", minval = 0.3, step = 0.1, group = G_ARR, display = display.none)
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
-int   poolMax    = input.int(40, "Pool Size", minval = 10, maxval = 80, group = G_SCORE)
+int   poolMax    = input.int(40, "Pool Size", minval = 10, maxval = 80, group = G_SCORE, display = display.none)
 float maxATR     = input.float(10.0, "Max ATR Distance", minval = 1.0, step = 0.5, group = G_SCORE,
-  tooltip = "Proximity scores 0 beyond this distance.")
+  tooltip = "Proximity scores 0 beyond this distance.", display = display.none)
 float ejectMult  = input.float(1.5, "Eject Multiplier (x Max Distance)", minval = 1.0, step = 0.1, group = G_SCORE,
-  tooltip = "Levels further than Max ATR Distance x this multiplier (measured in slow ATR) leave the pool. External liquidity re-enters when price comes back within range.")
+  tooltip = "Levels further than Max ATR Distance x this multiplier (measured in slow ATR) leave the pool. External liquidity re-enters when price comes back within range.", display = display.none)
 float minDistATR = input.float(0.5, "Min Target Distance (ATR)", minval = 0.0, step = 0.05, group = G_SCORE,
-  tooltip = "Proximity tapers below this distance: a zone price is already sitting on is being delivered, not drawn to.")
-int   originBars = input.int(3, "Origin Lockout (bars)", minval = 0, maxval = 50, group = G_SCORE)
+  tooltip = "Proximity tapers below this distance: a zone price is already sitting on is being delivered, not drawn to.", display = display.none)
+int   originBars = input.int(3, "Origin Lockout (bars)", minval = 0, maxval = 50, group = G_SCORE, display = display.none)
 float awayATR    = input.float(1.0, "Array Must Leave By (ATR)", minval = 0.0, step = 0.1, group = G_SCORE,
-  tooltip = "A fresh FVG / OB / breaker is the origin of the move, not its destination, until price has moved this far away from it.")
-float halfLife   = input.float(150.0, "Freshness Half-Life (bars)", minval = 5.0, step = 5.0, group = G_SCORE)
-float confATR    = input.float(0.35, "Confluence Tolerance (ATR)", minval = 0.0, step = 0.05, group = G_SCORE)
-int   densLen    = input.int(20, "Density Window (bars)", minval = 5, maxval = 100, group = G_SCORE)
-float wProx      = input.float(25.0, "Weight · Proximity", minval = 0.0, group = G_SCORE)
-float wFresh     = input.float(10.0, "Weight · Freshness", minval = 0.0, group = G_SCORE)
-float wConf      = input.float(15.0, "Weight · Confluence", minval = 0.0, group = G_SCORE)
-float wDens      = input.float(20.0, "Weight · Density / Magnitude", minval = 0.0, group = G_SCORE)
-float wDraw      = input.float(30.0, "Weight · Draw Direction", minval = 0.0, group = G_SCORE)
-float minScore   = input.float(35.0, "Min Score for DOL", minval = 0.0, maxval = 100.0, group = G_SCORE)
+  tooltip = "A fresh FVG / OB / breaker is the origin of the move, not its destination, until price has moved this far away from it.", display = display.none)
+float halfLife   = input.float(150.0, "Freshness Half-Life (bars)", minval = 5.0, step = 5.0, group = G_SCORE, display = display.none)
+float confATR    = input.float(0.35, "Confluence Tolerance (ATR)", minval = 0.0, step = 0.05, group = G_SCORE, display = display.none)
+int   densLen    = input.int(20, "Density Window (bars)", minval = 5, maxval = 100, group = G_SCORE, display = display.none)
+float wProx      = input.float(25.0, "Weight · Proximity", minval = 0.0, group = G_SCORE, display = display.none)
+float wFresh     = input.float(10.0, "Weight · Freshness", minval = 0.0, group = G_SCORE, display = display.none)
+float wConf      = input.float(15.0, "Weight · Confluence", minval = 0.0, group = G_SCORE, display = display.none)
+float wDens      = input.float(20.0, "Weight · Density / Magnitude", minval = 0.0, group = G_SCORE, display = display.none)
+float wDraw      = input.float(30.0, "Weight · Draw Direction", minval = 0.0, group = G_SCORE, display = display.none)
+float minScore   = input.float(35.0, "Min Score for DOL", minval = 0.0, maxval = 100.0, group = G_SCORE, display = display.none)
 float hyst       = input.float(4.0, "Switch Hysteresis (pts)", minval = 0.0, group = G_SCORE,
-  tooltip = "A challenger must outscore the active DOL by this many points (twice as many to flip sides) on two consecutive bars.")
+  tooltip = "A challenger must outscore the active DOL by this many points (twice as many to flip sides) on two consecutive bars.", display = display.none)
 bool  useCal     = input.bool(true, "Adaptive Calibration", group = G_SCORE,
   tooltip = "Nudges each level family (chart liquidity, external liquidity, FVG, OB/BRK) by its own hit rate on this chart, learned by the accuracy ledger. Bounded to x0.8 - x1.2.")
 bool  usePathVP  = input.bool(true, "Volume-Profile Path Cost", group = G_SCORE,
   tooltip = "Targets behind a thin-volume path score higher, targets behind a high-volume wall lower.")
 
 // ── Order flow ────────────────────────────────────────────────────────────────
-float wS      = input.float(0.50, "D · Structure", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW)
-float wM      = input.float(0.20, "D · Displacement", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW)
-float wL      = input.float(0.30, "D · Liquidity Events", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW)
-int   dispHL  = input.int(12, "Displacement Half-Life (bars)", minval = 1, group = G_FLOW)
-int   liqHL   = input.int(24, "Liquidity-Event Half-Life (bars)", minval = 1, group = G_FLOW)
+float wS      = input.float(0.50, "D · Structure", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW, display = display.none, tooltip = "Weights of the order-flow vector D (-1 sell-side ... +1 buy-side): MTF structure, recent displacement and recent liquidity raids. The Draw pillar scores each level by its alignment with D.")
+float wM      = input.float(0.20, "D · Displacement", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW, display = display.none)
+float wL      = input.float(0.30, "D · Liquidity Events", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW, display = display.none)
+int   dispHL  = input.int(12, "Displacement Half-Life (bars)", minval = 1, group = G_FLOW, display = display.none)
+int   liqHL   = input.int(24, "Liquidity-Event Half-Life (bars)", minval = 1, group = G_FLOW, display = display.none)
 float dGate   = input.float(0.35, "Direction Gate |D|", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW,
-  tooltip = "Above this |D| the engine prefers targets on the side order flow points to.")
-float ctrMult = input.float(0.50, "Counter-Draw Multiplier", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW)
-float kzHx    = input.float(2.0, "Off-Killzone Hysteresis x", minval = 1.0, step = 0.25, group = G_FLOW)
+  tooltip = "Above this |D| the engine prefers targets on the side order flow points to.", display = display.none)
+float ctrMult = input.float(0.50, "Counter-Draw Multiplier", minval = 0.0, maxval = 1.0, step = 0.05, group = G_FLOW, display = display.none)
+float kzHx    = input.float(2.0, "Off-Killzone Hysteresis x", minval = 1.0, step = 0.25, group = G_FLOW, display = display.none)
 
 // ── DOL display ───────────────────────────────────────────────────────────────
 string uiStyle   = input.string("Clean", "Display Style", options = ["Clean", "Terminal"], group = G_DOL,
-  tooltip = "Clean: target zone with a Target / PoT label and a compact Timeframe / Bias table.\nTerminal: full HUD (score, draw, killzone, R:R) and the accuracy panel.")
+  tooltip = "Clean: target zone with a Target / PoT label and a compact Timeframe / Bias table.\nTerminal: full HUD (score, draw, killzone, R:R) and the accuracy panel.", display = display.none)
 bool   showDOL   = input.bool(true, "Show Active DOL", group = G_DOL)
-int    secN      = input.int(0, "Secondary Targets", minval = 0, maxval = 5, group = G_DOL)
+int    secN      = input.int(0, "Secondary Targets", minval = 0, maxval = 5, group = G_DOL, display = display.none)
 bool   showObj   = input.bool(false, "Show HTF Objective", group = G_DOL,
   tooltip = "The strongest liquidity pool on the side order flow points to, ranked without proximity.")
 bool   showInv   = input.bool(false, "Show Invalidation + R:R", group = G_DOL)
 bool   showReach = input.bool(false, "Show Reach Bands", group = G_DOL,
   tooltip = "Empirical median / 80th-percentile excursion over the PoT horizon for this symbol.")
 bool   showPool  = input.bool(false, "Show Candidate Pool", group = G_DOL)
-int    extBars   = input.int(20, "Right Extension (bars)", minval = 2, maxval = 100, group = G_DOL)
-string hudSize   = input.string("Normal", "HUD (Terminal style)", options = ["Compact", "Normal", "Large"], group = G_DOL)
+int    extBars   = input.int(20, "Right Extension (bars)", minval = 2, maxval = 100, group = G_DOL, display = display.none)
+string hudSize   = input.string("Normal", "HUD (Terminal style)", options = ["Compact", "Normal", "Large"], group = G_DOL, display = display.none, active = uiStyle == "Terminal")
 
 // ── Probability of Touch ──────────────────────────────────────────────────────
-float  minPoT   = input.float(0.0, "Minimum PoT to Show DOL (%)", minval = 0.0, maxval = 95.0, step = 1.0, group = G_POT)
+float  minPoT   = input.float(0.0, "Minimum PoT to Show DOL (%)", minval = 0.0, maxval = 95.0, step = 1.0, group = G_POT, display = display.none, tooltip = "Hides the active DOL (and holds its New DOL Target Active alert) while its live Probability of Touch is below this value. PoT is capped at 95%.")
 string potModel = input.string("Empirical", "PoT Model", options = ["Analytic", "Empirical"], group = G_POT,
-  tooltip = "Analytic: first-passage model with drift. Empirical: blends in how often price on this symbol actually travelled that far within the horizon (by HTF regime).")
-int    potH     = input.int(30, "PoT Horizon (bars)", minval = 1, maxval = 450, group = G_POT)
-int    potLen   = input.int(50, "Volatility Lookback (bars)", minval = 5, maxval = 400, group = G_POT)
-float  driftW   = input.float(0.5, "Drift Weight", minval = 0.0, maxval = 1.0, step = 0.1, group = G_POT)
+  tooltip = "Analytic: first-passage model with drift. Empirical: blends in how often price on this symbol actually travelled that far within the horizon (by HTF regime).", display = display.none)
+int    potH     = input.int(30, "PoT Horizon (bars)", minval = 1, maxval = 450, group = G_POT, display = display.none, tooltip = "Number of bars ahead over which the Probability of Touch is measured.")
+int    potLen   = input.int(50, "Volatility Lookback (bars)", minval = 5, maxval = 400, group = G_POT, display = display.none)
+float  driftW   = input.float(0.5, "Drift Weight", minval = 0.0, maxval = 1.0, step = 0.1, group = G_POT, display = display.none)
 float  priorM   = input.float(30.0, "Analytic Prior Strength", minval = 0.0, step = 5.0, group = G_POT,
-  tooltip = "Pseudo-observations of the analytic model in the empirical blend.")
+  tooltip = "Pseudo-observations of the analytic model in the empirical blend.", display = display.none)
 
 // ── Accuracy engine ───────────────────────────────────────────────────────────
 string accView = input.string("Compact", "Accuracy Panel", options = ["Off", "Compact", "Full"], group = G_ACC,
-  tooltip = "Grades every DOL the engine asserted on confirmed bars: hit rate, edge over a distance-matched random level, bars-to-hit, heat, first-touch race.")
-int    warmup  = input.int(300, "Ledger Warm-up (bars)", minval = 0, maxval = 5000, group = G_ACC)
+  tooltip = "Terminal style. Grades every DOL the engine asserted on confirmed bars: hit rate, edge over a distance-matched random level, bars-to-hit, heat, first-touch race.", display = display.none)
+int    warmup  = input.int(300, "Ledger Warm-up (bars)", minval = 0, maxval = 5000, group = G_ACC, display = display.none, active = accView != "Off" or useCal)
 
 // ── iFVG ──────────────────────────────────────────────────────────────────────
 bool showIFVG  = input.bool(true, "Show iFVG Zones", group = G_IFVG)
 int  ifvgMaxIn = input.int(2, "Max Body Closes Inside", minval = 0, maxval = 20, group = G_IFVG,
-  tooltip = "An iFVG is cleaned from the chart once more bodies than this close inside it.")
-int  ifvgMax   = input.int(8, "Max Active iFVGs", minval = 1, maxval = 50, group = G_IFVG)
+  tooltip = "An iFVG is cleaned from the chart once more bodies than this close inside it.", display = display.none)
+int  ifvgMax   = input.int(3, "Max Active iFVGs", minval = 1, maxval = 50, group = G_IFVG, display = display.none)
 int  trackAge  = input.int(500, "Zone Tracking Window (bars)", minval = 20, maxval = 4000, group = G_IFVG,
-  tooltip = "FVGs and Order Blocks older than this stop being watched for inversion / breaker flips.")
+  tooltip = "FVGs and Order Blocks older than this stop being watched for inversion / breaker flips.", display = display.none)
 
 // ── Volume profile ────────────────────────────────────────────────────────────
 bool  showLVN  = input.bool(false, "Show LVN Zones", group = G_LVN)
-int   lvnHours = input.int(120, "Profile Depth (1H bars)", minval = 24, maxval = 1000, group = G_LVN)
-int   lvnRows  = input.int(48, "Profile Rows", minval = 10, maxval = 200, group = G_LVN)
-float lvnThr   = input.float(0.30, "LVN Threshold (x Peak)", minval = 0.05, maxval = 0.9, step = 0.05, group = G_LVN)
-int   lvnN     = input.int(2, "LVNs Each Side", minval = 1, maxval = 5, group = G_LVN)
+int   lvnHours = input.int(120, "Profile Depth (1H bars)", minval = 24, maxval = 1000, group = G_LVN, display = display.none, active = showLVN or usePathVP)
+int   lvnRows  = input.int(48, "Profile Rows", minval = 10, maxval = 200, group = G_LVN, display = display.none, active = showLVN or usePathVP)
+float lvnThr   = input.float(0.30, "LVN Threshold (x Peak)", minval = 0.05, maxval = 0.9, step = 0.05, group = G_LVN, display = display.none, active = showLVN)
+int   lvnN     = input.int(2, "LVNs Each Side", minval = 1, maxval = 5, group = G_LVN, display = display.none, active = showLVN)
 
 // ── Ghost trail ───────────────────────────────────────────────────────────────
-bool showGhost = input.bool(false, "Show Ghost Trail", group = G_GHOST)
-int  ghostMax  = input.int(12, "Max Ghosts", minval = 1, maxval = 100, group = G_GHOST)
+bool showGhost = input.bool(false, "Show Ghost Trail", group = G_GHOST,
+  tooltip = "Faint dotted outline left where the active DOL was swept or ejected (price ran too far away), so recently respected or abandoned targets stay readable without cluttering live analysis.")
+int  ghostMax  = input.int(12, "Max Ghosts", minval = 1, maxval = 100, group = G_GHOST, display = display.none, active = showGhost)
 
 // ── Terminal panel ────────────────────────────────────────────────────────────
-bool   showTable  = input.bool(true, "Show Panel", group = G_TABLE,
+bool   showTable  = input.bool(true, "Show Bias Table / Panel", group = G_TABLE,
   tooltip = "Clean style: Timeframe / Bias table. Terminal style: full panel with draw, target, PoT and accuracy.")
-string tablePosIn = input.string("Top Right", "Position", options = ["Top Right", "Middle Right", "Bottom Right", "Top Left", "Bottom Left"], group = G_TABLE)
+string tablePosIn = input.string("Top Right", "Position", options = ["Top Right", "Middle Right", "Bottom Right", "Top Left", "Bottom Left"], group = G_TABLE, display = display.none, active = showTable)
 
 // ── Sessions & killzones ──────────────────────────────────────────────────────
-string tz      = input.string("America/New_York", "Session Timezone", group = G_CONF)
-string sessMid = input.session("0000-0100", "Midnight Open", group = G_CONF)
-string sessLdn = input.session("0200-0300", "London Open", group = G_CONF)
-string sessNY  = input.session("0930-1030", "New York Open", group = G_CONF)
-string kzAs    = input.session("2000-0000", "Asia Killzone", group = G_CONF)
-string kzLo    = input.session("0200-0500", "London Killzone", group = G_CONF)
-string kzNA    = input.session("0700-1000", "NY AM Killzone", group = G_CONF)
-string kzNP    = input.session("1330-1600", "NY PM Killzone", group = G_CONF)
+string tz      = input.string("America/New_York", "Session Timezone", group = G_CONF, display = display.none, tooltip = "IANA time zone (e.g. America/New_York, Europe/London, Asia/Tokyo). Every session, range and killzone time in these settings is read in this zone.")
+string sessMid = input.session("0000-0100", "Midnight Open", group = G_CONF, display = display.none)
+string sessLdn = input.session("0200-0300", "London Open", group = G_CONF, display = display.none)
+string sessNY  = input.session("0930-1030", "New York Open", group = G_CONF, display = display.none)
+string kzAs    = input.session("2000-0000", "Asia Killzone", group = G_CONF, display = display.none)
+string kzLo    = input.session("0200-0500", "London Killzone", group = G_CONF, display = display.none)
+string kzNA    = input.session("0700-1000", "NY AM Killzone", group = G_CONF, display = display.none)
+string kzNP    = input.session("1330-1600", "NY PM Killzone", group = G_CONF, display = display.none)
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
-string theme  = input.string("Classic", "Theme", options = ["Classic", "Neon", "Matrix", "Ice", "Mono", "Custom"], group = G_COL)
-color  uAbove = input.color(#00E5FF, "Custom · Buy-side", group = G_COL, inline = "c1")
-color  uBelow = input.color(#FF2BD6, "Sell-side", group = G_COL, inline = "c1")
-color  uBull  = input.color(#00FF9C, "Custom · Bullish", group = G_COL, inline = "c2")
-color  uBear  = input.color(#FF4D6D, "Bearish", group = G_COL, inline = "c2")
-color  uLVN   = input.color(#FFC400, "Custom · LVN", group = G_COL, inline = "c3")
-color  uGhost = input.color(#7D8799, "Ghost", group = G_COL, inline = "c3")
-color  uPanel = input.color(#0B0F14, "Custom · Panel", group = G_COL, inline = "c4")
-color  uText  = input.color(#C9D1D9, "Text", group = G_COL, inline = "c4")
+string theme  = input.string("Classic", "Theme", options = ["Classic", "Neon", "Matrix", "Ice", "Mono", "Custom"], group = G_COL, display = display.none)
+color  uAbove = input.color(#00E5FF, "Custom · Buy-side", group = G_COL, inline = "c1", active = theme == "Custom")
+color  uBelow = input.color(#FF2BD6, "Sell-side", group = G_COL, inline = "c1", active = theme == "Custom")
+color  uBull  = input.color(#00FF9C, "Custom · Bullish", group = G_COL, inline = "c2", active = theme == "Custom")
+color  uBear  = input.color(#FF4D6D, "Bearish", group = G_COL, inline = "c2", active = theme == "Custom")
+color  uLVN   = input.color(#FFC400, "Custom · LVN", group = G_COL, inline = "c3", active = theme == "Custom")
+color  uGhost = input.color(#7D8799, "Ghost", group = G_COL, inline = "c3", active = theme == "Custom")
+color  uPanel = input.color(#0B0F14, "Custom · Panel", group = G_COL, inline = "c4", active = theme == "Custom")
+color  uText  = input.color(#C9D1D9, "Text", group = G_COL, inline = "c4", active = theme == "Custom")
 
 // Classic (default): lime buy-side / red sell-side on a black panel
 color cAbove = switch theme
@@ -297,6 +311,8 @@ color cTblBg  = classic ? #1B1F24 : color.from_gradient(0.11, 0.0, 1.0, cPanel, 
 color cTblGrd = classic ? #3A3C43 : color.from_gradient(0.23, 0.0, 1.0, cPanel, cText)
 color cTblFrm = classic ? #303136 : color.from_gradient(0.19, 0.0, 1.0, cPanel, cText)
 color cHdrTx  = color.from_gradient(0.835, 0.0, 1.0, cPanel, cText)
+// light chart background (Chart settings > Background): neon strokes need a darker ink there
+bool  lightBg = color.r(chart.bg_color) + color.g(chart.bg_color) + color.b(chart.bg_color) > 382.5
 
 // ── Derived constants ─────────────────────────────────────────────────────────
 const int NB  = 60
@@ -557,12 +573,21 @@ f_signed(float x, string fmt) =>
 
 f_tfLabel(string tf) =>
     float m = str.tonumber(tf)
-    na(m) ? tf : m >= 60 and m % 60 == 0 ? str.tostring(m / 60) + "H" : str.tostring(m) + "m"
+    na(m) ? (tf == "1D" ? "D" : tf == "1W" ? "W" : tf == "1M" ? "M" : tf) : m >= 60 and m % 60 == 0 ? str.tostring(m / 60) + "H" : str.tostring(m) + "m"
 
 // Never request a timeframe below the chart's: lower-timeframe requests return
 // different intrabars historically and in realtime (repaint).
 f_tfSafe(simple string tf) =>
     timeframe.in_seconds() > timeframe.in_seconds(tf) ? timeframe.period : tf
+
+// True on a confirmed chart bar that closes together with the current bar of `tf`:
+// both close at the same time, or the next chart bar opens a new `tf` bar. A failed
+// check (na timestamps, holiday schedule) returns false. The time calls run on every
+// bar (and / or are lazy in v6), so they are evaluated outside the condition.
+f_tfClosed(string tf) =>
+    bool sameEnd = time_close == time_close(tf)
+    bool nextNew = time(tf, bars_back = -1) != time(tf)
+    barstate.isconfirmed and (sameEnd or nextNew)
 
 f_tfRatio(simple string tf) =>
     math.max(1.0, float(timeframe.in_seconds(tf)) / chartS)
@@ -651,24 +676,31 @@ method track(Level this, float hi, float lo, float atrV) =>
     this.maxAway := math.max(this.maxAway, this.side == 1 ? (this.bottom - lo) / atrV : (hi - this.top) / atrV)
     if this.isLiquidity() and bar_index - this.lastTest >= 3
         float gap = this.side == 1 ? this.price - hi : lo - this.price
-        if gap > 0 and gap <= testATR * atrV
+        // an exact touch (gap 0) is not a raid under the strict rule: it is the
+        // strongest test, more stops resting at the same price
+        if gap >= 0 and gap <= testATR * atrV
             this.tests    += 1
             this.lastTest := bar_index
     this.mult := 1.0
     this.maxAway
 
 // Scores the level out of 100 and caches each pillar on the object.
-method evaluate(Level this, float px, float atrV, array<float> anchors, float confTol, float dirD, float sig, float mu) =>
+// isAct marks the committed DOL: the near-distance taper only screens NEW targets.
+// A target price is closing in on is being delivered; it must not lose its
+// proximity (and its place) to a pool further out just before it is taken.
+method evaluate(Level this, float px, float atrV, array<float> anchors, float confTol, float dirD, float sig, float mu, bool isAct) =>
     float dist  = math.max(0.0, this.distance(px))
     float dAtr  = dist / atrV
     float lin   = dAtr >= maxATR ? 0.0 : 1.0 - dAtr / maxATR
     float reach = dAtr >= maxATR ? 0.0 : sig > 0 ? f_pot(dist, sig, mu * this.side, potH) / 0.95 : lin
-    float taper = minDistATR > 0 ? math.min(1.0, dAtr / minDistATR) : 1.0
+    float taper = minDistATR > 0 and not isAct ? math.min(1.0, dAtr / minDistATR) : 1.0
     this.prox  := dAtr >= maxATR ? 0.0 : (0.5 * lin + 0.5 * reach) * (0.30 + 0.70 * taper)
-    float age   = float(bar_index - this.bornBar) / math.max(this.hlMult, 1.0)
+    float rawAge = float(bar_index - this.bornBar)
+    float age    = rawAge / math.max(this.hlMult, 1.0)
     if this.isLiquidity()
-        // stops accumulate for a while, then the pool slowly goes stale
-        this.fresh := (0.35 + 0.65 * (1.0 - math.exp(-age / (0.25 * halfLife)))) * math.pow(0.5, age / (4.0 * halfLife))
+        // stops accumulate in real time (chart bars), then the pool goes stale on its own
+        // timeframe's clock (hlMult): a PDH / PWH / HTF pool is mature, not "young"
+        this.fresh := (0.35 + 0.65 * (1.0 - math.exp(-rawAge / (0.25 * halfLife)))) * math.pow(0.5, age / (4.0 * halfLife))
     else
         this.fresh := math.pow(0.5, age / halfLife)
     int   hits = 0
@@ -686,7 +718,10 @@ method evaluate(Level this, float px, float atrV, array<float> anchors, float co
     else
         this.dens := math.min(1.0, 0.50 * this.qual + 0.30 * this.coil + 0.20 * this.induce + (this.src == 2 ? 0.20 : 0.0))
         this.mult *= 1.0 - 0.5 * this.fill
-        if this.src == 0 and (bar_index - this.createdBar < originBars or this.maxAway < awayATR)
+        // origin lockout: a chart imbalance for its first bars, and every imbalance (HTF
+        // FVGs included) until price has left it: one that arrives with price sitting on
+        // it is being delivered, not drawn to
+        if (this.src == 0 and bar_index - this.createdBar < originBars) or this.maxAway < awayATR
             this.mult *= 0.25
     this.draw := 0.5 + 0.5 * dirD * this.side
     if dirD * this.side <= -dGate
@@ -700,11 +735,13 @@ method evaluate(Level this, float px, float atrV, array<float> anchors, float co
 // ═══════════════════════════════════════════════════════════════════════════════
 // Market structure on the requested timeframe.
 //   ibias : internal structure, flips on a body close through the last swing
-//   bias  : swing structure, a BOS re-arms the protected extreme of the leg and a
-//           change of character needs a body close through that protected level
+//   bias  : swing structure. A BOS protects the extreme printed between the broken
+//           swing and the break (the HL / LH that produced it); a change of
+//           character needs a body close through that protected level
 // Also returns the rolling dealing range, the last confirmed pivots with their
 // print times, and whether each pivot is still unswept on its own timeframe.
-// Everything is [1]-shifted so request.security(..., lookahead_on) never peeks.
+// Everything is [1]-shifted so request.security(..., lookahead_on) never peeks,
+// except the trailing bias pair, which is read only once the requested bar is final.
 f_structure(int len) =>
     float pvHi = ta.pivothigh(high, len, len)
     float pvLo = ta.pivotlow(low, len, len)
@@ -724,26 +761,34 @@ f_structure(int len) =>
     var float rngL  = na
     var float hiS   = na
     var float loS   = na
+    var float loPH  = na
+    var float hiPL  = na
     var int   bias  = 0
     var int   ibias = 0
     legH := na(legH) ? high : math.max(legH, high)
     legL := na(legL) ? low : math.min(legL, low)
     if not na(pvHi)
+        // a lower high under an unbroken swing high keeps the low printed since that swing
+        loPH  := na(swH) or na(loPH) or pvHi >= swH ? math.min(rLo, low[len]) : math.min(loPH, low)
         swH   := pvHi
         pivH  := pvHi
         pivHT := time[len]
         rngH  := pvHi
         hiS   := rHi
     else
-        hiS := na(hiS) ? high : math.max(hiS, high)
+        hiS  := na(hiS) ? high : math.max(hiS, high)
+        loPH := na(loPH) ? low : math.min(loPH, low)
     if not na(pvLo)
+        // a higher low over an unbroken swing low keeps the high printed since that swing
+        hiPL  := na(swL) or na(hiPL) or pvLo <= swL ? math.max(rHi, high[len]) : math.max(hiPL, high)
         swL   := pvLo
         pivL  := pvLo
         pivLT := time[len]
         rngL  := pvLo
         loS   := rLo
     else
-        loS := na(loS) ? low : math.min(loS, low)
+        loS  := na(loS) ? low : math.min(loS, low)
+        hiPL := na(hiPL) ? high : math.max(hiPL, high)
     bool upBrk = not na(swH) and close > swH
     bool dnBrk = not na(swL) and close < swL
     if upBrk
@@ -753,7 +798,7 @@ f_structure(int len) =>
         ibias := -1
         swL   := na
     if bias >= 0 and upBrk
-        protL := legL
+        protL := nz(loPH, legL)
         legL  := low
         legH  := high
         bias  := 1
@@ -763,7 +808,7 @@ f_structure(int len) =>
         legH  := high
         bias  := 1
     else if bias <= 0 and dnBrk
-        protH := legH
+        protH := nz(hiPL, legH)
         legH  := high
         legL  := low
         bias  := -1
@@ -777,9 +822,11 @@ f_structure(int len) =>
         rngH := na(rngH) ? high : math.max(rngH, high)
     if na(swL)
         rngL := na(rngL) ? low : math.min(rngL, low)
-    bool hValid = not na(pivH) and hiS < pivH
-    bool lValid = not na(pivL) and loS > pivL
-    [bias[1], ibias[1], rngH[1], rngL[1], pivH[1], pivL[1], pivHT[1], pivLT[1], hValid[1], lValid[1], protH[1], protL[1]]
+    bool hValid = not na(pivH) and hiS <= pivH
+    bool lValid = not na(pivL) and loS >= pivL
+    // the two trailing items are unshifted: the script reads them only on a confirmed
+    // chart bar that closes together with the requested bar (final data, no peeking)
+    [bias[1], ibias[1], rngH[1], rngL[1], pivH[1], pivL[1], pivHT[1], pivLT[1], hValid[1], lValid[1], protH[1], protL[1], bias, ibias]
 
 // The FVG that completed on the last CLOSED bar of the requested timeframe.
 f_htfFvg(float minAtr, float dm) =>
@@ -920,15 +967,28 @@ float fwdHi  = ta.highest(high, H)
 float fwdLo  = ta.lowest(low, H)
 
 // ── Multi-timeframe structure (non-repainting) ────────────────────────────────
-[htfBiasR, htfIBR, htfRH, htfRL, htfPvH, htfPvL, htfPvHT, htfPvLT, htfHV, htfLV, htfProtH, htfProtL] = request.security(syminfo.tickerid, f_tfSafe(tfH), f_structure(biasLen), lookahead = barmerge.lookahead_on)
-[stfBiasR, stfIBR, stfRH, stfRL, stfPvH, stfPvL, stfPvHT, stfPvLT, stfHV, stfLV, stfProtH, stfProtL] = request.security(syminfo.tickerid, f_tfSafe(tfS), f_structure(biasLen), lookahead = barmerge.lookahead_on)
-[exeBiasR, exeIBR, exeRH, exeRL, exePvH, exePvL, exePvHT, exePvLT, exeHV, exeLV, exeProtH, exeProtL] = request.security(syminfo.tickerid, f_tfSafe(tfE), f_structure(biasLen), lookahead = barmerge.lookahead_on)
+[htfBiasR, htfIBR, htfRH, htfRL, htfPvH, htfPvL, htfPvHT, htfPvLT, htfHV, htfLV, htfProtH, htfProtL, htfBiasN, htfIBN] = request.security(syminfo.tickerid, f_tfSafe(tfH), f_structure(biasLen), lookahead = barmerge.lookahead_on)
+[stfBiasR, stfIBR, stfRH, stfRL, stfPvH, stfPvL, stfPvHT, stfPvLT, stfHV, stfLV, stfProtH, stfProtL, stfBiasN, stfIBN] = request.security(syminfo.tickerid, f_tfSafe(tfS), f_structure(biasLen), lookahead = barmerge.lookahead_on)
+[exeBiasR, exeIBR, exeRH, exeRL, exePvH, exePvL, exePvHT, exePvLT, exeHV, exeLV, exeProtH, exeProtL, exeBiasN, exeIBN] = request.security(syminfo.tickerid, f_tfSafe(tfE), f_structure(biasLen), lookahead = barmerge.lookahead_on)
 int htfBias = nz(htfBiasR)
 int stfBias = nz(stfBiasR)
 int exeBias = nz(exeBiasR)
 int htfIB   = nz(htfIBR)
 int stfIB   = nz(stfIBR)
 int exeIB   = nz(exeIBR)
+// Bias table copies. On a confirmed chart bar that closes together with the requested
+// bar (market closed, weekend, end of that period) the requested bar is final, so the
+// table shows its own state instead of the previous bar's. That is the value the [1]
+// read returns one chart bar later: no lookahead, no repaint. The engine keeps [1].
+bool htfDone  = f_tfClosed(f_tfSafe(tfH))
+bool stfDone  = f_tfClosed(f_tfSafe(tfS))
+bool exeDone  = f_tfClosed(f_tfSafe(tfE))
+int  htfBiasT = htfDone ? nz(htfBiasN) : htfBias
+int  stfBiasT = stfDone ? nz(stfBiasN) : stfBias
+int  exeBiasT = exeDone ? nz(exeBiasN) : exeBias
+int  htfIBT   = htfDone ? nz(htfIBN) : htfIB
+int  stfIBT   = stfDone ? nz(stfIBN) : stfIB
+int  exeIBT   = exeDone ? nz(exeIBN) : exeIB
 
 bool newHtfPvH = f_changedT(htfPvHT)
 bool newHtfPvL = f_changedT(htfPvLT)
@@ -942,8 +1002,25 @@ bool htfFvgOK = useHTFFVG and timeframe.in_seconds() < timeframe.in_seconds(tfH)
 bool hfNew    = htfFvgOK and hfTChg and nz(hfDir) != 0 and not na(hfTop) and not na(hfBot)
 
 // ── Key liquidity trackers (chart timeframe, exact print bars) ────────────────
-[pdNew, pdH, pdHB, pdL, pdLB] = f_rangeTrack(timeframe.change("D"))
-[pwNew, pwH, pwHB, pwL, pwLB] = f_rangeTrack(timeframe.change("W"))
+// On a daily (weekly) chart the previous day (week) is just the previous candle:
+// every candle would register as a tier-0.80 PDH / PDL pool and evict the real
+// HTF / STF pools from the registry. Key levels need a chart below their period.
+[pdNew, pdH, pdHB, pdL, pdLB] = f_rangeTrack(timeframe.change("D") and timeframe.isintraday)
+[pwNew, pwH, pwHB, pwL, pwLB] = f_rangeTrack(timeframe.change("W") and timeframe.in_seconds() < 604800)
+// Only the first emitted day / week can be partial: it began before the first loaded
+// bar (a 1m chart rarely holds a whole previous week). Fold the confirmed D / W bar
+// extremes into that one, so PDH / PDL / PWH / PWL are never a partial-period print.
+// The tracked candle stays the anchor.
+[pdHx, pdLx] = request.security(syminfo.tickerid, f_tfSafe("D"), [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pwHx, pwLx] = request.security(syminfo.tickerid, f_tfSafe("W"), [high[1], low[1]], lookahead = barmerge.lookahead_on)
+float pdCnt   = ta.cum(pdNew ? 1 : 0)
+float pwCnt   = ta.cum(pwNew ? 1 : 0)
+bool  pdFirst = pdNew and pdCnt == 1
+bool  pwFirst = pwNew and pwCnt == 1
+float pdHv    = pdFirst ? math.max(pdH, nz(pdHx, pdH)) : pdH
+float pdLv    = pdFirst ? math.min(pdL, nz(pdLx, pdL)) : pdL
+float pwHv    = pwFirst ? math.max(pwH, nz(pwHx, pwH)) : pwH
+float pwLv    = pwFirst ? math.min(pwL, nz(pwLx, pwL)) : pwL
 bool intraOK = timeframe.isintraday and timeframe.in_seconds() <= 3600
 [asEnd, asH, asHB, asL, asLB] = f_sessTrack(sessAs, tz)
 [lnEnd, lnH, lnHB, lnL, lnLB] = f_sessTrack(sessLo, tz)
@@ -954,11 +1031,11 @@ var float aPDL = na
 var float aPWH = na
 var float aPWL = na
 if pdNew
-    aPDH := pdH
-    aPDL := pdL
+    aPDH := pdHv
+    aPDL := pdLv
 if pwNew
-    aPWH := pwH
-    aPWL := pwL
+    aPWH := pwHv
+    aPWL := pwLv
 
 // ── Confluence anchors ────────────────────────────────────────────────────────
 float midOpen = f_sessOpen(sessMid, tz)
@@ -972,7 +1049,10 @@ bool  inKzAs  = not na(time(timeframe.period, kzAs, tz))
 bool  inKzLo  = not na(time(timeframe.period, kzLo, tz))
 bool  inKzNA  = not na(time(timeframe.period, kzNA, tz))
 bool  inKzNP  = not na(time(timeframe.period, kzNP, tz))
-int   kz      = not timeframe.isintraday ? -1 : inKzLo ? 2 : inKzNA ? 3 : inKzNP ? 4 : inKzAs ? 1 : 0
+// Killzones are hour-scale windows: above 1H a bar's open time cannot place it in one
+// (a 06:00-10:00 bar reads OFF-KZ while it spans the NY AM killzone), so those charts
+// get no killzone affinity or off-killzone hysteresis.
+int   kz      = not timeframe.isintraday or timeframe.in_seconds() > 3600 ? -1 : inKzLo ? 2 : inKzNA ? 3 : inKzNP ? 4 : inKzAs ? 1 : 0
 float hystEff = kz == 0 ? hyst * kzHx : hyst
 
 // ── 1H OHLCV feed for the volume profile ─────────────────────────────────────
@@ -1015,6 +1095,11 @@ while lvV.size() > lvnHours
     lvB.shift()
 
 bool tfWarn = timeframe.in_seconds() > timeframe.in_seconds(tfE)
+// A bias row whose timeframe is below the chart's cannot be requested (f_tfSafe falls
+// back to the chart timeframe): mark it N/A instead of labelling chart-timeframe
+// structure as that timeframe.
+bool tfNaH  = timeframe.in_seconds() > timeframe.in_seconds(tfH)
+bool tfNaS  = timeframe.in_seconds() > timeframe.in_seconds(tfS)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATE
@@ -1024,6 +1109,9 @@ var array<Ext>   extReg = array.new<Ext>()
 var array<Zone>  fvgTrk = array.new<Zone>()
 var array<Zone>  obTrk  = array.new<Zone>()
 var array<Zone>  ifvgs  = array.new<Zone>()
+// HTF FVGs that drifted beyond the eject distance: parked (still mitigated) and
+// returned to the pool once price is back within Max ATR Distance
+var array<Level> hfReg  = array.new<Level>()
 var array<box>   ghostB = array.new<box>()
 var array<label> ghostL = array.new<label>()
 

@@ -420,7 +420,7 @@ Notation used throughout:
   - What is robust in T2: stretch at the break is 1.69-1.88 ATR after compression vs 2.04-2.44 ATR in expanded tape. The 12-bar forward range in ATR14 units is larger after compression breaks (1H 4.65 vs 3.28), and the null reproduces it (4.61 vs 3.49).
   - [R6-T7] **The documented definitions** (deseasonalised z at t−1; EXP-STRETCH adds |C − EMA20| ≥ 2 ATR14), with the forward 12-bar range divided by each unit and relative to its all-bar mean (null in brackets where informative):
     - 5m (6 series, n 280-352 COMP and 150-216 EXP per series). ATR14 unit: COMP 1.08-1.22, EXP 0.95-1.03, EXP-STRETCH 0.99-1.19. Clock unit √V(H): COMP 1.03-1.13, EXP 0.95-1.02. COMP/EXP ratio: 1.10-1.18 (ATR14), 1.01-1.15 (clock). The blended unit reverses the ratio (0.89-0.99) because it over-corrects.
-    - 1H (5 series, n 56-104 per group). ATR14: COMP 1.02-1.15, EXP 0.88-1.02, EXP-STRETCH 0.92-1.10. Clock: COMP 1.00-1.05, EXP 0.89-1.01.
+    - 1H (5 series, n 55-104 per group). ATR14: COMP 1.02-1.15, EXP 0.88-1.02, EXP-STRETCH 0.92-1.10. Clock: COMP 1.00-1.05, EXP 0.89-1.01.
     - BTC 1H (n 1,360 / 678 / 435): ATR14 1.14 / 1.03 / 1.14; clock 1.12 / 1.03 / 1.13.
     - Daily SPX/NDX: the ratio reverses (COMP 0.92-0.99, EXP 1.02-1.04).
     - **Constant-volatility random walk** (60,000 bars): ATR14 COMP 1.05, EXP 0.93 (ratio 1.13); clock-form unit 1.07 / 0.92.
@@ -429,7 +429,7 @@ Notation used throughout:
     - Most of the "compression breaks run further than expansion breaks" effect in ATR14 units comes from estimator noise in short-window units: an underestimated σ looks like compression and is followed by "more than expected" movement. Genuine mean reversion adds a few percent on 5m and 1H.
     - The clock unit removes part of the gap; on daily data the effect reverses.
     - The practical rule stands (score the unit, widen the cone after compression), but the magnitude is small, and "extension in expanded tape → less movement" is not supported in ATR14 units on 5m.
-  - [R6-T7] Direction under the documented definitions: race COMP vs null is −4 to +1 pp on 5m. On 1H, COMP is below the null in all 5 series (real 0.44-0.54 vs null 0.52-0.59; mean −5.4 pp, pooled z ≈ −1.7), the opposite sign to T2's BBW-based +6.6 pp. BTC COMP 0.503 vs 0.502. The sign changes with the definition of "compression": noise.
+  - [R6-T7] Direction under the documented definitions: race COMP minus null is −2.8 to +1.0 pp on 5m. On 1H, COMP is below the null in all 5 series (real 0.44-0.54 vs null 0.52-0.59; mean −5.4 pp, pooled z ≈ −1.7), the opposite sign to T2's BBW-based +6.6 pp. BTC COMP 0.503 vs 0.502. The sign changes with the definition of "compression": noise.
   - Study: NR7 breaks 0.482-0.515 (above); displacement bars 0.484-0.548 (quant_regime 2.8); MNQ: Asia-session expansion bars *reverse* at the next bar (T = −10.96) and ORB long T = 1.17-1.50 fails walk-forward (Mesfin 2026, study-verified).
 - **APEX recommendation:** **INCLUDE-CORE** as a volatility-path classification in VOL/REG. It drives a reason code and an optional label, and it selects nothing by itself: the unit u_H and the cone width come from the forward-variance model, scored per chart (VOL-X1), not from the label. **EXCLUDE** any directional or continuation weight in BIAS, DOL or SETUP. Redundancy: displacement bars, NR7 breaks and squeeze fires are the same event family.
 - **Sources:** Study: quant_regime 1.5, 2.6, 2.8, REG-5, REG-7; Mesfin (2026) arXiv:2605.04004 [study-verified]. R6-T2, R6-T7.
