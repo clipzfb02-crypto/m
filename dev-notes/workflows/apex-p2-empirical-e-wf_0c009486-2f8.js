@@ -34,6 +34,7 @@ OFFLINE PINE TOOLS in ${HARN} (node 22):
 
 STANDARD: never fabricate results; pre-register definitions; no lookahead; report n and CIs; mark untestable items NOT RUN. Use nice -n 10 for long jobs.`
 
+const RESUME_NOTE = `RESUME NOTE: an earlier attempt at this assignment was interrupted by a usage limit. Partial outputs may already exist at your output paths, and code may exist under your experiment folder. Read them first and verify them; do not trust them blindly. Keep what is correct and complete or replace the rest. Do not start from scratch if a sound partial draft exists, and do not leave the draft's unfinished parts in place.`
 const EXP_OUT = { type: 'object', properties: {
   report: { type: 'string' }, code: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' },
   findings: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, hypothesis: { type: 'string' }, result: { type: 'string' }, n: { type: 'string' }, effect: { type: 'string' }, ci: { type: 'string' }, verdict: { type: 'string', enum: ['supported', 'not supported', 'mixed', 'inconclusive'] } }, required: ['id', 'hypothesis', 'result', 'n', 'effect', 'ci', 'verdict'] } },
@@ -78,6 +79,6 @@ const verifyPrompt = (T, out) => `${PRE}\n\nYou are R10 · RED-TEAM VERIFIER. An
 
 OUTPUT (JSON): ${JSON.stringify(out || {}).slice(0, 10000)}`
 const res = await pipeline(TRACKS,
-  (T) => agent(`${PRE}\n\nROLE: ${T.role}. KEY: ${T.key}. Report: ${EXP}/${T.key}.md (code paths as described).\n\n${T.task}`, { label: `exp:${T.key}`, phase: 'Experiment', schema: EXP_OUT }),
+  (T) => agent(`${PRE}\n\nROLE: ${T.role}. KEY: ${T.key}. Report: ${EXP}/${T.key}.md (code paths as described).\n\n${T.task}\n\n${RESUME_NOTE}`, { label: `exp:${T.key}`, phase: 'Experiment', schema: EXP_OUT }),
   (out, T) => agent(verifyPrompt(T, out), { label: `verify:${T.key}`, phase: 'Verify', schema: VER_OUT }).then(v => ({ key: T.key, out, v })))
 return res.filter(Boolean).map(r => ({ key: r.key, summary: r.out ? r.out.summary.slice(0, 1500) : 'failed', findings: r.out ? r.out.findings : [], implications: r.out ? r.out.designImplications : [], verify: r.v ? { verdict: r.v.verdict, problems: r.v.problems.slice(0, 6) } : null }))

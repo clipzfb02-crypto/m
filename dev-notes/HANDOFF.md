@@ -33,6 +33,12 @@ Read this first if you are a new session picking up the work. Everything needed 
     - `wlev58pw3` (run `wf_73dd7a02-79d`): E6 sweep/lifecycle, E7 structure rules, E8 session/time.
     - `w0aoo1nx8` (run `wf_5ef068e4-d8b`): E9 momentum factors, E10 volume/VWAP, E11 MTF/intermarket.
     - `wbfdar5y8` (run `wf_0c009486-2f8`): E12 tradeability, E13 stress suite, E14 Pine prototypes.
+  - 2026-11-27 ~10:30 UTC: ALL workflows hit the 5-hour limit. 18 agents at once used up the window in about 40 minutes, and the unfinished agents lost their work (the files they had partly written were kept).
+    - LESSON: the usage cap, not concurrency, limits throughput. Run about 10 agents at once, in priority order, so agents finish before the cap.
+  - 2026-11-28 05:57 UTC: user said "Try again". I added RESUME_NOTE ("read and complete the partial draft") to every failed agent's prompt, then resumed in priority order:
+    - part A `wck8c6o82`, part B `w9xu3idid`, overhaul `wari0wn95`, empirical-A `w4rb3e2sh`, empirical-B `wqtkyiw3m`.
+    - ON HOLD, to resume later with resumeFromRunId: empirical-C `wf_73dd7a02-79d`, -D `wf_5ef068e4-d8b`, -E `wf_0c009486-2f8`.
+    - Study `wf_ff97c5ca-f34`: remaining are 2 x1 A passes, 4 x1 deepen passes, critic2, synthesis, judges and roadmap. Low priority now that the APEX atlas supersedes it; resume last or skip its synthesis.
 - **APEX next steps:**
   1. When Parts A and B finish:
      - write `MARKET_KNOWLEDGE_BASE/README.md` (the index) and `FEATURE_DATA_MATRIX.md`;

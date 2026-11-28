@@ -41,6 +41,7 @@ const HONESTY = `HONESTY RULES (non-negotiable):
 - Concepts only: never copy any proprietary indicator's code or branding.
 - Do NOT edit production code (${REPO}/indicators/*, ${APEX}/APEX_ULTIMATE.pine). Write only the files assigned to you.`
 
+const RESUME_NOTE = `RESUME NOTE: an earlier attempt at this assignment was interrupted by a usage limit. Partial outputs may already exist at your output paths, and code may exist under your experiment folder. Read them first and verify them; do not trust them blindly. Keep what is correct and complete or replace the rest. Do not start from scratch if a sound partial draft exists, and do not leave the draft's unfinished parts in place.`
 const TEMPLATE = `DOCUMENT FORMAT (Markdown). Use these sections:
 # <NN> · <Title>
 1. Scope and role in APEX: which APEX module(s) this feeds.
@@ -163,6 +164,8 @@ Required sections:
 8. What APEX must build new. Map against the spec's sections 3-18.
 Return the structured summary.
 
+${RESUME_NOTE}
+
 INSPECTOR SUMMARIES (JSON): ${JSON.stringify(inspections)}`, { label: 'inspect:merge', phase: 'Inspect', schema: INSPECT_OUT })
 
 // ---------------- Phase 2-3: specialist research + red team ----------------
@@ -262,7 +265,7 @@ AUTHOR'S STRUCTURED OUTPUT (JSON): ${JSON.stringify(out || {}).slice(0, 12000)}`
 phase('Research')
 const results = await pipeline(
   WRITERS,
-  (W) => agent(`${PRE}\n\n${HONESTY}\n\n${W.files[0].endsWith('.md') && W.key !== 'D1_datalab' ? TEMPLATE : ''}\n\nYOUR ROLE: ${W.role}.\nStudy reports most relevant to you (read them fully; read others as needed): ${W.keys}.\n\nASSIGNMENT:\n${W.task}\n\nOutput files: ${W.files.join(', ')}. Return the structured output; its recommendations and experiments feed the architecture and the pre-registered validation plan.`, { label: `write:${W.key}`, phase: 'Research', schema: ROLE_OUT }),
+  (W) => agent(`${PRE}\n\n${HONESTY}\n\n${W.files[0].endsWith('.md') && W.key !== 'D1_datalab' ? TEMPLATE : ''}\n\nYOUR ROLE: ${W.role}.\nStudy reports most relevant to you (read them fully; read others as needed): ${W.keys}.\n\nASSIGNMENT:\n${W.task}\n\n${RESUME_NOTE}\n\nOutput files: ${W.files.join(', ')}. Return the structured output; its recommendations and experiments feed the architecture and the pre-registered validation plan.`, { label: `write:${W.key}`, phase: 'Research', schema: ROLE_OUT }),
   (out, W) => agent(reviewPrompt(W, out), { label: `redteam:${W.key}`, phase: 'Red-team', schema: REVIEW_OUT }).then(rv => ({ key: W.key, files: W.files, out, review: rv })),
 )
 

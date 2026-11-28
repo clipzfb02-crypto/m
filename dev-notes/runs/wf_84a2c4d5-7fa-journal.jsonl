@@ -1,3 +1,5 @@
 {"type":"launched"}
 {"type":"started","key":"v2:7b53c10c9b454de61bd9fbd30ce23a94079b38c99f2d18ffd98a9fb13657acb0","agentId":"a831decbbf6368aa3","label":"exp:E3_dol_hypotheses","phase":"Experiment"}
 {"type":"started","key":"v2:53e28f535b58d669e8bdc6fd1ede3dfeba7c6b607d20a4628c24da710f41e86e","agentId":"a97f7ae5045d5ebfd","label":"exp:E4_regime_calibration","phase":"Experiment"}
+{"type":"started","key":"v2:e1e18099e23f9011b31e5553ed6f805c89e43acb7d14b8173467b40f0c8f3eb0","agentId":"ac710f57411d94c54","label":"exp:E3_dol_hypotheses","phase":"Experiment"}
+{"type":"started","key":"v2:9df65f0f6c76506298cd2351773ba030d1a43f41aaefe2bc4c3838813f0eb6c3","agentId":"a6ee1662e15c8b699","label":"exp:E4_regime_calibration","phase":"Experiment"}

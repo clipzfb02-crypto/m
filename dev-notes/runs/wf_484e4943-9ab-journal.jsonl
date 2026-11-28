@@ -2,3 +2,5 @@
 {"type":"started","key":"v2:80dcbd38e6d8ec77bd1841142e4f19958b4e9fd51dc9920095aa80137dc45aaa","agentId":"aee5abf63853bf990","label":"exp:E1_forecast_paths","phase":"Experiment"}
 {"type":"started","key":"v2:276aef51f6f30a1c1bf11cff289dc27957cf0cda000ba4d0c30141e56277904f","agentId":"ac75ea7d605fcf64f","label":"exp:E2_signals","phase":"Experiment"}
 {"type":"started","key":"v2:a6d5e23af88942fa2e17ba96598157b566f2deed17d838e6d234bf64ceb31f44","agentId":"a5ba514eb96d609f6","label":"exp:E5_statslib","phase":"Experiment"}
+{"type":"started","key":"v2:f7ce8176bdf41749830115520fb46bc7d5d5df90b97847077651d99019b36f24","agentId":"a1b42aa2784122432","label":"exp:E1_forecast_paths","phase":"Experiment"}
+{"type":"started","key":"v2:35b4a091950e8676945d460edf3a2c382d9d8e71073bfec461bfb6e8fc2347b0","agentId":"afdf177a6e12b74a2","label":"exp:E2_signals","phase":"Experiment"}
